@@ -5,9 +5,11 @@
 
 import { VcodeTx, VcodeRx } from "./pkg/beyond_qr_core_wasm.js";
 import { drawQRInCell, detectQRCodesGrid } from "./qr_util.js";
+import { VCODE_GUIDE_FRAC } from "./vcode.js";
+import { openCamera, CameraPicker, ScanStats, streamDeviceId, cameraInfoText, lumaText, cellPxText }
+  from "./camera.js";
 
-// 本番 vcode 受信と同じスキャン範囲 (アプリ側 kVcodeGuideFrac と一致させる)
-const V_GUIDE_FRAC = 0.8;
+const DIAG_INTERVAL_MS = 500;
 
 // ゆるい (大きい単一QR・低情報量) → きつい (多グリッド・高情報量)
 const QR_CAL_LEVELS = [
@@ -109,7 +111,7 @@ function detectVcodeLevel(rx, imgData, found, onBlocks) {
   }
   let report;
   try {
-    report = rx.scan(gray, width, height, width, 0, V_GUIDE_FRAC);
+    report = rx.scan(gray, width, height, width, 0, VCODE_GUIDE_FRAC);
   } catch (_) { return; }
   if (report.detected && report.blocksTotal > 0) {
     onBlocks(report.blocksOk, report.blocksTotal);
@@ -151,6 +153,21 @@ export function setupCalibration(els) {
   let stream = null, rafId = null, rx = null;
   const readable = new Set();
   const cap = document.createElement("canvas");
+  const picker = new CameraPicker(els.cameraSelect);
+  let stats = new ScanStats();
+  let lastDiag = 0;
+
+  // カメラ実解像度・スキャン fps・明るさ の実測 (vcode では理論 px/セル も)。
+  const diag = (crop, target) => {
+    const now = performance.now();
+    if (now - lastDiag < DIAG_INTERVAL_MS) return;
+    lastDiag = now;
+    const size = crop === target ? `${target}px` : `${crop}→${target}px`;
+    els.diag.textContent =
+      `${cameraInfoText(stream)}\n` +
+      `スキャン ${size} · ${stats.fps.toFixed(1)} fps · ${lumaText(stats)}` +
+      (kind === "vcode" ? `\n${cellPxText(target * VCODE_GUIDE_FRAC)}` : "");
+  };
 
   const renderChips = () => {
     const lvs = levels();
@@ -178,6 +195,8 @@ export function setupCalibration(els) {
       const cctx = cap.getContext("2d", { willReadFrequently: true });
       cctx.drawImage(els.video, cx, cy, crop, crop, 0, 0, target, target);
       const img = cctx.getImageData(0, 0, target, target);
+      stats.tick(img.data, 4);
+      diag(crop, target);
       const before = readable.size;
       if (kind === "qr") {
         detectQrLevels(img, readable);
@@ -196,15 +215,15 @@ export function setupCalibration(els) {
     readable.clear();
     els.blocks.textContent = "";
     renderChips();
+    stats = new ScanStats();
+    lastDiag = 0;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
-        audio: false,
-      });
+      stream = await openCamera(picker.deviceId);
     } catch (e) {
       els.best.textContent = "カメラ起動失敗: " + (e && e.message ? e.message : e);
       return;
     }
+    picker.refresh(streamDeviceId(stream)); // 許可後はデバイス名が取れるので一覧を更新
     els.video.srcObject = stream;
     await els.video.play();
     rx = kind === "vcode" ? new VcodeRx() : null;

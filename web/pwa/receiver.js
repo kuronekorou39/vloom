@@ -6,6 +6,9 @@
 import { FountainDecoder } from "./pkg/beyond_qr_core_wasm.js";
 import { FRAME_MANIFEST, FRAME_DATA, StreamManifest, parseDataQr } from "./protocol.js";
 import { detectQRCodesGrid } from "./qr_util.js";
+import { openCamera, ScanStats, cameraInfoText, lumaText } from "./camera.js";
+
+const DIAG_INTERVAL_MS = 500;
 
 const hex = (b, n) => {
   let s = "";
@@ -15,24 +18,22 @@ const hex = (b, n) => {
 };
 
 export class Receiver {
-  constructor({ video, onProgress, onDone, onError }) {
+  constructor({ video, onProgress, onDone, onError, onDiag }) {
     this.video = video;
     this.onProgress = onProgress;
     this.onDone = onDone;
     this.onError = onError;
+    this.onDiag = onDiag || (() => {});
     this.captureCanvas = document.createElement("canvas");
     this.stream = null;
     this.rafId = null;
     this.grid = "1x2";
   }
 
-  async start(gridStr) {
+  async start(gridStr, deviceId) {
     this.grid = gridStr;
     this._reset();
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
-      audio: false,
-    });
+    this.stream = await openCamera(deviceId);
     this.video.srcObject = this.stream;
     await this.video.play();
     const loop = () => {
@@ -44,6 +45,8 @@ export class Receiver {
   }
 
   _reset() {
+    this.stats = new ScanStats();
+    this._lastDiag = 0;
     this.manifest = null;
     this.blocks = null;         // Uint8Array[] (復元済みブロック)
     this.doneBlocks = new Set();
@@ -78,6 +81,8 @@ export class Receiver {
     const ctx = cv.getContext("2d", { willReadFrequently: true });
     ctx.drawImage(this.video, cx, cy, crop, crop, 0, 0, target, target);
     const img = ctx.getImageData(0, 0, target, target);
+    this.stats.tick(img.data, 4);
+    this._diag(crop, target);
 
     const codes = detectQRCodesGrid(img, rows, cols);
     let changed = false;
@@ -128,6 +133,18 @@ export class Receiver {
       }
     } catch (_) {}
     return true;
+  }
+
+  // カメラ実解像度・スキャン fps・明るさ の実測。読めないときの切り分け用。
+  _diag(crop, target) {
+    const now = performance.now();
+    if (now - this._lastDiag < DIAG_INTERVAL_MS) return;
+    this._lastDiag = now;
+    const size = crop === target ? `${target}px` : `${crop}→${target}px`;
+    this.onDiag(
+      `${cameraInfoText(this.stream)}\n` +
+      `スキャン ${size} · ${this.stats.fps.toFixed(1)} fps · ${lumaText(this.stats)}`
+    );
   }
 
   _report() {

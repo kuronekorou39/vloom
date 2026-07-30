@@ -4,8 +4,18 @@
 // 受信側で CANDIDATES に無い格子は検出できないため、格子は 7x6 / 5x4 のみ。
 
 import { VcodeTx, VcodeRx, FountainDecoder, vcodeUnwrapPayload, vcodeUnwrapFile } from "./pkg/beyond_qr_core_wasm.js";
+import { openCamera, ScanStats, cameraInfoText, lumaText, cellPxText } from "./camera.js";
 
 const REPAIR_RATE = 0.5;
+
+// スキャナに渡すガイド枠幅 (中央正方形クロップの幅に対する比)。UI のガイド枠と一致させる。
+// アプリ側 kVcodeGuideFrac と同値。
+export const VCODE_GUIDE_FRAC = 0.8;
+// スキャン画像の一辺の上限 (これを超える映像は縮小する)。上げるほど解像するが 1 フレームの
+// 処理コストは面積比で増える。
+const SCAN_MAX = 1280;
+// 診断表示の更新間隔
+const DIAG_INTERVAL_MS = 500;
 
 export class VcodeSender {
   constructor({ canvas, onStatus }) {
@@ -77,11 +87,12 @@ export class VcodeSender {
 }
 
 export class VcodeReceiver {
-  constructor({ video, onProgress, onDone, onError }) {
+  constructor({ video, onProgress, onDone, onError, onDiag }) {
     this.video = video;
     this.onProgress = onProgress;
     this.onDone = onDone;
     this.onError = onError;
+    this.onDiag = onDiag || (() => {});
     this.cap = document.createElement("canvas");
     this.stream = null;
     this.rafId = null;
@@ -89,12 +100,9 @@ export class VcodeReceiver {
     this._onResize = () => this._positionGuide();
   }
 
-  async start() {
+  async start(deviceId) {
     this._reset();
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
-      audio: false,
-    });
+    this.stream = await openCamera(deviceId);
     this.video.srcObject = this.stream;
     await this.video.play();
     this._ensureGuide();
@@ -107,6 +115,22 @@ export class VcodeReceiver {
 
   _reset() {
     this.rx = null; this.dec = null; this.finished = false; this.frames = 0; this.detected = 0;
+    this.stats = new ScanStats();
+    this._lastDiag = 0;
+  }
+
+  // カメラ実解像度・スキャン fps・明るさ・理論 px/セル を出す。読めないときに
+  // 「カメラが違う / 解像度不足 / 白飛び / コードが小さすぎ」を切り分けるための実測値。
+  _diag(crop, target) {
+    const now = performance.now();
+    if (now - this._lastDiag < DIAG_INTERVAL_MS) return;
+    this._lastDiag = now;
+    const size = crop === target ? `${target}px` : `${crop}→${target}px`;
+    this.onDiag(
+      `${cameraInfoText(this.stream)}\n` +
+      `スキャン ${size} · ${this.stats.fps.toFixed(1)} fps · ${lumaText(this.stats)}\n` +
+      cellPxText(target * VCODE_GUIDE_FRAC)
+    );
   }
 
   // scan() が探索する「中央・正方形クロップの GUIDE_FRAC 幅」ボックスを映像に重ねて描く。
@@ -128,9 +152,9 @@ export class VcodeReceiver {
     if (!vw || !vh) return;
     // scan() は video 画素の中央正方形 (一辺 = min(w,h)) を切り出し、その GUIDE_FRAC 幅 ×
     // (コード高/幅) の中央ボックスをガイドにする。表示は等倍スケールなので client 座標でも同じ比。
-    const GUIDE_FRAC = 0.8, ASPECT = 132 / 140; // 高さ/幅 (V1_DENSE 相当。V0=92/100 とほぼ同じ)
+    const ASPECT = 132 / 140; // 高さ/幅 (V1_DENSE 相当。V0=92/100 とほぼ同じ)
     const side = Math.min(vw, vh);
-    const bw = side * GUIDE_FRAC, bh = bw * ASPECT;
+    const bw = side * VCODE_GUIDE_FRAC, bh = bw * ASPECT;
     const s = this.guideEl.style;
     s.width = `${bw}px`; s.height = `${bh}px`;
     s.left = `${(vw - bw) / 2}px`; s.top = `${(vh - bh) / 2}px`;
@@ -158,9 +182,9 @@ export class VcodeReceiver {
     this._positionGuide();
     const vw = this.video.videoWidth, vh = this.video.videoHeight;
     if (!vw || !vh) return;
-    // 中央正方形を最大 1280 に
+    // 中央正方形を最大 SCAN_MAX に
     const crop = Math.min(vw, vh);
-    const target = Math.min(1280, crop);
+    const target = Math.min(SCAN_MAX, crop);
     const cx = (vw - crop) >> 1, cy = (vh - crop) >> 1;
     this.cap.width = target; this.cap.height = target;
     const ctx = this.cap.getContext("2d", { willReadFrequently: true });
@@ -172,9 +196,11 @@ export class VcodeReceiver {
       gray[p] = (rgba[q] * 77 + rgba[q + 1] * 150 + rgba[q + 2] * 29) >> 8;
     }
     this.frames++;
+    this.stats.tick(gray);
+    this._diag(crop, target);
     let report;
     try {
-      report = this.rx.scan(gray, target, target, target, 0, 0.8);
+      report = this.rx.scan(gray, target, target, target, 0, VCODE_GUIDE_FRAC);
     } catch (_) { return; }
     this._setGuideLocked(report.detected);
     if (report.detected) {

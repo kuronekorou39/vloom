@@ -6,6 +6,7 @@ import { Sender } from "./sender.js";
 import { Receiver } from "./receiver.js";
 import { VcodeSender, VcodeReceiver } from "./vcode.js";
 import { setupCalibration } from "./calibration.js";
+import { CameraPicker, streamDeviceId } from "./camera.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -59,6 +60,8 @@ const calibration = setupCalibration({
   chips: $("calChips"),
   best: $("calBest"),
   blocks: $("calBlocks"),
+  cameraSelect: $("calCamera"),
+  diag: $("calDiag"),
 });
 
 // ---- 送信 (QR / vcode 共用ステージ) ----
@@ -148,8 +151,12 @@ const fmtSize = (n) => {
   return n + "B";
 };
 
+const rxPicker = new CameraPicker($("rxCamera"));
+const vrxPicker = new CameraPicker($("vrxCamera"));
+
 const receiver = new Receiver({
   video: $("rxVideo"),
+  onDiag: (t) => { $("rxDiag").textContent = t; },
   onProgress: ({ name, size, done, total, inflight }) => {
     $("rxProgress").value = total ? done / total : 0;
     $("rxInfo").textContent = name
@@ -173,7 +180,8 @@ $("rxStart").addEventListener("click", async () => {
   $("rxResult").innerHTML = "";
   $("rxProgress").value = 0;
   try {
-    await receiver.start($("rxGrid").value);
+    await receiver.start($("rxGrid").value, rxPicker.deviceId);
+    rxPicker.refresh(streamDeviceId(receiver.stream)); // 許可後はデバイス名が取れるので一覧を更新
     $("rxStart").disabled = true;
     $("rxStop").disabled = false;
     $("rxInfo").textContent = "スキャン中 — 送信側の QR に向けてください";
@@ -191,6 +199,7 @@ $("rxStop").addEventListener("click", () => {
 // ---- V受信 (vcode) ----
 const vcodeReceiver = new VcodeReceiver({
   video: $("vrxVideo"),
+  onDiag: (t) => { $("vrxDiag").textContent = t; },
   onProgress: ({ frames, detected, blocks, blocksTotal }) => {
     $("vrxInfo").textContent =
       `スキャン中 · frames ${frames} · 検出 ${detected} · 直近 ${blocks}/${blocksTotal} ブロック`;
@@ -209,7 +218,8 @@ const vcodeReceiver = new VcodeReceiver({
 $("vrxStart").addEventListener("click", async () => {
   $("vrxResult").innerHTML = "";
   try {
-    await vcodeReceiver.start();
+    await vcodeReceiver.start(vrxPicker.deviceId);
+    vrxPicker.refresh(streamDeviceId(vcodeReceiver.stream)); // 許可後はデバイス名が取れるので一覧を更新
     $("vrxStart").disabled = true;
     $("vrxStop").disabled = false;
     $("vrxInfo").textContent = "スキャン中 — 送信側の vcode に向けてください";
