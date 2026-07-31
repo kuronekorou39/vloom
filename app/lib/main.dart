@@ -20,11 +20,11 @@ Future<void> main() async {
       [DeviceOrientation.portraitUp, DeviceOrientation.portraitDown]);
   await RustLib.init();
   await HistoryStore.instance.init();
-  runApp(const BeyondQrApp());
+  runApp(const VloomApp());
 }
 
-class BeyondQrApp extends StatelessWidget {
-  const BeyondQrApp({super.key});
+class VloomApp extends StatelessWidget {
+  const VloomApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -33,7 +33,7 @@ class BeyondQrApp extends StatelessWidget {
       brightness: Brightness.dark,
     );
     return MaterialApp(
-      title: 'beyond-qr',
+      title: 'Vloom',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(colorScheme: scheme, useMaterial3: true),
       home: const HomeShell(),
@@ -86,7 +86,7 @@ class _HomeShellState extends State<HomeShell> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('beyond-qr'),
+        title: const Text('Vloom'),
         actions: [
           if (_hasCamera)
             IconButton(

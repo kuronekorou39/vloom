@@ -1,4 +1,4 @@
-# beyond-qr web (Phase 1: QR + Fountain code 動画ループ)
+# Vloom web (Phase 1: QR + Fountain code 動画ループ)
 
 PC 画面に **QR の動画ループ** を表示し、**スマホ Chrome / Safari** のカメラで連続スキャンして
 ファイル/テキストを復元する Web アプリ。Rust の Fountain code (RaptorQ) を WASM 化し、
@@ -28,14 +28,14 @@ web/
 ### 1. WASM ビルド (初回 / Rust 変更時)
 
 ```powershell
-cd C:\projects\beyond-qr\core-wasm
+cd core-wasm   # リポジトリルートから
 wasm-pack build --target web --release --out-dir ..\web\pkg
 ```
 
 ### 2. ファイアウォール許可 (初回のみ、管理者 PowerShell)
 
 ```powershell
-New-NetFirewallRule -DisplayName "beyond-qr HTTPS 8443" -Direction Inbound -Protocol TCP -LocalPort 8443 -Action Allow -Profile Private
+New-NetFirewallRule -DisplayName "Vloom HTTPS 8443" -Direction Inbound -Protocol TCP -LocalPort 8443 -Action Allow -Profile Private
 ```
 
 (または Python の最初の起動時に Windows のポップアップで「アクセスを許可」を選ぶ)

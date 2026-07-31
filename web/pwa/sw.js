@@ -1,6 +1,6 @@
 // beyond-qr PWA Service Worker: アプリシェル + WASM をキャッシュしてオフライン動作させる。
 // バージョンを上げるとキャッシュを更新する。
-const CACHE = "beyond-qr-pwa-v8";
+const CACHE = "vloom-pwa-v9";
 const ASSETS = [
   "./",
   "./index.html",
@@ -15,6 +15,11 @@ const ASSETS = [
   "./vendor/qrcode.js",
   "./vendor/jsQR.js",
   "./manifest.webmanifest",
+  "./icon-192.png",
+  "./icon-512.png",
+  "./icon-maskable-512.png",
+  "./apple-touch-icon.png",
+  "./favicon.png",
   "./pkg/beyond_qr_core_wasm.js",
   "./pkg/beyond_qr_core_wasm_bg.wasm",
 ];
