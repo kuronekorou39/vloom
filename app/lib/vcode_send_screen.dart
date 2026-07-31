@@ -19,6 +19,13 @@ class VcodeSendScreen extends StatefulWidget {
   State<VcodeSendScreen> createState() => _VcodeSendScreenState();
 }
 
+/// 1 フレームは最低 2 リフレッシュ周期表示しないとキャプチャが遷移を捉えるため、
+/// 60Hz 画面で安全に出せる fps の上限。120Hz 画面ならこの倍まで出せる。
+const kRefreshSafeFps = 30;
+
+/// bpc ごとの RaptorQ packet_size (Layout.block = 20 前提で block_payload_len - 4)
+int packetSizeFor(int bpc) => bpc == 2 ? 92 : 42;
+
 class _VcodeSendScreenState extends State<VcodeSendScreen> {
   final _textCtrl = TextEditingController();
   String? _pickedPath;
@@ -50,6 +57,14 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
       _pickedMime = f.mimeType;
       _pickedSize = len;
     });
+  }
+
+  /// 現在の設定で 1 秒あたり何 byte 送れるかの理論値 (実測との比較基準)。
+  /// ブロック数 × packet_size × fps。取りこぼしと RaptorQ の符号化冗長は含まない。
+  double get _theoreticalKbps {
+    final p = _grid.split('x');
+    final blocks = int.parse(p[0]) * int.parse(p[1]);
+    return blocks * packetSizeFor(_bpc) * _fps / 1024;
   }
 
   Future<Uint8List?> _buildPayload() async {
@@ -96,8 +111,7 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
     final mime =
         _pickedPath != null ? (_pickedMime ?? '') : 'text/plain;charset=utf-8';
     final payload = vcodeWrapFile(name: name, mime: mime, data: raw);
-    final packetSize = _bpc == 2 ? 92 : 42;
-    final sourcePackets = (payload.length / packetSize).ceil();
+    final sourcePackets = (payload.length / packetSizeFor(_bpc)).ceil();
     final gridParts = _grid.split('x');
     final tx = VcodeTx(
         payload: payload,
@@ -252,10 +266,13 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
             const SizedBox(width: 12),
             SegmentedButton<String>(
               segments: const [
-                ButtonSegment(value: '5x4', label: Text('5x4 標準')),
-                ButtonSegment(value: '7x6', label: Text('7x6 高密度')),
+                ButtonSegment(value: '5x4', label: Text('5x4')),
+                ButtonSegment(value: '7x6', label: Text('7x6')),
+                ButtonSegment(value: '9x8', label: Text('9x8')),
+                ButtonSegment(value: '11x10', label: Text('11x10')),
               ],
               selected: {_grid},
+              showSelectedIcon: false,
               onSelectionChanged: (s) => setState(() => _grid = s.first),
             ),
           ],
@@ -283,14 +300,22 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
               child: Slider(
                 value: _fps.toDouble(),
                 min: 3,
-                max: 30,
-                divisions: 27,
+                max: 60,
+                divisions: 57,
                 label: '$_fps',
                 onChanged: (v) => setState(() => _fps = v.round()),
               ),
             ),
             Text('$_fps'),
           ],
+        ),
+        // 1 フレームは最低 2 リフレッシュ周期表示しないとキャプチャが遷移を捉える。
+        // 60Hz 画面なら 30fps、120Hz 画面なら 60fps が上限の目安。
+        Text(
+          '理論 ${_theoreticalKbps.toStringAsFixed(0)} KB/s'
+          '  ($_grid · ${_bpc}bit · ${_fps}fps)'
+          '${_fps > kRefreshSafeFps ? "  ※${kRefreshSafeFps}fps 超は 120Hz 画面向け" : ""}',
+          style: Theme.of(context).textTheme.bodySmall,
         ),
         Row(
           children: [

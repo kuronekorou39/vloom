@@ -313,13 +313,26 @@ fn vcode_rotate(y: &[u8], w: usize, h: usize, stride: usize, rot: u32) -> (Vec<u
 #[wasm_bindgen]
 pub struct VcodeRx {
     last: Option<(u32, vcode::Layout, [(f32, f32); 4])>,
+    /// 探索するレイアウトの固定指定 (None = CANDIDATES を総当たり)
+    forced: Option<vcode::Layout>,
 }
 
 #[wasm_bindgen]
 impl VcodeRx {
     #[wasm_bindgen(constructor)]
     pub fn new() -> VcodeRx {
-        VcodeRx { last: None }
+        VcodeRx { last: None, forced: None }
+    }
+
+    /// 探索するレイアウトを 1 つに固定する (grid_w = 0 で解除)。送信側の格子が分かっている
+    /// 場合に候補総当たりを避け、初回検出を候補数分だけ速くする。
+    #[wasm_bindgen(js_name = setLayout)]
+    pub fn set_layout(&mut self, grid_w: u8, grid_h: u8) {
+        self.forced = if grid_w == 0 || grid_h == 0 {
+            None
+        } else {
+            Some(vcode::Layout::from_grid(grid_w as usize, grid_h as usize))
+        };
     }
 
     /// グレースケール Y プレーンから vcode をスキャンする。ブラウザでは RGBA→輝度に変換して
@@ -353,12 +366,16 @@ impl VcodeRx {
         // 早期に確定させる。ロック後は self.last 経由のトラッキングに移り多スケール探索は走らない。
         let base = guide_frac.clamp(0.4, 0.98);
         let fracs = [base, (base * 0.78).max(0.4), (base * 1.15).min(0.98)];
+        let cands: Vec<vcode::Layout> = match self.forced {
+            Some(l) => vec![l],
+            None => vcode::Layout::CANDIDATES.to_vec(),
+        };
         for rot in [rotation_deg % 360, (rotation_deg + 180) % 360] {
             let (gray, rw, rh) = vcode_rotate(y, w, h, stride, rot);
             let img = GrayImage { w: rw, h: rh, data: &gray };
             let cx = rw as f32 / 2.0;
             let cy = rh as f32 / 2.0;
-            for layout in vcode::Layout::CANDIDATES {
+            for &layout in &cands {
                 for &frac in &fracs {
                     let gw = (frac * rw as f64) as f32;
                     let gh = (gw * layout.height() as f32 / layout.width() as f32).min(rh as f32 * 0.95);

@@ -157,15 +157,18 @@
             <select id="vtxGrid">
               <option value="7x6" selected>7×6 (高密度)</option>
               <option value="5x4">5×4 (標準)</option>
+              <option value="9x8">9×8 (超高密度)</option>
+              <option value="11x10">11×10 (最大)</option>
             </select></label>
           <label>bit/セル:
             <select id="vtxBpc">
               <option value="2" selected>2 (輝度4値)</option>
               <option value="1">1 (白黒)</option>
             </select></label>
-          <label>FPS: <input type="number" id="vtxFps" value="12" min="2" max="30" style="width:4em" /></label>
+          <label>FPS: <input type="number" id="vtxFps" value="12" min="2" max="60" style="width:4em" /></label>
           <button id="vtxStart">V送信開始</button>
         </div>
+        <div id="vtxTheory" class="muted"></div>
         <div id="vtxInfo" class="muted">スマホアプリ「V受信」でこの画面に向けてください。</div>
       </div>
     </section>
@@ -179,6 +182,14 @@
         </div>
         <div class="row">
           <label>カメラ: <select id="vrxCamera" class="camsel"></select></label>
+          <label>格子:
+            <select id="vrxGrid">
+              <option value="auto" selected>自動 (候補総当たり)</option>
+              <option value="5x4">5×4</option>
+              <option value="7x6">7×6</option>
+              <option value="9x8">9×8</option>
+              <option value="11x10">11×10</option>
+            </select></label>
         </div>
         <div id="vrxVideoWrap"><video id="vrxVideo" autoplay playsinline muted></video></div>
         <div style="margin-top:0.6em">

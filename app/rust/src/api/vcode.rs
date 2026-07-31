@@ -247,12 +247,34 @@ fn rotate_y_plane(y: &[u8], w: usize, h: usize, stride: usize, rot: u32) -> (Vec
 pub struct VcodeRx {
     /// 直近成功時の (回転 deg, レイアウト, 精密化後の 4 隅)
     last: Option<(u32, vcode::Layout, [(f32, f32); 4])>,
+    /// 探索するレイアウトの固定指定 (None = CANDIDATES を総当たり)
+    forced: Option<vcode::Layout>,
 }
 
 impl VcodeRx {
     #[flutter_rust_bridge::frb(sync)]
     pub fn new() -> VcodeRx {
-        VcodeRx { last: None }
+        VcodeRx { last: None, forced: None }
+    }
+
+    /// 探索するレイアウトを 1 つに固定する (grid_w = 0 で解除)。
+    /// 候補総当たりは初回検出とacquireのコストを候補数に比例して増やすので、送信側の格子が
+    /// 分かっている場合 (計測・自動掃引・能力交換後) はこれで固定する。
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn set_layout(&mut self, grid_w: u8, grid_h: u8) {
+        self.forced = if grid_w == 0 || grid_h == 0 {
+            None
+        } else {
+            Some(vcode::Layout::from_grid(grid_w as usize, grid_h as usize))
+        };
+    }
+
+    /// 探索対象のレイアウト候補
+    fn candidates(&self) -> Vec<vcode::Layout> {
+        match self.forced {
+            Some(l) => vec![l],
+            None => vcode::Layout::CANDIDATES.to_vec(),
+        }
     }
 
     /// カメラの Y プレーンから vcode をスキャンする。
@@ -292,6 +314,7 @@ impl VcodeRx {
         // 試す。基準スケールを先頭に置き、よくある構図で早期確定させる。ロック後はトラッキングへ。
         let base = guide_frac.clamp(0.4, 0.98);
         let fracs = [base, (base * 0.78).max(0.4), (base * 1.15).min(0.98)];
+        let cands = self.candidates();
         let mut errors = Vec::new();
         for rot in [rotation_deg % 360, (rotation_deg + 180) % 360] {
             let (gray, rw, rh) = rotate_y_plane(&y, w, h, stride, rot);
@@ -299,7 +322,7 @@ impl VcodeRx {
             let cx = rw as f32 / 2.0;
             let cy = rh as f32 / 2.0;
 
-            for layout in vcode::Layout::CANDIDATES {
+            for &layout in &cands {
                 for &frac in &fracs {
                     // ガイド枠: 中央配置、幅 = frac * 画像幅、アスペクトはレイアウト準拠
                     let gw = (frac * rw as f64) as f32;
@@ -359,10 +382,11 @@ impl VcodeRx {
         // ガイド枠の大きさ (画像幅比) と中心位置 (画像比) を振る。小さめスケールで隅寄りも拾う。
         let scales = [0.7f64, 0.5, 0.38];
         let centers = [0.5f32, 0.32, 0.68];
+        let cands = self.candidates();
         for rot in rots {
             let (gray, rw, rh) = rotate_y_plane(&y, w, h, stride, rot);
             let img = GrayImage { w: rw, h: rh, data: &gray };
-            for layout in vcode::Layout::CANDIDATES {
+            for &layout in &cands {
                 let aspect = layout.height() as f32 / layout.width() as f32;
                 for &s in &scales {
                     let gw = (s * rw as f64) as f32;
@@ -409,11 +433,7 @@ impl VcodeRx {
         if corners.len() < 8 {
             return;
         }
-        let layout = vcode::Layout {
-            block: 20,
-            grid_w: grid_w as usize,
-            grid_h: grid_h as usize,
-        };
+        let layout = vcode::Layout::from_grid(grid_w as usize, grid_h as usize);
         let c = [
             (corners[0], corners[1]),
             (corners[2], corners[3]),

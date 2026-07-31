@@ -147,13 +147,19 @@ export function lumaText(stats) {
   return `明るさ ${Math.round(stats.mean)} (飽和 ${sat}%)${note}`;
 }
 
+/** vcode のセル幅 = grid_w × ブロック一辺 (Rust 側 Layout::BLOCK と一致させる) */
+const VCODE_BLOCK = 20;
+const cellsWide = (grid) => parseInt(grid.split("x")[0], 10) * VCODE_BLOCK;
+
 /**
  * vcode のガイド枠幅から、1 セルあたり何画素で写るかの理論値を返す。
  * 実機では 6px/セル 以上あれば安定、4px を切ると輝度 4 値はまず復号できない。
+ * grid は "auto" (候補総当たり) か "9x8" のような固定指定。
  */
-export function cellPxText(guidePx) {
-  const dense = guidePx / 140; // 7×6 = 140 セル幅
-  const std = guidePx / 100; //   5×4 = 100 セル幅
-  const mark = dense >= 6 ? "" : dense >= 4.5 ? " ⚠余裕なし" : " ⚠解像度不足";
-  return `ガイド枠 ${Math.round(guidePx)}px → ${dense.toFixed(1)} px/セル (7×6) / ${std.toFixed(1)} (5×4)${mark}`;
+export function cellPxText(guidePx, grid = "auto") {
+  const grids = grid === "auto" ? ["7x6", "5x4"] : [grid];
+  const fmt = (g) => `${(guidePx / cellsWide(g)).toFixed(1)} px/セル (${g.replace("x", "×")})`;
+  const densest = guidePx / cellsWide(grids[0]);
+  const mark = densest >= 6 ? "" : densest >= 4.5 ? " ⚠余裕なし" : " ⚠解像度不足";
+  return `ガイド枠 ${Math.round(guidePx)}px → ${grids.map(fmt).join(" / ")}${mark}`;
 }

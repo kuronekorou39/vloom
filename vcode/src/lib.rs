@@ -59,15 +59,33 @@ pub struct Layout {
 }
 
 impl Layout {
+    /// ブロックの一辺 (セル)。全レイアウト共通で、部分回収の粒度を決める。
+    pub const BLOCK: usize = 20;
+
     /// デフォルトレイアウト: 100x92 セル、20 ブロック、実効 880 byte/フレーム
-    pub const V0: Layout = Layout { block: 20, grid_w: 5, grid_h: 4 };
+    pub const V0: Layout = Layout { block: Self::BLOCK, grid_w: 5, grid_h: 4 };
 
     /// 高密度レイアウト: 140x132 セル、42 ブロック、実効 1848 byte/フレーム。
     /// カメラ 1080p 解析前提 (720p ではセルが 4px 前後になり限界)。
-    pub const V1_DENSE: Layout = Layout { block: 20, grid_w: 7, grid_h: 6 };
+    pub const V1_DENSE: Layout = Layout { block: Self::BLOCK, grid_w: 7, grid_h: 6 };
 
-    /// 受信側がヘッダ確定前に試すレイアウト候補 (優先順)
-    pub const CANDIDATES: [Layout; 2] = [Layout::V1_DENSE, Layout::V0];
+    /// 超高密度: 180x172 セル、72 ブロック。bpc=2 で 6624 byte/フレーム。
+    /// 6px/セル を確保するには受信 1080px 相当が要る (= カメラ 2160p 級)。
+    pub const V2_ULTRA: Layout = Layout { block: Self::BLOCK, grid_w: 9, grid_h: 8 };
+
+    /// 最大密度: 220x212 セル、110 ブロック。bpc=2 で 10120 byte/フレーム。
+    /// 6px/セル には受信 1320px 相当。4K カメラ + 近距離・固定でようやく成立する領域。
+    pub const V3_MAX: Layout = Layout { block: Self::BLOCK, grid_w: 11, grid_h: 10 };
+
+    /// 受信側がヘッダ確定前に試すレイアウト候補。実運用で当たりやすい順に並べる
+    /// (総当たりは初回検出のみで、ロック後はトラッキングに移る)。
+    pub const CANDIDATES: [Layout; 4] =
+        [Layout::V1_DENSE, Layout::V0, Layout::V2_ULTRA, Layout::V3_MAX];
+
+    /// 格子指定からレイアウトを作る (block は共通で BLOCK)
+    pub fn from_grid(grid_w: usize, grid_h: usize) -> Layout {
+        Layout { block: Self::BLOCK, grid_w, grid_h }
+    }
 
     pub fn width(&self) -> usize {
         self.grid_w * self.block

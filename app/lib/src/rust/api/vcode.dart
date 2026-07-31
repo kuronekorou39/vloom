@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `fail_acquire`, `fail`, `rotate_y_plane`, `success`
+// These functions are ignored because they are not marked as `pub`: `candidates`, `fail_acquire`, `fail`, `rotate_y_plane`, `success`
 
 /// Fountain 復元結果のエンドツーエンド CRC-32 を検証して剥がす。
 /// None = ブロック CRC をすり抜けたゴミパケットで復元結果が破損している
@@ -67,6 +67,11 @@ abstract class VcodeRx implements RustOpaqueInterface {
     required int gridH,
     required List<double> corners,
   });
+
+  /// 探索するレイアウトを 1 つに固定する (grid_w = 0 で解除)。
+  /// 候補総当たりは初回検出とacquireのコストを候補数に比例して増やすので、送信側の格子が
+  /// 分かっている場合 (計測・自動掃引・能力交換後) はこれで固定する。
+  void setLayout({required int gridW, required int gridH});
 }
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<VcodeTx>>

@@ -297,3 +297,67 @@ fn scan_fails_gracefully_on_blank_image() {
     };
     assert!(scan_frame(&img, &guide, Layout::V0).is_err());
 }
+
+/// 密なレイアウトを「1 セル cell_px 画素」で写した擬似カメラ画像からスキャンし、
+/// 回収できたブロック数を返す。密度の上限がセル解像度で決まることを測るための共通処理。
+fn recover_at_cell_px(layout: Layout, bpc: u8, cell_px: usize, seed: u64) -> (usize, usize) {
+    let (header, blocks) = test_frame_bpc(layout, 0x5A, bpc);
+    let frame_px = encode_frame(&header, &blocks, cell_px);
+    // コードの周りに余白を取った canvas に、わずかな透視ずれを付けて配置する
+    let (cw, ch) = (frame_px.w + 320, frame_px.h + 260);
+    let (fw, fh) = (frame_px.w as f32, frame_px.h as f32);
+    let dst = [
+        (150.0f32, 110.0),
+        (150.0 + fw, 135.0),
+        (130.0 + fw, 110.0 + fh),
+        (170.0, 90.0 + fh),
+    ];
+    let canvas = synth_camera_image(&frame_px, cw, ch, &dst, seed);
+    let img = GrayImage { w: cw, h: ch, data: &canvas };
+    // ガイド枠は実機同様に数十 px ずらす (粗→細探索が吸収できる範囲)
+    let guide = Quad {
+        tl: (dst[0].0 - 16.0, dst[0].1 + 13.0),
+        tr: (dst[1].0 + 15.0, dst[1].1 - 11.0),
+        br: (dst[2].0 + 12.0, dst[2].1 + 14.0),
+        bl: (dst[3].0 - 11.0, dst[3].1 - 15.0),
+    };
+    match scan_frame(&img, &guide, layout) {
+        Err(_) => (0, layout.block_count()),
+        Ok(result) => {
+            assert_eq!(result.frame.header, header, "ヘッダ不一致");
+            for (i, b) in result.frame.blocks.iter().enumerate() {
+                if let Some(payload) = b {
+                    assert_eq!(payload, &blocks[i], "block {i} の内容不一致");
+                }
+            }
+            (
+                result.frame.blocks.iter().filter(|b| b.is_some()).count(),
+                layout.block_count(),
+            )
+        }
+    }
+}
+
+#[test]
+fn scan_ultra_layout_2bpc_at_6px_per_cell() {
+    // 9x8 (180x172 セル) を輝度 4 値で、6px/セル = コード幅 1080px 相当で写す。
+    // 2160p カメラで画面いっぱいに収めたときの想定条件。
+    let (ok, total) = recover_at_cell_px(Layout::V2_ULTRA, 2, 6, 0x9E9E);
+    assert!(ok * 10 >= total * 9, "9x8/2bpc の回収が少なすぎる: {ok}/{total}");
+}
+
+#[test]
+fn scan_max_layout_2bpc_at_6px_per_cell() {
+    // 11x10 (220x212 セル) を輝度 4 値で 6px/セル = コード幅 1320px 相当。
+    // 4K カメラ + 近距離でようやく届く条件。
+    let (ok, total) = recover_at_cell_px(Layout::V3_MAX, 2, 6, 0x3C3C);
+    assert!(ok * 10 >= total * 9, "11x10/2bpc の回収が少なすぎる: {ok}/{total}");
+}
+
+#[test]
+fn dense_layouts_degrade_below_4px_per_cell() {
+    // 密度の限界を明示しておく: 4px/セル まで落とすと輝度 4 値は成立しなくなる。
+    // 「受信解像度を上げないと格子は上げられない」という設計上の制約の裏付け。
+    let (ok, total) = recover_at_cell_px(Layout::V2_ULTRA, 2, 4, 0x7A7A);
+    assert!(ok < total, "4px/セル で全ブロック回収できてしまった: {ok}/{total}");
+}

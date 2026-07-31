@@ -4,7 +4,7 @@
 import init, { FountainEncoder, FountainDecoder, vcodeWrapFile } from "./pkg/beyond_qr_core_wasm.js";
 import { Sender } from "./sender.js";
 import { Receiver } from "./receiver.js";
-import { VcodeSender, VcodeReceiver } from "./vcode.js";
+import { VcodeSender, VcodeReceiver, packetSizeFor, REFRESH_SAFE_FPS } from "./vcode.js";
 import { setupCalibration } from "./calibration.js";
 import { CameraPicker, streamDeviceId } from "./camera.js";
 
@@ -111,6 +111,22 @@ $("txStop").addEventListener("click", () => {
 });
 
 // ---- V送信 (vcode) ----
+// 設定の理論スループット (ブロック数 × packet_size × fps) を出す。実測との比較基準。
+function updateVtxTheory() {
+  const [gw, gh] = $("vtxGrid").value.split("x").map(Number);
+  const bpc = parseInt($("vtxBpc").value) || 2;
+  const fps = Math.max(2, Math.min(60, parseInt($("vtxFps").value) || 12));
+  const kbps = (gw * gh * packetSizeFor(bpc) * fps) / 1024;
+  const warn = fps > REFRESH_SAFE_FPS ? `  ※${REFRESH_SAFE_FPS}fps 超は 120Hz 画面向け` : "";
+  $("vtxTheory").textContent =
+    `理論 ${kbps.toFixed(0)} KB/s  (${$("vtxGrid").value} · ${bpc}bit · ${fps}fps)${warn}`;
+}
+for (const id of ["vtxGrid", "vtxBpc", "vtxFps"]) {
+  $(id).addEventListener("change", updateVtxTheory);
+  $(id).addEventListener("input", updateVtxTheory);
+}
+updateVtxTheory();
+
 $("vtxStart").addEventListener("click", async () => {
   const file = $("vtxFile").files[0];
   let bytes, name, mime;
@@ -130,7 +146,7 @@ $("vtxStart").addEventListener("click", async () => {
   const source = vcodeWrapFile(name, mime, bytes);
   const grid = $("vtxGrid").value;
   const bpc = parseInt($("vtxBpc").value) || 2;
-  const fps = Math.max(2, Math.min(30, parseInt($("vtxFps").value) || 12));
+  const fps = Math.max(2, Math.min(60, parseInt($("vtxFps").value) || 12));
   $("vtxInfo").textContent = "";
   fitTxCanvas();
   $("txStage").style.display = "flex";
@@ -218,7 +234,7 @@ const vcodeReceiver = new VcodeReceiver({
 $("vrxStart").addEventListener("click", async () => {
   $("vrxResult").innerHTML = "";
   try {
-    await vcodeReceiver.start(vrxPicker.deviceId);
+    await vcodeReceiver.start(vrxPicker.deviceId, $("vrxGrid").value);
     vrxPicker.refresh(streamDeviceId(vcodeReceiver.stream)); // 許可後はデバイス名が取れるので一覧を更新
     $("vrxStart").disabled = true;
     $("vrxStop").disabled = false;
@@ -227,6 +243,8 @@ $("vrxStart").addEventListener("click", async () => {
     $("vrxInfo").textContent = "カメラ起動失敗: " + (e && e.message ? e.message : e);
   }
 });
+// 受信中でも格子指定を切り替えられる (総当たり→固定で初回検出が速くなる)
+$("vrxGrid").addEventListener("change", () => vcodeReceiver.setGrid($("vrxGrid").value));
 $("vrxStop").addEventListener("click", () => {
   vcodeReceiver.stop();
   $("vrxStart").disabled = false;

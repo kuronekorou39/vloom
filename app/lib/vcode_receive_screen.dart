@@ -24,9 +24,29 @@ class VcodeReceiveScreen extends StatefulWidget {
   State<VcodeReceiveScreen> createState() => _VcodeReceiveScreenState();
 }
 
+/// 格子を固定せずスキャナの候補を総当たりさせる指定
+const kGridAuto = 'auto';
+
+/// 受信で選べるカメラ解像度。密な格子ほど px/セル が要るので上げる必要がある。
+const kPresets = <(String, ResolutionPreset)>[
+  ('1080p', ResolutionPreset.veryHigh),
+  ('2160p', ResolutionPreset.ultraHigh),
+  ('最大', ResolutionPreset.max),
+];
+
 class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     with WidgetsBindingObserver {
   CameraController? _cam;
+
+  /// 探索する格子 (kGridAuto か '9x8' 等)。送信側の格子が分かっているなら固定するほど速い
+  String _forcedGrid = kGridAuto;
+
+  /// カメラ解像度。9x8 以上は 1080p では px/セル が足りない
+  ResolutionPreset _preset = ResolutionPreset.veryHigh;
+
+  /// 実際に得られたプレビュー寸法 (完了後もカメラ停止後に残すので統計に出せる)
+  Size? _lastPreviewSize;
+
   bool _busy = false;
   bool _active = false;
   bool _camBusy = false; // カメラ初期化/再初期化の多重実行ガード
@@ -130,8 +150,9 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
             orElse: () => cams.first);
         cam = CameraController(
           back,
-          // 1080p: 高密度レイアウト (7x6) はセル解像度が必要 (720p だと ~4px/セルで限界)
-          ResolutionPreset.veryHigh,
+          // セル解像度が密度の上限を決める。7x6 (140 セル幅) は 1080p で足りるが、
+          // 9x8 (180) / 11x10 (220) は 6px/セル に 1080/1320px 要るので 2160p 以上が要る。
+          _preset,
           enableAudio: false,
           // 60fps 要求 (対応外の端末では無視される。実配信レートは統計で確認)
           fps: 60,
@@ -143,6 +164,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           return;
         }
         _rx = VcodeRx();
+        _applyForcedGrid();
+        _lastPreviewSize = cam.value.previewSize;
         _camStarted = DateTime.now();
         _camCallbacks = 0;
         await cam.startImageStream(_onFrame);
@@ -375,6 +398,27 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     await _stopCamera();
   }
 
+  /// 探索する格子をスキャナに反映する。送信側の格子が分かっているなら固定するほど
+  /// 初回検出と acquire が速い (候補数に比例したコストが 1 候補分になる)。
+  void _applyForcedGrid() {
+    final rx = _rx;
+    if (rx == null) return;
+    if (_forcedGrid == kGridAuto) {
+      rx.setLayout(gridW: 0, gridH: 0);
+    } else {
+      final p = _forcedGrid.split('x');
+      rx.setLayout(gridW: int.parse(p[0]), gridH: int.parse(p[1]));
+    }
+  }
+
+  /// カメラ解像度を変えて開き直す (プレビュー中でも即反映)
+  Future<void> _changePreset(ResolutionPreset p) async {
+    if (p == _preset) return;
+    setState(() => _preset = p);
+    await _stopCamera();
+    await _initCamera();
+  }
+
   Future<void> _stopCamera() async {
     _active = false;
     final cam = _cam;
@@ -511,10 +555,16 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     final p = _payload!;
     final ms = _elapsed?.inMilliseconds ?? 0;
     final kbps = ms > 0 ? (p.length / 1024) / (ms / 1000) : 0.0;
+    // 条件を一緒に残す: 同じ数字でも解像度と格子が違えば比較にならない。
+    final preview = _lastPreviewSize;
     final rows = <(String, String)>[
       ('サイズ', '${p.length} B'),
       ('所要時間 (初検出→完了)', ms >= 1000 ? '${(ms / 1000).toStringAsFixed(2)} 秒' : '$ms ms'),
       ('実効スループット', '${kbps.toStringAsFixed(1)} KB/s'),
+      ('カメラ解像度', preview == null
+          ? '-'
+          : '${preview.width.round()}×${preview.height.round()}'),
+      ('格子指定', _forcedGrid == kGridAuto ? '自動 (候補総当たり)' : _forcedGrid),
       ('カメラフレーム数', '$_framesSeen (検出 $_framesDetected / 追従 $_framesTracked)'),
       ('カメラ実効fps', _camFps.toStringAsFixed(1)),
       ('回収ブロック', '$_blocksOk (部分回収込み)'),
@@ -540,6 +590,61 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
             ),
           ]),
+      ],
+    );
+  }
+
+  /// 計測用の設定 (常用しないので折りたたむ)。カメラ解像度は px/セル の上限を、
+  /// 格子固定は初回検出/acquire の速さを決める。
+  Widget _measureSettings() {
+    final small = Theme.of(context).textTheme.bodySmall;
+    return ExpansionTile(
+      title: Text('計測設定', style: small),
+      tilePadding: EdgeInsets.zero,
+      childrenPadding: const EdgeInsets.only(bottom: 8),
+      children: [
+        Row(
+          children: [
+            Text('解像度', style: small),
+            const SizedBox(width: 12),
+            SegmentedButton<ResolutionPreset>(
+              segments: [
+                for (final (label, p) in kPresets)
+                  ButtonSegment(value: p, label: Text(label)),
+              ],
+              selected: {_preset},
+              showSelectedIcon: false,
+              onSelectionChanged: (s) => _changePreset(s.first),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Text('格子', style: small),
+            const SizedBox(width: 12),
+            Expanded(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: kGridAuto, label: Text('自動')),
+                    ButtonSegment(value: '5x4', label: Text('5x4')),
+                    ButtonSegment(value: '7x6', label: Text('7x6')),
+                    ButtonSegment(value: '9x8', label: Text('9x8')),
+                    ButtonSegment(value: '11x10', label: Text('11x10')),
+                  ],
+                  selected: {_forcedGrid},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (s) => setState(() {
+                    _forcedGrid = s.first;
+                    _applyForcedGrid();
+                  }),
+                ),
+              ),
+            ),
+          ],
+        ),
       ],
     );
   }
@@ -659,6 +764,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                 _coverageGrid(total),
                 const SizedBox(height: 4),
               ],
+              if (_payload == null) _measureSettings(),
               Text(
                 _payload != null
                     ? _status

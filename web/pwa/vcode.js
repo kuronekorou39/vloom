@@ -17,6 +17,12 @@ const SCAN_MAX = 1280;
 // 診断表示の更新間隔
 const DIAG_INTERVAL_MS = 500;
 
+/** bpc ごとの RaptorQ packet_size (Layout::BLOCK=20 前提で block_payload_len - 4) */
+export const packetSizeFor = (bpc) => (bpc === 2 ? 92 : 42);
+
+/** 1 フレームは 2 リフレッシュ周期表示する必要があるため、60Hz 画面での fps 上限 */
+export const REFRESH_SAFE_FPS = 30;
+
 export class VcodeSender {
   constructor({ canvas, onStatus }) {
     this.canvas = canvas;
@@ -32,7 +38,7 @@ export class VcodeSender {
       ? fileOrBytes
       : new Uint8Array(await fileOrBytes.arrayBuffer());
     const [gw, gh] = gridStr.split("x").map(Number);
-    const packetSize = bpc === 2 ? 92 : 42;
+    const packetSize = packetSizeFor(bpc);
     const sourcePackets = Math.ceil(payload.length / packetSize);
     const extraRepair = Math.ceil(sourcePackets * REPAIR_RATE);
     const tx = new VcodeTx(payload, extraRepair, gw, gh, bpc);
@@ -100,8 +106,9 @@ export class VcodeReceiver {
     this._onResize = () => this._positionGuide();
   }
 
-  async start(deviceId) {
+  async start(deviceId, grid = "auto") {
     this._reset();
+    this.grid = grid;
     this.stream = await openCamera(deviceId);
     this.video.srcObject = this.stream;
     await this.video.play();
@@ -109,6 +116,7 @@ export class VcodeReceiver {
     this.video.addEventListener("loadedmetadata", this._onResize);
     window.addEventListener("resize", this._onResize);
     this.rx = new VcodeRx();
+    this.setGrid(this.grid);
     const loop = () => { if (!this.stream) return; this._scan(); this.rafId = requestAnimationFrame(loop); };
     this.rafId = requestAnimationFrame(loop);
   }
@@ -117,6 +125,18 @@ export class VcodeReceiver {
     this.rx = null; this.dec = null; this.finished = false; this.frames = 0; this.detected = 0;
     this.stats = new ScanStats();
     this._lastDiag = 0;
+  }
+
+  /** 探索する格子を切り替える ("auto" で候補総当たり)。受信中でも即反映する。 */
+  setGrid(grid) {
+    this.grid = grid;
+    if (!this.rx) return;
+    if (grid === "auto") {
+      this.rx.setLayout(0, 0);
+    } else {
+      const [gw, gh] = grid.split("x").map(Number);
+      this.rx.setLayout(gw, gh);
+    }
   }
 
   // カメラ実解像度・スキャン fps・明るさ・理論 px/セル を出す。読めないときに
@@ -129,7 +149,7 @@ export class VcodeReceiver {
     this.onDiag(
       `${cameraInfoText(this.stream)}\n` +
       `スキャン ${size} · ${this.stats.fps.toFixed(1)} fps · ${lumaText(this.stats)}\n` +
-      cellPxText(target * VCODE_GUIDE_FRAC)
+      cellPxText(target * VCODE_GUIDE_FRAC, this.grid)
     );
   }
 
