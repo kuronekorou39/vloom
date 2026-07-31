@@ -1,4 +1,4 @@
-"""beyond-qr web/ ディレクトリを HTTPS で配信する開発用サーバー。
+"""Vloom web/ ディレクトリを HTTPS で配信する開発用サーバー。
 
 スマホからのカメラアクセスは getUserMedia の都合上 HTTPS or localhost が必須。
 自己署名証明書を一度だけ生成し、http.server ベースで配信する。
@@ -64,8 +64,8 @@ def make_self_signed_cert(ips: list[str]) -> None:
     subject = issuer = x509.Name(
         [
             x509.NameAttribute(NameOID.COUNTRY_NAME, "JP"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "beyond-qr dev"),
-            x509.NameAttribute(NameOID.COMMON_NAME, "beyond-qr dev"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Vloom dev"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "Vloom dev"),
         ]
     )
 

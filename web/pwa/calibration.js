@@ -3,7 +3,7 @@
 //   受信(確認): カメラで読み、どのレベルまで読めるか (✅) を確認
 // QR / vcode の両方に対応する。読めた最も密なレベルが、その環境で使える上限の目安。
 
-import { VcodeTx, VcodeRx } from "./pkg/beyond_qr_core_wasm.js";
+import { VcodeTx, VcodeRx } from "./pkg/vloom_core_wasm.js";
 import { drawQRInCell, detectQRCodesGrid } from "./qr_util.js";
 import { VCODE_GUIDE_FRAC } from "./vcode.js";
 import { openCamera, CameraPicker, ScanStats, streamDeviceId, cameraInfoText, lumaText, cellPxText }

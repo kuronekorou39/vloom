@@ -1,5 +1,5 @@
 [package]
-name = "rust_lib_beyond_qr"
+name = "rust_lib_vloom"
 version = "0.1.0"
 edition = "2021"
 
@@ -8,8 +8,8 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 flutter_rust_bridge = "=2.12.0"
-beyond-qr-fountain = { path = "../../fountain" }
-beyond-qr-vcode = { path = "../../vcode" }
+vloom-fountain = { path = "../../fountain" }
+vloom-vcode = { path = "../../vcode" }
 # QR 生成 (モジュール行列のみ必要。image/svg レンダラは不要なので default-features off)。
 qrcode = { version = "0.14", default-features = false }
 

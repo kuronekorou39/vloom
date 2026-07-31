@@ -1,4 +1,4 @@
-// beyond-qr PWA Service Worker: アプリシェル + WASM をキャッシュしてオフライン動作させる。
+// Vloom PWA Service Worker: アプリシェル + WASM をキャッシュしてオフライン動作させる。
 // バージョンを上げるとキャッシュを更新する。
 const CACHE = "vloom-pwa-v9";
 const ASSETS = [
@@ -20,8 +20,8 @@ const ASSETS = [
   "./icon-maskable-512.png",
   "./apple-touch-icon.png",
   "./favicon.png",
-  "./pkg/beyond_qr_core_wasm.js",
-  "./pkg/beyond_qr_core_wasm_bg.wasm",
+  "./pkg/vloom_core_wasm.js",
+  "./pkg/vloom_core_wasm_bg.wasm",
 ];
 
 self.addEventListener("install", (e) => {

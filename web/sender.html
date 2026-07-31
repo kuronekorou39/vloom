@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>beyond-qr Sender</title>
+  <title>Vloom Sender</title>
   <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
   <style>
     body { font-family: sans-serif; margin: 0; background: #fff; color: #222; }
@@ -116,7 +116,7 @@
   <div class="status" id="status">準備完了</div>
 
   <script type="module">
-    import init, { FountainEncoder } from "./pkg/beyond_qr_core_wasm.js";
+    import init, { FountainEncoder } from "./pkg/vloom_core_wasm.js";
     import { drawQRInCell } from "./qr_util.js";
 
     const $ = (id) => document.getElementById(id);
@@ -692,7 +692,7 @@
           : `NG(${r.gaveUp ? "見切り-密すぎ" : r.timeout ? "timeout" : "abort"})\twall=${r.wallSec}s\tunique=${r.unique}/${r.neededApprox}\tscanFps=${r.scanFps}\tQR/frame=${r.readsPerFrame}`)
       );
       const env = ($("envLabel").value || "").trim();
-      const head = `=== beyond-qr プロファイルスイープ ${done ? "(完了)" : "(進行中)"} ===\n` +
+      const head = `=== Vloom プロファイルスイープ ${done ? "(完了)" : "(進行中)"} ===\n` +
         (env ? `環境: ${env}\n` : "") +
         `payload=${lastPayloadLen}B  profiles=${results.length}  timeout=${SWEEP_TIMEOUT_MS / 1000}s  noprogress=${SWEEP_NOPROGRESS_MS / 1000}s\n`;
       try { await fetch("/log", { method: "POST", headers: { "Content-Type": "text/plain" }, body: head + rows.join("\n") + "\n" }); } catch (e) { /* noop */ }

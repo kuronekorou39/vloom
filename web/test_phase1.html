@@ -18,7 +18,7 @@
   <canvas id="qrCv" width="800" height="800"></canvas>
 
   <script type="module">
-    import init, { FountainEncoder, FountainDecoder } from "./pkg/beyond_qr_core_wasm.js";
+    import init, { FountainEncoder, FountainDecoder } from "./pkg/vloom_core_wasm.js";
 
     const log = document.getElementById("log");
     const out = (m, cls = "") => { const d = document.createElement("div"); d.className = cls; d.textContent = m; log.appendChild(d); };

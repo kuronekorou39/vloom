@@ -1,6 +1,6 @@
 [workspace]
 members = ["core-wasm", "fountain", "vcode"]
-# app/ 配下の Flutter ブリッジ crate (rust_lib_beyond_qr) は cargokit が独立ビルドするため除外。
+# app/ 配下の Flutter ブリッジ crate (rust_lib_vloom) は cargokit が独立ビルドするため除外。
 # ../../fountain への path 依存で本ワークスペースのコアを再利用する。
 exclude = ["app"]
 resolver = "2"

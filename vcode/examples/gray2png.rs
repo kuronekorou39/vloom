@@ -1,5 +1,5 @@
 //! 実機からダンプした生グレースケール (.gray) を PNG に変換する。
-//! 実行: cargo run -p beyond-qr-vcode --example gray2png -- <input.gray> <width> <height>
+//! 実行: cargo run -p vloom-vcode --example gray2png -- <input.gray> <width> <height>
 
 use std::fs;
 

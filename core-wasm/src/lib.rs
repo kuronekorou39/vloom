@@ -1,9 +1,9 @@
-//! beyond-qr の WebAssembly バインディング (Phase 1: Fountain code)。
+//! Vloom の WebAssembly バインディング (Phase 1: Fountain code)。
 //!
 //! `wasm-pack build --target web --release` で `pkg/` に JS モジュールを生成する。
-//! JS 側からは `import init, { FountainEncoder, FountainDecoder } from "./pkg/beyond_qr_core_wasm.js"` で使う。
+//! JS 側からは `import init, { FountainEncoder, FountainDecoder } from "./pkg/vloom_core_wasm.js"` で使う。
 
-use ::beyond_qr_fountain as fountain;
+use ::vloom_fountain as fountain;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(start)]
@@ -106,8 +106,8 @@ impl FountainDecoder {
 // vcode (video-native 2D code) の wasm バインディング
 // app/rust/src/api/vcode.rs (frb 版) と同一ロジックを wasm-bindgen で公開する。
 // =============================================================
-use beyond_qr_vcode as vcode;
-use beyond_qr_vcode::scan::{scan_frame, scan_frame_tracked, GrayImage, Quad};
+use vloom_vcode as vcode;
+use vloom_vcode::scan::{scan_frame, scan_frame_tracked, GrayImage, Quad};
 
 #[wasm_bindgen]
 pub struct VcodeTx {

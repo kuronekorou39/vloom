@@ -3,7 +3,7 @@
 //   - 受信: カメラ→輝度Y→VcodeRx.scan→パケット→FountainDecoder→生バイト→型sniff→保存
 // 受信側で CANDIDATES に無い格子は検出できないため、格子は 7x6 / 5x4 のみ。
 
-import { VcodeTx, VcodeRx, FountainDecoder, vcodeUnwrapPayload, vcodeUnwrapFile } from "./pkg/beyond_qr_core_wasm.js";
+import { VcodeTx, VcodeRx, FountainDecoder, vcodeUnwrapPayload, vcodeUnwrapFile } from "./pkg/vloom_core_wasm.js";
 import { openCamera, ScanStats, cameraInfoText, lumaText, cellPxText } from "./camera.js";
 
 const REPAIR_RATE = 0.5;

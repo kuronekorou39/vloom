@@ -1,10 +1,10 @@
-//! beyond-qr Fountain コア (RaptorQ) の Flutter 向け FFI ラッパ。
+//! Vloom Fountain コア (RaptorQ) の Flutter 向け FFI ラッパ。
 //!
-//! 既存の純 Rust コア `beyond_qr_fountain` をそのまま再利用し、web 版 (core-wasm) と
+//! 既存の純 Rust コア `vloom_fountain` をそのまま再利用し、web 版 (core-wasm) と
 //! 同じ API 形状を Dart のオパーク型として公開する。エンコーダ/デコーダは状態を持つため
 //! frb の RustAutoOpaque でハンドルとして扱う (&mut self メソッドも可)。
 
-use beyond_qr_fountain as fountain;
+use vloom_fountain as fountain;
 
 /// 送信側: payload を packet_size バイトの Fountain パケット列に符号化するハンドル。
 pub struct FountainEncoder {

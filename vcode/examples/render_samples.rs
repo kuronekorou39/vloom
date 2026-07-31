@@ -1,6 +1,6 @@
 //! vcode フレームのテスト画像を vcode/samples/ に PNG で出力する (目視確認用)。
 //!
-//! 実行: cargo run -p beyond-qr-vcode --example render_samples
+//! 実行: cargo run -p vloom-vcode --example render_samples
 //!
 //! 出力 (すべて gitignore 済み):
 //!   - frame_clean.png     : 全 20 ブロックにデータが載った通常フレーム
@@ -8,7 +8,7 @@
 //!   - frame_corrupted.png : 中央 4 ブロックを黒塗り破損させたフレーム
 //!                           (このフレームでも残り 16 ブロック + ヘッダは回収できる)
 
-use beyond_qr_vcode::{decode_frame, encode_frame, Bitmap, FrameHeader, Layout, VERSION};
+use vloom_vcode::{decode_frame, encode_frame, Bitmap, FrameHeader, Layout, VERSION};
 use std::fs;
 use std::path::Path;
 

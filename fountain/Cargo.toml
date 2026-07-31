@@ -1,12 +1,12 @@
 [package]
-name = "beyond-qr-fountain"
+name = "vloom-fountain"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Fountain code (RaptorQ) wrapper for video QR streaming"
 
 [lib]
-name = "beyond_qr_fountain"
+name = "vloom_fountain"
 path = "src/lib.rs"
 
 [dependencies]

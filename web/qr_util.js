@@ -1,4 +1,4 @@
-// beyond-qr web 共有ユーティリティ。
+// Vloom web 共有ユーティリティ。
 // - drawQRInCell     : 1 セルに quiet zone 付きで QR を描画 (sender.html / test_multiqr.html)
 // - detectQRCodesGrid: 1 枚の ImageData を rows×cols にタイル分割し各タイルを jsQR で読む
 //                      (receiver.html / test_multiqr.html)

@@ -1,20 +1,20 @@
 //! 実機 E2E テスト用: 本物の RaptorQ パケットを載せた vcode フレーム列を PNG で生成し、
 //! ブラウザでアニメーション表示する HTML も出力する。
 //!
-//! 実行: cargo run -p beyond-qr-vcode --example render_stream [payload_bytes|ファイルパス] [grid_w] [grid_h] [bpc]
+//! 実行: cargo run -p vloom-vcode --example render_stream [payload_bytes|ファイルパス] [grid_w] [grid_h] [bpc]
 //! 第 1 引数が数値ならその長さの擬似ランダムデータ、ファイルパスならその実ファイルを送る。
 //! 出力: vcode/samples/stream/tx_NNN.png + vcode/samples/stream/index.html (gitignore 済み)
 //!
 //! PC でフルスクリーン表示し、スマホアプリの「V受信」をかざして受信を確認する。
 
-use beyond_qr_fountain::Encoder;
-use beyond_qr_vcode::{encode_frame, FrameHeader, Layout, VERSION};
+use vloom_fountain::Encoder;
+use vloom_vcode::{encode_frame, FrameHeader, Layout, VERSION};
 use std::fs;
 use std::path::Path;
 
 const SCALE: usize = 8; // 100x92 セル → 800x736 px
 
-fn save_png(bm: &beyond_qr_vcode::Bitmap, path: &Path) {
+fn save_png(bm: &vloom_vcode::Bitmap, path: &Path) {
     let file = fs::File::create(path).expect("PNG ファイルを作成できない");
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), bm.w as u32, bm.h as u32);
     encoder.set_color(png::ColorType::Grayscale);

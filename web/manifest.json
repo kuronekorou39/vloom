@@ -1,7 +1,7 @@
 {
-  "name": "beyond-qr Receiver",
-  "short_name": "beyond-qr",
-  "description": "PC 画面に表示された beyond-qr フレームをスマホカメラで読み取る。",
+  "name": "Vloom Receiver",
+  "short_name": "Vloom",
+  "description": "PC 画面に表示された Vloom フレームをスマホカメラで読み取る。",
   "start_url": "./receiver.html",
   "display": "standalone",
   "background_color": "#111111",

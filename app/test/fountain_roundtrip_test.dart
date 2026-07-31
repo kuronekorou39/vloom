@@ -2,8 +2,8 @@
 // M1 の疎通確認: Dart から Rust の FountainEncoder/Decoder を呼び、payload が復元できること。
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:beyond_qr/src/rust/frb_generated.dart';
-import 'package:beyond_qr/src/rust/api/fountain.dart';
+import 'package:vloom/src/rust/frb_generated.dart';
+import 'package:vloom/src/rust/api/fountain.dart';
 
 void main() {
   setUpAll(() async => await RustLib.init());

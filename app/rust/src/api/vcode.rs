@@ -5,9 +5,9 @@
 //! 受信: カメラの Y プレーンを vcode_scan_gray に渡す。ストライド除去・回転・ガイド枠の
 //!       計算は Rust 側で行い、回収できたパケット列を返す (Fountain 投入は Dart 側)。
 
-use beyond_qr_fountain as fountain;
-use beyond_qr_vcode as vcode;
-use beyond_qr_vcode::scan::{scan_frame, scan_frame_tracked, scan_frame_wide, GrayImage, Quad};
+use vloom_fountain as fountain;
+use vloom_vcode as vcode;
+use vloom_vcode::scan::{scan_frame, scan_frame_tracked, scan_frame_wide, GrayImage, Quad};
 
 /// 送信側ハンドル。payload を vcode フレーム列に変換する。
 pub struct VcodeTx {
@@ -154,7 +154,7 @@ fn fail(reason: &str) -> VcodeScanReport {
     }
 }
 
-fn success(result: beyond_qr_vcode::scan::ScanResult, tracked: bool, layout: vcode::Layout) -> VcodeScanReport {
+fn success(result: vloom_vcode::scan::ScanResult, tracked: bool, layout: vcode::Layout) -> VcodeScanReport {
     let frame = result.frame;
     // ブロックペイロードはゼロパディングされていることがあるため、
     // OTI のシンボルサイズから実パケット長 (4 + symbol_size) に切り出す

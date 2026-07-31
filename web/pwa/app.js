@@ -1,7 +1,7 @@
-// beyond-qr PC PWA — エントリ (結線)。
+// Vloom PC PWA — エントリ (結線)。
 // Rust コア (fountain) を WASM で初期化し、送信 (Sender) / 受信 (Receiver) を UI に繋ぐ。
 
-import init, { FountainEncoder, FountainDecoder, vcodeWrapFile } from "./pkg/beyond_qr_core_wasm.js";
+import init, { FountainEncoder, FountainDecoder, vcodeWrapFile } from "./pkg/vloom_core_wasm.js";
 import { Sender } from "./sender.js";
 import { Receiver } from "./receiver.js";
 import { VcodeSender, VcodeReceiver, packetSizeFor, REFRESH_SAFE_FPS } from "./vcode.js";

@@ -5,9 +5,9 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:beyond_qr/main.dart';
-import 'package:beyond_qr/src/rust/api/fountain.dart';
-import 'package:beyond_qr/src/rust/frb_generated.dart';
+import 'package:vloom/main.dart';
+import 'package:vloom/src/rust/api/fountain.dart';
+import 'package:vloom/src/rust/frb_generated.dart';
 import 'package:integration_test/integration_test.dart';
 
 void main() {

@@ -1,15 +1,15 @@
 [package]
-name = "beyond-qr-core-wasm"
+name = "vloom-core-wasm"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "WebAssembly bindings for beyond-qr Fountain code (wasm-bindgen 経由でブラウザから呼ぶ)。"
+description = "WebAssembly bindings for Vloom Fountain code (wasm-bindgen 経由でブラウザから呼ぶ)。"
 
 [lib]
-name = "beyond_qr_core_wasm"
+name = "vloom_core_wasm"
 crate-type = ["cdylib"]
 
 [dependencies]
-beyond-qr-fountain = { path = "../fountain" }
-beyond-qr-vcode = { path = "../vcode" }
+vloom-fountain = { path = "../fountain" }
+vloom-vcode = { path = "../vcode" }
 wasm-bindgen = "0.2"

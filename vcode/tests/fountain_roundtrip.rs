@@ -3,8 +3,8 @@
 //! 受信: フレームデコード (部分回収) → RaptorQ デコーダ → payload 復元
 //! を、無損失と「ブロック単位の破損あり」の両方で検証する。
 
-use beyond_qr_fountain::{Decoder, Encoder};
-use beyond_qr_vcode::{decode_frame, encode_frame, FrameHeader, Layout, VERSION};
+use vloom_fountain::{Decoder, Encoder};
+use vloom_vcode::{decode_frame, encode_frame, FrameHeader, Layout, VERSION};
 
 const PAYLOAD_LEN: usize = 20_000;
 
@@ -22,7 +22,7 @@ impl Lcg {
 }
 
 /// payload を vcode フレーム列にエンコードする (送信側の処理そのもの)
-fn build_frames(encoder: &Encoder, layout: Layout) -> Vec<beyond_qr_vcode::Bitmap> {
+fn build_frames(encoder: &Encoder, layout: Layout) -> Vec<vloom_vcode::Bitmap> {
     let per_frame = layout.block_count();
     let n_frames = encoder.packet_count().div_ceil(per_frame);
     (0..n_frames)
@@ -81,7 +81,7 @@ fn e2e_2bpc_with_padding() {
     let n_frames = pc.div_ceil(per_frame);
     let mut oti = [0u8; 12];
     oti.copy_from_slice(&encoder.oti_bytes());
-    let pkt_len = 4 + beyond_qr_fountain::oti_symbol_size(&oti) as usize;
+    let pkt_len = 4 + vloom_fountain::oti_symbol_size(&oti) as usize;
     assert!(pkt_len <= payload_len, "パケットがペイロードに入らない");
 
     let mut decoder = Decoder::from_oti_bytes(&oti);
@@ -131,7 +131,7 @@ fn e2e_with_block_corruption() {
 
     for bm in &frames {
         // 受信画像の劣化を模擬: 各ブロック領域を 30% の確率で黒塗りにする
-        let mut damaged = beyond_qr_vcode::Bitmap {
+        let mut damaged = vloom_vcode::Bitmap {
             w: bm.w,
             h: bm.h,
             data: bm.data.clone(),
@@ -143,7 +143,7 @@ fn e2e_with_block_corruption() {
                     corrupted_blocks += 1;
                     for y in 0..block {
                         for x in 0..block {
-                            damaged.set(bx * block + x, beyond_qr_vcode::STRIP_H + by * block + y, 0);
+                            damaged.set(bx * block + x, vloom_vcode::STRIP_H + by * block + y, 0);
                         }
                     }
                 }

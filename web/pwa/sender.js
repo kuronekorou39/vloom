@@ -2,7 +2,7 @@
 // File.slice() でブロック単位に読むため、GB 級でも RAM は 1 ブロック分で一定。
 // フレーム構成はスマホアプリと同一 (20 フレームごとに 1 セルをマニフェストに)。
 
-import { FountainEncoder } from "./pkg/beyond_qr_core_wasm.js";
+import { FountainEncoder } from "./pkg/vloom_core_wasm.js";
 import { BLOCK_SIZE, PACKET_BY_GRID, StreamManifest, buildDataQr } from "./protocol.js";
 import { drawQRInCell } from "./qr_util.js";
 

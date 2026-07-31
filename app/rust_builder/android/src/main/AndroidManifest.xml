@@ -1,3 +1,3 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-  package="com.flutter_rust_bridge.rust_lib_beyond_qr">
+  package="com.flutter_rust_bridge.rust_lib_vloom">
 </manifest>

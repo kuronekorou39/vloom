@@ -9,30 +9,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
-name = "beyond-qr-core-wasm"
-version = "0.1.0"
-dependencies = [
- "beyond-qr-fountain",
- "beyond-qr-vcode",
- "wasm-bindgen",
-]
-
-[[package]]
-name = "beyond-qr-fountain"
-version = "0.1.0"
-dependencies = [
- "raptorq",
-]
-
-[[package]]
-name = "beyond-qr-vcode"
-version = "0.1.0"
-dependencies = [
- "beyond-qr-fountain",
- "png",
-]
-
-[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -159,6 +135,30 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "vloom-core-wasm"
+version = "0.1.0"
+dependencies = [
+ "vloom-fountain",
+ "vloom-vcode",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "vloom-fountain"
+version = "0.1.0"
+dependencies = [
+ "raptorq",
+]
+
+[[package]]
+name = "vloom-vcode"
+version = "0.1.0"
+dependencies = [
+ "png",
+ "vloom-fountain",
+]
 
 [[package]]
 name = "wasm-bindgen"

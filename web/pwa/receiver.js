@@ -3,7 +3,7 @@
 // 保持し、完成で Blob としてダウンロード保存する (PC は RAM に余裕がある前提の v1。
 // 将来 File System Access API でディスク直書きにすれば GB 級も RAM 一定にできる)。
 
-import { FountainDecoder } from "./pkg/beyond_qr_core_wasm.js";
+import { FountainDecoder } from "./pkg/vloom_core_wasm.js";
 import { FRAME_MANIFEST, FRAME_DATA, StreamManifest, parseDataQr } from "./protocol.js";
 import { detectQRCodesGrid } from "./qr_util.js";
 import { openCamera, ScanStats, cameraInfoText, lumaText } from "./camera.js";

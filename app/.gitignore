@@ -46,4 +46,4 @@ app.*.map.json
 
 # Rust bridge (flutter_rust_bridge) build artifacts
 /rust/target/
-/rust_lib_beyond_qr.dll
+/rust_lib_vloom.dll

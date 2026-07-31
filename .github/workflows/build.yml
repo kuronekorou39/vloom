@@ -40,7 +40,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: beyond-qr-android-apk
+          name: vloom-android-apk
           path: app/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
 
@@ -74,12 +74,12 @@ jobs:
         run: |
           mkdir -p Payload
           cp -R Runner.app Payload/Runner.app
-          zip -qry beyond-qr-unsigned.ipa Payload
+          zip -qry vloom-unsigned.ipa Payload
 
       - uses: actions/upload-artifact@v7
         with:
-          name: beyond-qr-ios-unsigned-ipa
-          path: app/build/ios/iphoneos/beyond-qr-unsigned.ipa
+          name: vloom-ios-unsigned-ipa
+          path: app/build/ios/iphoneos/vloom-unsigned.ipa
           if-no-files-found: error
 
   # タグ (v*) のときだけ: 成果物を集めて GitHub Release に添付する。
@@ -103,5 +103,5 @@ jobs:
             --repo "${{ github.repository }}" \
             --title "${{ github.ref_name }}" \
             --notes "自動ビルド: Android APK + iOS unsigned IPA (Sideloadly 用)" \
-            dist/beyond-qr-android-apk/app-release.apk \
-            dist/beyond-qr-ios-unsigned-ipa/beyond-qr-unsigned.ipa
+            dist/vloom-android-apk/app-release.apk \
+            dist/vloom-ios-unsigned-ipa/vloom-unsigned.ipa

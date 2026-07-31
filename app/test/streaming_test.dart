@@ -2,9 +2,9 @@
 // 再構成が元データに一致することを (カメラ無しで) 確認する。
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:beyond_qr/src/rust/frb_generated.dart';
-import 'package:beyond_qr/src/rust/api/fountain.dart';
-import 'package:beyond_qr/protocol.dart';
+import 'package:vloom/src/rust/frb_generated.dart';
+import 'package:vloom/src/rust/api/fountain.dart';
+import 'package:vloom/protocol.dart';
 
 void main() {
   setUpAll(() async => await RustLib.init());

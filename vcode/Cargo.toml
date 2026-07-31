@@ -1,15 +1,15 @@
 [package]
-name = "beyond-qr-vcode"
+name = "vloom-vcode"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "vcode: video-native 2D code frame format for screen-camera streaming"
 
 [lib]
-name = "beyond_qr_vcode"
+name = "vloom_vcode"
 path = "src/lib.rs"
 
 [dev-dependencies]
-beyond-qr-fountain = { path = "../fountain" }
+vloom-fountain = { path = "../fountain" }
 # テスト画像 (vcode/samples/, gitignore 済み) の出力用
 png = "0.17"

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>beyond-qr Receiver (Phase 1)</title>
+  <title>Vloom Receiver (Phase 1)</title>
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
   <style>
     :root { color-scheme: dark; }
@@ -73,7 +73,7 @@
 </head>
 <body>
   <header>
-    <h1>beyond-qr Receiver (Phase 1: QR + Fountain)</h1>
+    <h1>Vloom Receiver (Phase 1: QR + Fountain)</h1>
   </header>
   <main>
     <div class="controls">
@@ -119,7 +119,7 @@
   </main>
 
   <script type="module">
-    import init, { FountainDecoder } from "./pkg/beyond_qr_core_wasm.js";
+    import init, { FountainDecoder } from "./pkg/vloom_core_wasm.js";
     import { detectQRCodesGrid } from "./qr_util.js";
 
     const $ = (id) => document.getElementById(id);

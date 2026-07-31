@@ -1,8 +1,8 @@
 //! scan の合成テスト失敗の調査用。コーナー推定誤差とブロック別ビット誤りを表示する。
-//! 実行: cargo run -p beyond-qr-vcode --example debug_scan
+//! 実行: cargo run -p vloom-vcode --example debug_scan
 
-use beyond_qr_vcode::scan::{scan_frame, GrayImage, Homography, Quad};
-use beyond_qr_vcode::{encode_frame, FrameHeader, Layout, VERSION};
+use vloom_vcode::scan::{scan_frame, GrayImage, Homography, Quad};
+use vloom_vcode::{encode_frame, FrameHeader, Layout, VERSION};
 
 struct Lcg(u64);
 impl Lcg {
@@ -152,7 +152,7 @@ fn main() {
                 let bx = bi % layout.grid_w;
                 let mut bits = Vec::with_capacity(layout.block * layout.block);
                 for i in 0..layout.block * layout.block {
-                    let r = beyond_qr_vcode::STRIP_H + by * layout.block + i / layout.block;
+                    let r = vloom_vcode::STRIP_H + by * layout.block + i / layout.block;
                     let c = bx * layout.block + i % layout.block;
                     bits.push(values[r * w + c] < thr_manual);
                 }
@@ -161,7 +161,7 @@ fn main() {
                     .map(|ch| ch.iter().fold(0u8, |acc, &b| (acc << 1) | b as u8))
                     .collect();
                 let (payload, crc) = bytes.split_at(layout.block_payload_len(1));
-                if beyond_qr_vcode::crc32(payload)
+                if vloom_vcode::crc32(payload)
                     == u32::from_be_bytes([crc[0], crc[1], crc[2], crc[3]])
                 {
                     manual_ok += 1;
@@ -183,7 +183,7 @@ fn main() {
                 let mut errs = 0;
                 for r in 0..layout.block {
                     for c in 0..layout.block {
-                        let cell_r = beyond_qr_vcode::STRIP_H + by * layout.block + r;
+                        let cell_r = vloom_vcode::STRIP_H + by * layout.block + r;
                         let cell_c = bx * layout.block + c;
                         // 真値: レンダリング画像のセル中心
                         let truth = frame_px.data[((cell_r as f32 * scale + 4.0) as usize)

@@ -5,7 +5,7 @@
 // (OBS 等) を掴むと、映像が真っ暗・低解像度になり何を映しても復号できない。
 // 明示選択 + 実測表示で「読めない原因がカメラ側か解像度不足か」を切り分ける。
 
-const LS_KEY = "beyondqr.cameraId";
+const LS_KEY = "vloom.cameraId";
 // Windows Hello の赤外線カメラ・深度センサ。可視光の像が得られないため既定から外す。
 const IR_PATTERN = /(^|[^a-z])(ir|infrared|赤外線|depth)([^a-z]|$)/i;
 

@@ -2,8 +2,8 @@
 //! レンダリングしたフレームに透視変形・輝度勾配・ノイズを加えた「擬似カメラ画像」を作り、
 //! ずれたガイド枠からのスキャンでヘッダ+ブロックが回収できることを検証する。
 
-use beyond_qr_vcode::scan::{scan_frame, scan_frame_wide, GrayImage, Homography, Quad};
-use beyond_qr_vcode::{encode_frame, FrameHeader, Layout, VERSION};
+use vloom_vcode::scan::{scan_frame, scan_frame_wide, GrayImage, Homography, Quad};
+use vloom_vcode::{encode_frame, FrameHeader, Layout, VERSION};
 
 struct Lcg(u64);
 impl Lcg {
@@ -38,7 +38,7 @@ fn test_frame(layout: Layout, seed: u8) -> (FrameHeader, Vec<Vec<u8>>) {
 /// レンダリング済みフレームを、指定した 4 隅へ射影変換して canvas に描き込む。
 /// 輝度勾配 (左 75% → 右 95%) とノイズ (±8) も加える。
 fn synth_camera_image(
-    frame_px: &beyond_qr_vcode::Bitmap,
+    frame_px: &vloom_vcode::Bitmap,
     canvas_w: usize,
     canvas_h: usize,
     dst: &[(f32, f32); 4],
@@ -248,7 +248,7 @@ fn scan_2bpc_with_gain_gradient() {
 
 #[test]
 fn tracked_scan_follows_small_motion() {
-    use beyond_qr_vcode::scan::scan_frame_tracked;
+    use vloom_vcode::scan::scan_frame_tracked;
     let layout = Layout::V0;
     let (header, blocks) = test_frame(layout, 0x5E);
     let frame_px = encode_frame(&header, &blocks, 8);

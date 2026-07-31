@@ -88,17 +88,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "beyond-qr-fountain"
-version = "0.1.0"
-dependencies = [
- "raptorq",
-]
-
-[[package]]
-name = "beyond-qr-vcode"
-version = "0.1.0"
-
-[[package]]
 name = "bitflags"
 version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -587,13 +576,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08c74e62047bb2de4ff487b251e4a92e24f48745648451635cec7d591162d9f"
 
 [[package]]
-name = "rust_lib_beyond_qr"
+name = "rust_lib_vloom"
 version = "0.1.0"
 dependencies = [
- "beyond-qr-fountain",
- "beyond-qr-vcode",
  "flutter_rust_bridge",
  "qrcode",
+ "vloom-fountain",
+ "vloom-vcode",
 ]
 
 [[package]]
@@ -671,6 +660,17 @@ name = "version_check"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
+
+[[package]]
+name = "vloom-fountain"
+version = "0.1.0"
+dependencies = [
+ "raptorq",
+]
+
+[[package]]
+name = "vloom-vcode"
+version = "0.1.0"
 
 [[package]]
 name = "wasm-bindgen"
