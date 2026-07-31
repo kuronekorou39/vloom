@@ -34,6 +34,28 @@ jobs:
         working-directory: app
         run: flutter pub get
 
+      # 署名用 Secrets があればリリース鍵で署名する。無い場合は debug 鍵のまま進む
+      # (fork の PR など鍵を持たない環境でもビルド検証を通すため)。
+      - name: Set up release signing
+        working-directory: app/android
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::署名用 Secrets が未設定です。debug 鍵でビルドします (配布不可)"
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > app/release.jks
+          cat > key.properties <<EOF
+          storeFile=release.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+
       - name: Build APK (release)
         working-directory: app
         run: flutter build apk --release
@@ -99,9 +121,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           find dist -type f
+          # iOS の署名なし IPA は Release に添付しない。受け取った側で自分の Apple ID による
+          # 再署名が必要で (無料アカウントは 7 日で失効)、配布物として機能しないため。
+          # ビルド自体は ios ジョブで継続し、成果物は Actions のアーティファクトに残る。
           gh release create "${{ github.ref_name }}" \
             --repo "${{ github.repository }}" \
             --title "${{ github.ref_name }}" \
-            --notes "自動ビルド: Android APK + iOS unsigned IPA (Sideloadly 用)" \
-            dist/vloom-android-apk/app-release.apk \
-            dist/vloom-ios-unsigned-ipa/vloom-unsigned.ipa
+            --notes "Android APK。iOS は Mac でのソースビルドが必要です (README 参照)。" \
+            dist/vloom-android-apk/app-release.apk

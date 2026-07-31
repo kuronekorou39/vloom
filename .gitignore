@@ -34,11 +34,16 @@ scratch/
 # web 開発サーバ (serve_https.py) の実行時生成物
 # certs: 自己署名証明書 + 秘密鍵 (起動時に自動生成)
 # client_logs: /capture・/log の保存先 (実機キャプチャ PNG・ログ)
-web/certs/
-web/client_logs/
+certs/
+client_logs/
 
 # 作業環境の写真 (コミット不要)
 PXL_*.jpg
 
 # PC PWA の WASM (CI で wasm-pack ビルド)
 web/pwa/pkg/
+
+# Android リリース署名 (鍵と資格情報。CI では Secrets から生成する)
+key.properties
+*.jks
+*.keystore

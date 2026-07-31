@@ -1,10 +1,10 @@
-"""Vloom web/ ディレクトリを HTTPS で配信する開発用サーバー。
+"""Vloom PWA (このディレクトリ) を HTTPS で配信する開発用サーバー。
 
 スマホからのカメラアクセスは getUserMedia の都合上 HTTPS or localhost が必須。
 自己署名証明書を一度だけ生成し、http.server ベースで配信する。
 
 Usage:
-    python web/serve_https.py [--port 8443] [--ip 192.168.11.52]
+    python web/pwa/serve_https.py [--port 8443] [--ip <PC の IP>]
 
 スマホ側:
     1. PC と同じ Wi-Fi に接続
