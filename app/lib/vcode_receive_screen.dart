@@ -27,6 +27,13 @@ class VcodeReceiveScreen extends StatefulWidget {
 /// 格子を固定せずスキャナの候補を総当たりさせる指定
 const kGridAuto = 'auto';
 
+/// 連続してこのフレーム数だけ検出できなければ、広域 sweep (acquire) に切り替える。
+/// 短すぎると単発のフレーム落ちで重い処理が走り、長すぎると待たされる。
+const kAutoAcquireMissFrames = 20;
+
+/// 自動 acquire の再試行間隔 (フレーム)。acquire は 300 回超の探索を伴うので連発させない。
+const kAutoAcquireCooldownFrames = 45;
+
 /// 受信で選べるカメラ解像度。密な格子ほど px/セル が要るので上げる必要がある。
 const kPresets = <(String, ResolutionPreset)>[
   ('1080p', ResolutionPreset.veryHigh),
@@ -62,6 +69,11 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   bool _camBusy = false; // カメラ初期化/再初期化の多重実行ガード
   bool _acquireRequested = false; // 次フレームで acquire (位置検出) を実行する
   bool _acquiring = false; // acquire 実行中 (UI スピナー表示)
+  bool _autoAcquire = true; // 検出できないとき自動で acquire を走らせる
+  bool _acquireIsAuto = false; // 実行中の acquire が自動起動か (自動なら確認ダイアログを出さない)
+  int _autoAcquireAt = 0; // 次に自動 acquire してよい _framesSeen (連発を防ぐクールダウン)
+  int _autoAcquireCount = 0; // 自動 acquire の実行回数 (統計・UI 表示用)
+  int _missStreak = 0; // 連続して検出できなかったフレーム数
   bool _seeded = false; // acquire 結果で受信位置を確定済み (中央ガイド枠に頼らず追従)
   List<double>? _detCorners; // acquire で検出した 4 隅 (回転後画像座標, 8 値) — ハイライト表示用
   int _detImgW = 0, _detImgH = 0, _detRot = 0; // 検出時の回転後画像寸法と回転 (表示座標への変換用)
@@ -263,6 +275,21 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
             _detRot = rep.rot;
           }
         });
+        if (_acquireIsAuto) {
+          // 自動起動: 確認を挟まずそのままロックする。位置がずれていても、
+          // 検出が続かなければクールダウン後にまた自動取得が走って直る。
+          _acquireIsAuto = false;
+          if (rep.detected) {
+            rx.seed(
+              rot: rep.rot,
+              gridW: rep.gridW,
+              gridH: rep.gridH,
+              corners: rep.corners.toList(),
+            );
+            if (mounted) setState(() => _seeded = true);
+          }
+          return;
+        }
         await _showAcquireDialog(rep, rx);
         return;
       }
@@ -324,7 +351,23 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           _onComplete(payload);
           return;
         }
-      } else if (_framesSeen % 30 == 0) {
+        _missStreak = 0;
+      } else {
+        // 中央ガイド枠での探索が「連続して」失敗するなら、広域 sweep に切り替えて
+        // 位置を取りに行く。acquire は重いが一度きりで、成功後はトラッキングに
+        // 移るので定常コストは増えない (= 手で位置を合わせる必要がなくなる)。
+        // 単発のフレーム落ちで走らせないよう、連続失敗数で判定する。
+        _missStreak++;
+        if (_autoAcquire &&
+            _missStreak >= kAutoAcquireMissFrames &&
+            _framesSeen >= _autoAcquireAt) {
+          _autoAcquireAt = _framesSeen + kAutoAcquireCooldownFrames;
+          _missStreak = 0;
+          _autoAcquireCount++;
+          _startAcquire(auto: true);
+        }
+      }
+      if (!report.detected && _framesSeen % 30 == 0) {
         _lastError = report.error;
         debugPrint('[vcode-rx] not detected (${report.error}) '
             'scan=${_lastScanMs}ms seen=$_framesSeen detected=$_framesDetected '
@@ -481,6 +524,10 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _elapsed = null;
       _acquireRequested = false;
       _acquiring = false;
+      _acquireIsAuto = false;
+      _autoAcquireAt = 0;
+      _autoAcquireCount = 0;
+      _missStreak = 0;
       _seeded = false;
       _detCorners = null;
       _status = 'カメラ起動待ち';
@@ -490,12 +537,15 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
 
   /// 次フレームで acquire (位置検出) を走らせる。固定後の一回きりの重い処理なので
   /// スピナーを出して待つ (その間カメラフレームは _busy でスキップされる)。
-  void _startAcquire() {
-    if (!_active || _payload != null || _acquiring) return;
+  /// 広域 sweep で 4 隅を取得する。auto=true は自動起動で、確認ダイアログを出さず
+  /// 検出できたらそのまま seed する。オーバーレイも出さない (頻繁な暗転を避ける)。
+  void _startAcquire({bool auto = false}) {
+    if (!_active || _payload != null || _acquireRequested || _acquiring) return;
+    _acquireIsAuto = auto;
     setState(() {
-      _acquiring = true;
+      _acquiring = !auto;
       _acquireRequested = true;
-      _detCorners = null; // 前回のハイライトを消す
+      if (!auto) _detCorners = null; // 手動時は前回のハイライトを消す
     });
   }
 
@@ -631,6 +681,19 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       tilePadding: EdgeInsets.zero,
       childrenPadding: const EdgeInsets.only(bottom: 8),
       children: [
+        SwitchListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          title: Text('位置を自動で取得', style: small),
+          subtitle: Text(
+              '検出できないとき自動で広域探索する (手で位置を合わせる必要がない)',
+              style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor)),
+          value: _autoAcquire,
+          onChanged: (v) => setState(() {
+            _autoAcquire = v;
+            _missStreak = 0;
+          }),
+        ),
         Row(
           children: [
             Text('解像度', style: small),
@@ -779,9 +842,13 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton.icon(
-                    onPressed: _acquiring ? null : _startAcquire,
+                    onPressed: _acquiring ? null : () => _startAcquire(),
                     icon: Icon(_seeded ? Icons.refresh : Icons.center_focus_strong),
-                    label: Text(_seeded ? '位置を再検出' : 'うまく取得できない時: 位置を検出'),
+                    label: Text(_seeded
+                        ? '位置を再検出'
+                        : _autoAcquire
+                            ? '今すぐ位置を検出 (自動取得は有効)'
+                            : 'うまく取得できない時: 位置を検出'),
                   ),
                 ),
                 const SizedBox(height: 6),
@@ -816,6 +883,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                         '受信 ${_seenEsi.length}${total != null ? "/$total 必要" : ""} '
                         '(投入 $_packetsAdded 重複込) · scan ${_lastScanMs}ms'
                         '${_seeded ? " · [位置固定]" : ""}'
+                        '${_autoAcquireCount > 0 ? " · 自動取得 $_autoAcquireCount 回" : ""}'
                         '${_integrityFails > 0 ? " · 整合性エラー $_integrityFails" : ""}',
                 style: const TextStyle(fontSize: 12),
               ),
