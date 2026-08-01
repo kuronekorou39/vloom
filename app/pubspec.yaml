@@ -48,6 +48,8 @@ dependencies:
   share_plus: ^13.2.0
   # 受信ファイルを端末の任意の場所へ「ファイルに保存」(Android は SAF ダイアログ)
   flutter_file_dialog: ^3.0.2
+  # 復元したファイルを既定アプリで開く (動画・PDF・Office など内蔵表示できない形式用)
+  open_filex: ^4.7.0
 
 dev_dependencies:
   flutter_test:

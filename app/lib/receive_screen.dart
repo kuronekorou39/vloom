@@ -2,9 +2,11 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'history_store.dart';
 import 'protocol.dart';
+import 'ui_common.dart';
 import 'src/rust/api/fountain.dart';
 import 'vcode_view.dart';
 
@@ -315,10 +317,45 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
             child: Image.file(File(r.path), fit: BoxFit.contain),
           )
         else
-          Text('保存先: ${r.path}', style: Theme.of(context).textTheme.bodySmall),
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 28),
+            color: Colors.black.withValues(alpha: 0.25),
+            child: Column(
+              children: [
+                Icon(r.type.startsWith('video/') ? Icons.movie : Icons.insert_drive_file,
+                    size: 44, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                const SizedBox(height: 8),
+                Text('アプリで開いて中身を確認できます',
+                    style: Theme.of(context).textTheme.bodySmall),
+              ],
+            ),
+          ),
         const SizedBox(height: 16),
-        FilledButton.icon(
-            onPressed: _startCamera, icon: const Icon(Icons.replay), label: const Text('もう一度受信')),
+        // 受信したものを取り出す導線。従来は保存先パスを出すだけで、
+        // 保存も共有も開くこともできなかった。
+        Wrap(
+          alignment: WrapAlignment.center,
+          spacing: 12,
+          runSpacing: 8,
+          children: [
+            FilledButton.icon(
+              onPressed: () => openWithDefaultApp(context, File(r.path)),
+              icon: const Icon(Icons.open_in_new),
+              label: const Text('アプリで開く'),
+            ),
+            FilledButton.tonalIcon(
+              onPressed: () => SharePlus.instance
+                  .share(ShareParams(
+                  files: [XFile(r.path, mimeType: r.type, name: r.name)])),
+              icon: const Icon(Icons.share),
+              label: const Text('共有'),
+            ),
+            FilledButton.tonalIcon(
+                onPressed: _startCamera,
+                icon: const Icon(Icons.replay),
+                label: const Text('もう一度受信')),
+          ],
+        ),
       ],
     );
   }

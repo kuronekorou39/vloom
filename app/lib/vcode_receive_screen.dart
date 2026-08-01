@@ -11,6 +11,7 @@ import 'history_screen.dart' show shareReceived, saveReceivedToFile;
 import 'history_store.dart';
 import 'src/rust/api/fountain.dart';
 import 'src/rust/api/vcode.dart';
+import 'ui_common.dart';
 import 'vcode_view.dart';
 
 /// vcode 受信画面。camera パッケージで生 YUV フレームを取得し、
@@ -83,7 +84,6 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   FountainDecoder? _dec;
   int? _packetSize; // 最初の回収パケットから推定 (シリアライズ長 - 4)
   Uint8List? _payload;
-  String? _savedPath;
   HistoryItem? _savedItem;
 
   // 統計
@@ -470,7 +470,6 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       await HistoryStore.instance
           .registerReceived(slot.id, name, mime, payload.length, note: note);
       setState(() {
-        _savedPath = '履歴に保存: $name';
         _savedItem = HistoryStore.instance.received.first;
       });
     } catch (e) {
@@ -519,7 +518,6 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _dec = null;
       _packetSize = null;
       _payload = null;
-      _savedPath = null;
       _savedItem = null;
       _framesSeen = 0;
       _framesDetected = 0;
@@ -623,8 +621,23 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   Future<void> _saveToFile(HistoryItem item) async {
     final ok = await saveReceivedToFile(item);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(ok ? '端末に保存しました' : '保存をキャンセルしました')),
+    if (!ok) {
+      showToast(context, '保存をキャンセルしました');
+      return;
+    }
+    // 保存先は OS のダイアログでユーザーが選ぶためアプリには返らない。
+    // パスを出す代わりに、その場で開ける導線を添える。
+    final file = HistoryStore.instance.receivedFile(item);
+    showToast(
+      context,
+      '端末に保存しました',
+      kind: ToastKind.success,
+      action: file == null
+          ? null
+          : SnackBarAction(
+              label: '開く',
+              onPressed: () => openWithDefaultApp(context, file),
+            ),
     );
   }
 
@@ -800,13 +813,15 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                         const SizedBox(height: 12),
                         Text(_status, style: Theme.of(context).textTheme.titleMedium),
                         const SizedBox(height: 12),
+                        // 受け取ったものをその場で確認できるようにする
+                        // (画像・テキストは内蔵表示、それ以外は「アプリで開く」へ)
+                        ReceivedPreview(
+                          bytes: _payload!,
+                          mime: _savedItem?.type ?? '',
+                          name: _savedItem?.name ?? '受信データ',
+                        ),
+                        const SizedBox(height: 12),
                         _statsTable(),
-                        if (_savedPath != null)
-                          Padding(
-                            padding: const EdgeInsets.all(8),
-                            child: Text(_savedPath!,
-                                style: const TextStyle(fontSize: 11)),
-                          ),
                         const SizedBox(height: 12),
                         Wrap(
                           alignment: WrapAlignment.center,
@@ -825,6 +840,14 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                                 icon: const Icon(Icons.share),
                                 label: const Text('共有'),
                               ),
+                            // 端末に保存する前でも中身を確認できるようにする
+                            // (動画・PDF・Office など内蔵表示できない形式向け)
+                            FilledButton.tonalIcon(
+                              onPressed: () => openBytesWithDefaultApp(
+                                  context, _payload!, _savedItem?.name ?? 'received.bin'),
+                              icon: const Icon(Icons.open_in_new),
+                              label: const Text('アプリで開く'),
+                            ),
                             FilledButton(
                                 onPressed: _reset, child: const Text('もう一度受信')),
                           ],

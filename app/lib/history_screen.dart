@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -5,6 +6,7 @@ import 'package:flutter_file_dialog/flutter_file_dialog.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'history_store.dart';
+import 'ui_common.dart';
 
 /// ファイルシステムで安全なファイル名にする (パス区切り・禁止文字を _ に)。
 String _safeFileName(String n) {
@@ -176,7 +178,7 @@ class _ViewerPage extends StatelessWidget {
           }
           return SingleChildScrollView(
             padding: const EdgeInsets.all(16),
-            child: SelectableText(String.fromCharCodes(snap.data!)),
+            child: SelectableText(utf8.decode(snap.data!, allowMalformed: true)),
           );
         },
       );
@@ -190,7 +192,12 @@ class _ViewerPage extends StatelessWidget {
             Text(item.name),
             Text('${item.type}  ${_fmtSize(item.size)}'),
             const SizedBox(height: 8),
-            Text('保存先: ${file.path}', style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: () => openWithDefaultApp(context, file),
+              icon: const Icon(Icons.open_in_new),
+              label: const Text('アプリで開く'),
+            ),
           ],
         ),
       );
@@ -209,6 +216,12 @@ class _ViewerPage extends StatelessWidget {
             tooltip: '共有',
             onPressed: () => shareReceived(item),
           ),
+          if (file != null)
+            IconButton(
+              icon: const Icon(Icons.open_in_new),
+              tooltip: 'アプリで開く',
+              onPressed: () => openWithDefaultApp(context, file),
+            ),
         ],
       ),
       body: item.note == null
