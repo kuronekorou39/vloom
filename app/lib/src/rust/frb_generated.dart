@@ -1334,8 +1334,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   VcodeScanReport dco_decode_vcode_scan_report(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 11)
-      throw Exception('unexpected arr length: expect 11 but see ${arr.length}');
+    if (arr.length != 15)
+      throw Exception('unexpected arr length: expect 15 but see ${arr.length}');
     return VcodeScanReport(
       detected: dco_decode_bool(arr[0]),
       tracked: dco_decode_bool(arr[1]),
@@ -1345,9 +1345,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       blocksOk: dco_decode_u_32(arr[5]),
       blocksTotal: dco_decode_u_32(arr[6]),
       error: dco_decode_opt_String(arr[7]),
-      debugGray: dco_decode_opt_list_prim_u_8_strict(arr[8]),
-      debugW: dco_decode_u_32(arr[9]),
-      debugH: dco_decode_u_32(arr[10]),
+      corners: dco_decode_list_prim_f_32_strict(arr[8]),
+      imgW: dco_decode_u_32(arr[9]),
+      imgH: dco_decode_u_32(arr[10]),
+      rot: dco_decode_u_32(arr[11]),
+      debugGray: dco_decode_opt_list_prim_u_8_strict(arr[12]),
+      debugW: dco_decode_u_32(arr[13]),
+      debugH: dco_decode_u_32(arr[14]),
     );
   }
 
@@ -1718,6 +1722,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_blocksOk = sse_decode_u_32(deserializer);
     var var_blocksTotal = sse_decode_u_32(deserializer);
     var var_error = sse_decode_opt_String(deserializer);
+    var var_corners = sse_decode_list_prim_f_32_strict(deserializer);
+    var var_imgW = sse_decode_u_32(deserializer);
+    var var_imgH = sse_decode_u_32(deserializer);
+    var var_rot = sse_decode_u_32(deserializer);
     var var_debugGray = sse_decode_opt_list_prim_u_8_strict(deserializer);
     var var_debugW = sse_decode_u_32(deserializer);
     var var_debugH = sse_decode_u_32(deserializer);
@@ -1730,6 +1738,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       blocksOk: var_blocksOk,
       blocksTotal: var_blocksTotal,
       error: var_error,
+      corners: var_corners,
+      imgW: var_imgW,
+      imgH: var_imgH,
+      rot: var_rot,
       debugGray: var_debugGray,
       debugW: var_debugW,
       debugH: var_debugH,
@@ -2128,6 +2140,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_u_32(self.blocksOk, serializer);
     sse_encode_u_32(self.blocksTotal, serializer);
     sse_encode_opt_String(self.error, serializer);
+    sse_encode_list_prim_f_32_strict(self.corners, serializer);
+    sse_encode_u_32(self.imgW, serializer);
+    sse_encode_u_32(self.imgH, serializer);
+    sse_encode_u_32(self.rot, serializer);
     sse_encode_opt_list_prim_u_8_strict(self.debugGray, serializer);
     sse_encode_u_32(self.debugW, serializer);
     sse_encode_u_32(self.debugH, serializer);

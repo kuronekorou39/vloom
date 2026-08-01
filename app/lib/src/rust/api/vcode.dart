@@ -225,6 +225,15 @@ class VcodeScanReport {
   final int blocksTotal;
   final String? error;
 
+  /// 検出した 4 隅 (回転後画像座標, tl,tr,br,bl の 8 値)。UI が「今どこを読んでいるか」を
+  /// 毎フレーム描くために返す。ScanResult が既に持つ値を渡すだけでコストはない。
+  final Float32List corners;
+
+  /// corners の座標系 (回転後画像の寸法と、その回転)
+  final int imgW;
+  final int imgH;
+  final int rot;
+
   /// debug_dump=true のとき、回転処理後のグレースケール画像 (PC 側解析用)
   final Uint8List? debugGray;
   final int debugW;
@@ -239,6 +248,10 @@ class VcodeScanReport {
     required this.blocksOk,
     required this.blocksTotal,
     this.error,
+    required this.corners,
+    required this.imgW,
+    required this.imgH,
+    required this.rot,
     this.debugGray,
     required this.debugW,
     required this.debugH,
@@ -254,6 +267,10 @@ class VcodeScanReport {
       blocksOk.hashCode ^
       blocksTotal.hashCode ^
       error.hashCode ^
+      corners.hashCode ^
+      imgW.hashCode ^
+      imgH.hashCode ^
+      rot.hashCode ^
       debugGray.hashCode ^
       debugW.hashCode ^
       debugH.hashCode;
@@ -271,6 +288,10 @@ class VcodeScanReport {
           blocksOk == other.blocksOk &&
           blocksTotal == other.blocksTotal &&
           error == other.error &&
+          corners == other.corners &&
+          imgW == other.imgW &&
+          imgH == other.imgH &&
+          rot == other.rot &&
           debugGray == other.debugGray &&
           debugW == other.debugW &&
           debugH == other.debugH;

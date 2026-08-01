@@ -352,12 +352,22 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           return;
         }
         _missStreak = 0;
+        // 「今どこを読んでいるか」を毎フレーム更新する。追従中も枠が動くので、
+        // ロックできているかが画面を見れば分かる。
+        if (report.corners.length >= 8) {
+          _detCorners = report.corners.toList();
+          _detImgW = report.imgW;
+          _detImgH = report.imgH;
+          _detRot = report.rot;
+        }
       } else {
         // 中央ガイド枠での探索が「連続して」失敗するなら、広域 sweep に切り替えて
         // 位置を取りに行く。acquire は重いが一度きりで、成功後はトラッキングに
         // 移るので定常コストは増えない (= 手で位置を合わせる必要がなくなる)。
         // 単発のフレーム落ちで走らせないよう、連続失敗数で判定する。
         _missStreak++;
+        // 見失ったら枠を消す (古い位置を出したままにしない)
+        if (_missStreak > kAutoAcquireMissFrames ~/ 2) _detCorners = null;
         if (_autoAcquire &&
             _missStreak >= kAutoAcquireMissFrames &&
             _framesSeen >= _autoAcquireAt) {
@@ -672,6 +682,34 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     );
   }
 
+  /// プレビュー上の状態バッジ。「探索中 / 位置検出中 / 追従中」を明示する。
+  /// 内部でロックしていても画面に出ないと分からないため、状態を必ず可視化する。
+  Widget _statusBadge() {
+    final (String label, Color color, IconData icon) = switch (this) {
+      _ when _acquireRequested || _acquiring => ('位置を検出中…', Colors.amber, Icons.travel_explore),
+      _ when _framesDetected > 0 && _missStreak == 0 =>
+        (_seeded ? '追従中 (位置固定)' : '追従中', Colors.cyanAccent, Icons.center_focus_strong),
+      _ when _autoAcquire => ('位置を探しています…', Colors.orangeAccent, Icons.search),
+      _ => ('枠にコードを合わせてください', Colors.orangeAccent, Icons.crop_free),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color, width: 1.5),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 6),
+          Text(label, style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
+
   /// 計測用の設定 (常用しないので折りたたむ)。カメラ解像度は px/セル の上限を、
   /// 格子固定は初回検出/acquire の速さを決める。
   Widget _measureSettings() {
@@ -684,9 +722,9 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         SwitchListTile(
           dense: true,
           contentPadding: EdgeInsets.zero,
-          title: Text('位置を自動で取得', style: small),
+          title: Text('自動追従', style: small),
           subtitle: Text(
-              '検出できないとき自動で広域探索する (手で位置を合わせる必要がない)',
+              '検出できないとき自動で広域探索して位置を掴む (手で合わせる必要がない)',
               style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor)),
           value: _autoAcquire,
           onChanged: (v) => setState(() {
@@ -815,6 +853,12 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                               ar: cam.value.aspectRatio,
                             ),
                           ),
+                        Positioned(
+                          top: 10,
+                          left: 0,
+                          right: 0,
+                          child: Center(child: _statusBadge()),
+                        ),
                         if (_acquiring)
                           Container(
                             color: Colors.black54,

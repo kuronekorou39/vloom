@@ -132,6 +132,13 @@ pub struct VcodeScanReport {
     pub blocks_ok: u32,
     pub blocks_total: u32,
     pub error: Option<String>,
+    /// 検出した 4 隅 (回転後画像座標, tl,tr,br,bl の 8 値)。UI が「今どこを読んでいるか」を
+    /// 毎フレーム描くために返す。ScanResult が既に持つ値を渡すだけでコストはない。
+    pub corners: Vec<f32>,
+    /// corners の座標系 (回転後画像の寸法と、その回転)
+    pub img_w: u32,
+    pub img_h: u32,
+    pub rot: u32,
     /// debug_dump=true のとき、回転処理後のグレースケール画像 (PC 側解析用)
     pub debug_gray: Option<Vec<u8>>,
     pub debug_w: u32,
@@ -148,13 +155,26 @@ fn fail(reason: &str) -> VcodeScanReport {
         blocks_ok: 0,
         blocks_total: 0,
         error: Some(reason.to_string()),
+        corners: vec![],
+        img_w: 0,
+        img_h: 0,
+        rot: 0,
         debug_gray: None,
         debug_w: 0,
         debug_h: 0,
     }
 }
 
-fn success(result: vloom_vcode::scan::ScanResult, tracked: bool, layout: vcode::Layout) -> VcodeScanReport {
+fn success(
+    result: vloom_vcode::scan::ScanResult,
+    tracked: bool,
+    layout: vcode::Layout,
+    rot: u32,
+    img_w: usize,
+    img_h: usize,
+) -> VcodeScanReport {
+    let c = result.corners;
+    let corners = vec![c[0].0, c[0].1, c[1].0, c[1].1, c[2].0, c[2].1, c[3].0, c[3].1];
     let frame = result.frame;
     // ブロックペイロードはゼロパディングされていることがあるため、
     // OTI のシンボルサイズから実パケット長 (4 + symbol_size) に切り出す
@@ -177,6 +197,10 @@ fn success(result: vloom_vcode::scan::ScanResult, tracked: bool, layout: vcode::
         blocks_total: layout.block_count() as u32,
         packets,
         error: None,
+        corners,
+        img_w: img_w as u32,
+        img_h: img_h as u32,
+        rot,
         debug_gray: None,
         debug_w: 0,
         debug_h: 0,
@@ -302,7 +326,7 @@ impl VcodeRx {
             let img = GrayImage { w: rw, h: rh, data: &gray };
             if let Ok(result) = scan_frame_tracked(&img, &corners, layout) {
                 self.last = Some((rot, layout, result.corners));
-                return success(result, true, layout);
+                return success(result, true, layout, rot, rw, rh);
             }
             // 追従失敗 → フル探索へフォールバック (ロック解除はフル探索も失敗した時)
         }
@@ -338,7 +362,7 @@ impl VcodeRx {
                         Err(e) => errors.push(format!("rot{rot}/{}x{}:{e:?}", layout.grid_w, layout.grid_h)),
                         Ok(result) => {
                             self.last = Some((rot, layout, result.corners));
-                            return success(result, false, layout);
+                            return success(result, false, layout, rot, rw, rh);
                         }
                     }
                 }
