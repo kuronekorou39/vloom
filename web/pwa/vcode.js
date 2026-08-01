@@ -125,6 +125,7 @@ export class VcodeReceiver {
     this.rx = null; this.dec = null; this.finished = false; this.frames = 0; this.detected = 0;
     this.stats = new ScanStats();
     this._lastDiag = 0;
+    this.firstDetectedAt = null;
   }
 
   /** 探索する格子を切り替える ("auto" で候補総当たり)。受信中でも即反映する。 */
@@ -225,6 +226,8 @@ export class VcodeReceiver {
     this._setGuideLocked(report.detected);
     if (report.detected) {
       this.detected++;
+      // 所要時間は「初検出 → 復元完了」で測る (カメラを向けるまでの時間を含めない)
+      if (this.firstDetectedAt === null) this.firstDetectedAt = performance.now();
       if (!this.dec) {
         try { this.dec = new FountainDecoder(report.oti); } catch (_) { return; }
       }
@@ -269,7 +272,19 @@ export class VcodeReceiver {
       mime = m;
     }
     const blob = new Blob([data], { type: mime });
-    this.onDone({ name, type: mime, size: data.length, blob });
+    // 計測値も一緒に返す。条件を振って比べるには所要時間と実効スループットが要る。
+    const ms = this.firstDetectedAt === null ? 0 : performance.now() - this.firstDetectedAt;
+    this.onDone({
+      name, type: mime, size: data.length, blob,
+      stats: {
+        ms,
+        kbps: ms > 0 ? (data.length / 1024) / (ms / 1000) : 0,
+        frames: this.frames,
+        detected: this.detected,
+        scanFps: this.stats.fps,
+        grid: this.grid,
+      },
+    });
   }
 }
 

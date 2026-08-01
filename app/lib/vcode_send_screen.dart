@@ -10,6 +10,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'history_store.dart';
 import 'test_payload.dart';
+import 'ui_common.dart';
 import 'src/rust/api/vcode.dart';
 
 /// vcode (独自フォーマット) 送信画面。研究用: 単一ブロック・生バイトを
@@ -41,6 +42,8 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
   int _bpc = 2; // 1=白黒, 2=輝度4値 (容量2倍)
 
   bool _running = false;
+  DateTime? _startedAt; // 送信開始時刻 (経過時間の表示と履歴記録に使う)
+  ({String name, String mime, int size})? _sending; // 送信中のペイロード情報 (終了時に履歴へ)
   int _seq = 0;
   VcodeTx? _tx;
   int _frameIdx = 0;
@@ -59,6 +62,20 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
       _pickedMime = f.mimeType;
       _pickedSize = len;
     });
+  }
+
+  /// 送信開始からの経過
+  Duration get _sendElapsed =>
+      _startedAt == null ? Duration.zero : DateTime.now().difference(_startedAt!);
+
+  /// 1 巡にかかる秒数 (= 受信側が最低限これだけ見ていれば全パケットを一度は目にする)
+  double get _loopSeconds => _frameCount == 0 ? 0 : _frameCount / _fps;
+
+  static String _fmtElapsed(Duration d) {
+    final s = d.inMilliseconds / 1000.0;
+    return s >= 60
+        ? '${d.inMinutes}分${(s - d.inMinutes * 60).toStringAsFixed(0)}秒'
+        : '${s.toStringAsFixed(1)}秒';
   }
 
   /// 現在の設定で 1 秒あたり何 byte 送れるかの理論値 (実測との比較基準)。
@@ -138,13 +155,13 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
     });
     debugPrint('[vcode-tx] start: ${payload.length} B, '
         '${tx.packetCount()} packets, $_frameCount frames, $_fps fps');
-    // 送信試行を履歴に記録 (grid 欄をフォーマット識別に流用)
-    unawaited(HistoryStore.instance.addSent(
-        name,
-        mime.isEmpty ? 'application/octet-stream' : mime,
-        payload.length,
-        'vcode $_grid',
-        '${_fps}fps/${_bpc}bit'));
+    // 履歴には送信"終了"時に記録する (送信時間を含めるため)。ここでは材料だけ持っておく。
+    _sending = (
+      name: name,
+      mime: mime.isEmpty ? 'application/octet-stream' : mime,
+      size: payload.length,
+    );
+    _startedAt = DateTime.now();
     await WakelockPlus.enable();
     try {
       await ScreenBrightness().setScreenBrightness(1.0);
@@ -175,17 +192,41 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
   }
 
   Future<void> _stop() async {
+    if (!_running) return;
+    final info = _sending;
+    final elapsed = _sendElapsed;
+    final passes = _frameCount == 0 ? 0 : _frameIdx ~/ _frameCount;
     setState(() => _running = false);
     _seq++;
+    _startedAt = null;
+    _sending = null;
     await WakelockPlus.disable();
     try {
       await ScreenBrightness().resetScreenBrightness();
     } catch (_) {}
+    if (info == null) return;
+    // grid/ec 欄をフォーマットと条件の記録に流用する (受信側の統計と突き合わせる用)
+    unawaited(HistoryStore.instance.addSent(
+      info.name,
+      info.mime,
+      info.size,
+      'vcode $_grid',
+      '${_fps}fps/${_bpc}bit · ${_fmtElapsed(elapsed)} · $passes 巡',
+    ));
+    if (mounted) {
+      showToast(context, '送信終了: ${_fmtElapsed(elapsed)} · $passes 巡 (履歴に記録)',
+          kind: ToastKind.success);
+    }
   }
 
   @override
   void dispose() {
-    _stop();
+    // 破棄時は setState も context も触れないので、_stop() ではなく
+    // 送出ループを止めて端末設定を戻すだけにする (履歴とトーストは省く)。
+    _running = false;
+    _seq++;
+    unawaited(WakelockPlus.disable());
+    unawaited(ScreenBrightness().resetScreenBrightness().catchError((_) {}));
     _textCtrl.dispose();
     super.dispose();
   }
@@ -215,10 +256,20 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
                         ),
                 ),
               ),
+              // 一方向通信なので受信成功は送信側から分からないが、経過時間は測れる。
+              // 受信側の所要時間の目安になり、1 巡に何秒かかるかも分かる。
               Text(
-                'frame ${_frameIdx % (_frameCount == 0 ? 1 : _frameCount)}/$_frameCount  '
-                'pass ${_frameCount == 0 ? 0 : _frameIdx ~/ _frameCount}  (タップで停止)',
+                '${_fmtElapsed(_sendElapsed)}  ·  '
+                'frame ${_frameIdx % (_frameCount == 0 ? 1 : _frameCount)}/$_frameCount  ·  '
+                '${_frameCount == 0 ? 0 : _frameIdx ~/ _frameCount} 巡'
+                '${_loopSeconds > 0 ? " (1巡 ${_loopSeconds.toStringAsFixed(1)}秒)" : ""}',
                 style: const TextStyle(color: Colors.black54, fontSize: 12),
+              ),
+              const SizedBox(height: 8),
+              FilledButton.icon(
+                onPressed: _stop,
+                icon: const Icon(Icons.stop),
+                label: const Text('送信を終了'),
               ),
             ],
           ),

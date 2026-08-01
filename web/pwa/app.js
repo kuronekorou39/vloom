@@ -220,12 +220,24 @@ const vcodeReceiver = new VcodeReceiver({
     $("vrxInfo").textContent =
       `スキャン中 · frames ${frames} · 検出 ${detected} · 直近 ${blocks}/${blocksTotal} ブロック`;
   },
-  onDone: ({ name, type, size, blob }) => {
+  onDone: ({ name, type, size, blob, stats }) => {
     $("vrxInfo").innerHTML = `<span class="ok">✅ 復元成功: ${name} (${fmtSize(size)})</span>`;
     const url = URL.createObjectURL(blob);
     const isImage = type.startsWith("image/");
+    // 条件を振って比べられるよう、計測値を一緒に出す (所要時間は初検出→完了)
+    const s = stats || {};
+    const rows = [
+      ["実効スループット", `${(s.kbps || 0).toFixed(1)} KB/s`],
+      ["所要時間 (初検出→完了)", `${((s.ms || 0) / 1000).toFixed(2)} 秒`],
+      ["フレーム", `${s.detected || 0} 検出 / ${s.frames || 0} 走査`],
+      ["スキャン fps", (s.scanFps || 0).toFixed(1)],
+      ["格子指定", s.grid === "auto" ? "自動 (候補総当たり)" : s.grid],
+    ];
     $("vrxResult").innerHTML =
       (isImage ? `<p><img src="${url}" style="max-width:100%;border-radius:8px" /></p>` : "") +
+      `<table class="stats">${rows
+        .map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`)
+        .join("")}</table>` +
       `<p><a href="${url}" download="${name}"><button>ダウンロード: ${name}</button></a></p>`;
     $("vrxStart").disabled = false;
     $("vrxStop").disabled = true;
