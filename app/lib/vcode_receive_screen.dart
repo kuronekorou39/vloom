@@ -47,6 +47,16 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   /// 実際に得られたプレビュー寸法 (完了後もカメラ停止後に残すので統計に出せる)
   Size? _lastPreviewSize;
 
+  // --- 検出できないときの切り分け用の実測値 ---
+  /// スキャナに渡した回転 (端末間で sensorOrientation が異なると検出 0 になりうる)
+  int _lastRot = -1;
+  /// Y プレーンの寸法と行バイト数 (stride != width の端末がある)
+  int _lastImgW = 0, _lastImgH = 0, _lastStride = 0;
+  /// Y の値域。iOS の 420v は video range (16〜235) に制限される
+  int _lumaMin = 255, _lumaMax = 0;
+  /// 直近の検出失敗理由 (Rust 側が返す FrameError)
+  String? _lastError;
+
   bool _busy = false;
   bool _active = false;
   bool _camBusy = false; // カメラ初期化/再初期化の多重実行ガード
@@ -210,6 +220,22 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       final sw = Stopwatch()..start();
       final y = img.planes[0];
       final rotation = _cam?.description.sensorOrientation ?? 90;
+      _lastRot = rotation;
+      _lastImgW = img.width;
+      _lastImgH = img.height;
+      _lastStride = y.bytesPerRow;
+      // 輝度の値域を間引きで測る。16〜235 に収まっていれば video range で、
+      // フル 0〜255 を前提にした閾値判定が効きにくい端末だと分かる。
+      if (_framesSeen % 30 == 0) {
+        var lo = 255, hi = 0;
+        for (var i = 0; i < y.bytes.length; i += 64) {
+          final v = y.bytes[i];
+          if (v < lo) lo = v;
+          if (v > hi) hi = v;
+        }
+        _lumaMin = lo;
+        _lumaMax = hi;
+      }
       // 未検出のあいだ 150 フレームごとに処理済み画像を上書き保存 (PC 解析用)
       final wantDump = _framesDetected == 0 && _framesSeen > 0 && _framesSeen % 150 == 0;
       final rx = _rx;
@@ -298,6 +324,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           return;
         }
       } else if (_framesSeen % 30 == 0) {
+        _lastError = report.error;
         debugPrint('[vcode-rx] not detected (${report.error}) '
             'scan=${_lastScanMs}ms seen=$_framesSeen detected=$_framesDetected '
             'camFps=${_camFps.toStringAsFixed(1)}');
@@ -764,6 +791,21 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                 _coverageGrid(total),
                 const SizedBox(height: 4),
               ],
+              // 一度も検出できていないときだけ、切り分けに要る実測値を出す。
+              // 回転はスキャナが rot と rot+180 しか試さないため端末差が出やすく、
+              // 輝度レンジは iOS の video range (16〜235) を見分けるために要る。
+              if (_payload == null && _framesDetected == 0 && _framesSeen > 10)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text(
+                    '未検出の診断: rot=$_lastRot · ${_lastImgW}x$_lastImgH '
+                    '(stride $_lastStride) · 輝度 $_lumaMin–$_lumaMax'
+                    '${_lumaMax <= 240 && _lumaMin >= 10 ? " (video range?)" : ""}'
+                    '${_lastError != null ? "\n$_lastError" : ""}',
+                    style: TextStyle(
+                        fontSize: 11, color: Theme.of(context).colorScheme.error),
+                  ),
+                ),
               if (_payload == null) _measureSettings(),
               Text(
                 _payload != null
