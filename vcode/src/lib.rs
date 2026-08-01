@@ -79,8 +79,11 @@ impl Layout {
 
     /// 受信側がヘッダ確定前に試すレイアウト候補。実運用で当たりやすい順に並べる
     /// (総当たりは初回検出のみで、ロック後はトラッキングに移る)。
-    pub const CANDIDATES: [Layout; 4] =
-        [Layout::V1_DENSE, Layout::V0, Layout::V2_ULTRA, Layout::V3_MAX];
+    ///
+    /// 候補数はロックまでの探索コストに直接比例する (回転 2 × 候補数 × スケール 3 回の
+    /// scan_frame) ため、当たる見込みの薄いものは入れない。V3_MAX は 6px/セル に
+    /// 1320px を要し 4K 受信が前提なので候補から外し、set_layout での明示指定時のみ使う。
+    pub const CANDIDATES: [Layout; 3] = [Layout::V1_DENSE, Layout::V0, Layout::V2_ULTRA];
 
     /// 格子指定からレイアウトを作る (block は共通で BLOCK)
     pub fn from_grid(grid_w: usize, grid_h: usize) -> Layout {

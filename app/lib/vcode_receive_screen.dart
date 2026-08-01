@@ -226,7 +226,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _lastStride = y.bytesPerRow;
       // 輝度の値域を間引きで測る。16〜235 に収まっていれば video range で、
       // フル 0〜255 を前提にした閾値判定が効きにくい端末だと分かる。
-      if (_framesSeen % 30 == 0) {
+      // 検出できている間は不要なので、未検出のときだけ測る。
+      if (_framesDetected == 0 && _framesSeen % 30 == 0) {
         var lo = 255, hi = 0;
         for (var i = 0; i < y.bytes.length; i += 64) {
           final v = y.bytes[i];
