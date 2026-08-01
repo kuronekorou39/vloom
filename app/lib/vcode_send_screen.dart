@@ -9,6 +9,7 @@ import 'package:screen_brightness/screen_brightness.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'history_store.dart';
+import 'test_payload.dart';
 import 'src/rust/api/vcode.dart';
 
 /// vcode (独自フォーマット) 送信画面。研究用: 単一ブロック・生バイトを
@@ -33,6 +34,7 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
   String? _pickedMime; // 選択ファイルの MIME (受信側で元種別を復元する用)
   int _pickedSize = 0;
 
+  int? _testSize; // 計測用テストデータのサイズ (null = ファイル/テキストを送る)
   int _fps = 15; // 実測: 2bit はクリーンキャプチャ保証が効く 15fps が最適 (1bit なら 20fps)
   double _repairRate = 0.5; // リペアパケット比率 (source 比)
   String _grid = '7x6'; // ブロック格子 (7x6=高密度, 5x4=標準)
@@ -68,6 +70,8 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
   }
 
   Future<Uint8List?> _buildPayload() async {
+    // 計測用テストデータが選ばれていれば最優先 (毎回同じ内容で条件比較できる)
+    if (_testSize != null) return makeTestPayload(_testSize!);
     if (_pickedPath != null) {
       return XFile(_pickedPath!).readAsBytes();
     }
@@ -107,9 +111,12 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
       return;
     }
     // 元のファイル名/MIME をヘッダに埋めて送る (受信側で元名・種別をそのまま復元)。
-    final name = _pickedName ?? 'message.txt';
-    final mime =
-        _pickedPath != null ? (_pickedMime ?? '') : 'text/plain;charset=utf-8';
+    final name = _testSize != null
+        ? testPayloadName(_testSize!)
+        : (_pickedName ?? 'message.txt');
+    final mime = _testSize != null
+        ? 'application/octet-stream'
+        : (_pickedPath != null ? (_pickedMime ?? '') : 'text/plain;charset=utf-8');
     final payload = vcodeWrapFile(name: name, mime: mime, data: raw);
     final sourcePackets = (payload.length / packetSizeFor(_bpc)).ceil();
     final gridParts = _grid.split('x');
@@ -133,8 +140,8 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
         '${tx.packetCount()} packets, $_frameCount frames, $_fps fps');
     // 送信試行を履歴に記録 (grid 欄をフォーマット識別に流用)
     unawaited(HistoryStore.instance.addSent(
-        _pickedName ?? 'message.txt',
-        _pickedName == null ? 'text/plain;charset=utf-8' : 'application/octet-stream',
+        name,
+        mime.isEmpty ? 'application/octet-stream' : mime,
         payload.length,
         'vcode $_grid',
         '${_fps}fps/${_bpc}bit'));
@@ -257,6 +264,39 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
                   _pickedSize = 0;
                 }),
               ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        // 計測用テストデータ。条件を振って比べるとき、毎回同じ内容を送れるようにする。
+        Row(
+          children: [
+            const Text('計測データ'),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Wrap(
+                spacing: 6,
+                children: [
+                  ChoiceChip(
+                    label: const Text('使わない'),
+                    selected: _testSize == null,
+                    onSelected: (_) => setState(() => _testSize = null),
+                  ),
+                  for (final (label, bytes) in kTestSizes)
+                    ChoiceChip(
+                      label: Text(label),
+                      selected: _testSize == bytes,
+                      onSelected: (_) => setState(() {
+                        _testSize = bytes;
+                        // 誤って古い選択が残らないよう、ファイル選択は解除する
+                        _pickedPath = null;
+                        _pickedName = null;
+                        _pickedMime = null;
+                        _pickedSize = 0;
+                      }),
+                    ),
+                ],
+              ),
+            ),
           ],
         ),
         const SizedBox(height: 8),

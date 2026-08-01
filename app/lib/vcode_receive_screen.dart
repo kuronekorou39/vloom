@@ -11,6 +11,7 @@ import 'history_screen.dart' show shareReceived, saveReceivedToFile;
 import 'history_store.dart';
 import 'src/rust/api/fountain.dart';
 import 'src/rust/api/vcode.dart';
+import 'test_payload.dart';
 import 'ui_common.dart';
 import 'vcode_view.dart';
 
@@ -658,7 +659,9 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     final kbps = ms > 0 ? (p.length / 1024) / (ms / 1000) : 0.0;
     // 条件を一緒に残す: 同じ数字でも解像度と格子が違えば比較にならない。
     final preview = _lastPreviewSize;
+    final testSize = testPayloadSize(p);
     final rows = <(String, String)>[
+      if (testSize != null) ('計測データ', '${testSize ~/ 1024}KB (内容一致)'),
       ('サイズ', '${p.length} B'),
       ('所要時間 (初検出→完了)', ms >= 1000 ? '${(ms / 1000).toStringAsFixed(2)} 秒' : '$ms ms'),
       ('実効スループット', '${kbps.toStringAsFixed(1)} KB/s'),
