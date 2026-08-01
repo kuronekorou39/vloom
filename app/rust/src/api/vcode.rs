@@ -281,6 +281,13 @@ fn rotate_y_plane(y: &[u8], w: usize, h: usize, stride: usize, rot: u32) -> (Vec
 pub struct VcodeRx {
     /// 直近成功時の (回転 deg, レイアウト, 精密化後の 4 隅)
     last: Option<(u32, vcode::Layout, [(f32, f32); 4])>,
+    /// 直近に検出できた (回転, レイアウト)。ロックが外れた後のフル探索で最初に試す。
+    ///
+    /// これが無いと復帰のたびに 回転2 × 候補3 × スケール3 = 18 通りを総当たりし、
+    /// 実機では 1 フレーム 300〜440ms (= 2〜3fps) かかる。その間コードは何十フレームも
+    /// 進むので事実上復帰できず、「合わせているのに取得が始まらない」状態になる。
+    /// 構図は変わっていないことが多いので、同じ組み合わせを先に試せば 3 通りで戻れる。
+    last_ok: Option<(u32, vcode::Layout)>,
     /// 探索するレイアウトの固定指定 (None = CANDIDATES を総当たり)
     forced: Option<vcode::Layout>,
 }
@@ -288,7 +295,7 @@ pub struct VcodeRx {
 impl VcodeRx {
     #[flutter_rust_bridge::frb(sync)]
     pub fn new() -> VcodeRx {
-        VcodeRx { last: None, forced: None }
+        VcodeRx { last: None, last_ok: None, forced: None }
     }
 
     /// 探索するレイアウトを 1 つに固定する (grid_w = 0 で解除)。
@@ -340,6 +347,7 @@ impl VcodeRx {
             if let Ok(result) = scan_frame_tracked(&img, &corners, layout) {
                 let decode_us = t_dec.elapsed().as_micros() as u32;
                 self.last = Some((rot, layout, result.corners));
+                self.last_ok = Some((rot, layout));
                 return success(result, true, layout, rot, rw, rh, rotate_us, decode_us);
             }
             // 追従失敗 → フル探索へフォールバック (ロック解除はフル探索も失敗した時)
@@ -354,6 +362,33 @@ impl VcodeRx {
         let fracs = [base, (base * 0.78).max(0.4), (base * 1.15).min(0.98)];
         let cands = self.candidates();
         let mut errors = Vec::new();
+
+        // 近道: 直近に検出できた回転・格子だけを先に試す。構図が変わっていなければ
+        // これで戻れるので、総当たり (18 通り) に落ちる頻度を大きく下げられる。
+        if let Some((rot, layout)) = self.last_ok {
+            let t_rot = std::time::Instant::now();
+            let (gray, rw, rh) = rotate_y_plane(&y, w, h, stride, rot);
+            let rotate_us = t_rot.elapsed().as_micros() as u32;
+            let img = GrayImage { w: rw, h: rh, data: &gray };
+            let (cx, cy) = (rw as f32 / 2.0, rh as f32 / 2.0);
+            let t_dec = std::time::Instant::now();
+            for &frac in &fracs {
+                let gw = (frac * rw as f64) as f32;
+                let gh = (gw * layout.height() as f32 / layout.width() as f32)
+                    .min(rh as f32 * 0.95);
+                let guide = Quad {
+                    tl: (cx - gw / 2.0, cy - gh / 2.0),
+                    tr: (cx + gw / 2.0, cy - gh / 2.0),
+                    br: (cx + gw / 2.0, cy + gh / 2.0),
+                    bl: (cx - gw / 2.0, cy + gh / 2.0),
+                };
+                if let Ok(result) = scan_frame(&img, &guide, layout) {
+                    let decode_us = t_dec.elapsed().as_micros() as u32;
+                    self.last = Some((rot, layout, result.corners));
+                    return success(result, false, layout, rot, rw, rh, rotate_us, decode_us);
+                }
+            }
+        }
         for rot in [rotation_deg % 360, (rotation_deg + 180) % 360] {
             let t_rot = std::time::Instant::now();
             let (gray, rw, rh) = rotate_y_plane(&y, w, h, stride, rot);
@@ -379,6 +414,7 @@ impl VcodeRx {
                         Err(e) => errors.push(format!("rot{rot}/{}x{}:{e:?}", layout.grid_w, layout.grid_h)),
                         Ok(result) => {
                             self.last = Some((rot, layout, result.corners));
+                            self.last_ok = Some((rot, layout));
                             let decode_us = t_dec.elapsed().as_micros() as u32;
                             return success(result, false, layout, rot, rw, rh, rotate_us, decode_us);
                         }
@@ -476,6 +512,8 @@ impl VcodeRx {
             return;
         }
         let layout = vcode::Layout::from_grid(grid_w as usize, grid_h as usize);
+        // acquire で確定した組み合わせも、ロックが外れたときの近道に使う
+        self.last_ok = Some((rot, layout));
         let c = [
             (corners[0], corners[1]),
             (corners[2], corners[3]),

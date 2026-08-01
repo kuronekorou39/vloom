@@ -466,7 +466,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         ' · cam${_camFps.toStringAsFixed(0)}fps'
         ' · 検出$_framesDetected/$_framesSeen(追従$_framesTracked)'
         ' · blk$_blocksOk · pkt$_packetsAdded'
-        ' · scan${_scanCount > 0 ? (_scanMsSum / _scanCount).round() : 0}ms';
+        ' · scan${_scanCount > 0 ? (_scanMsSum / _scanCount).round() : 0}ms'
+        ' (rot${(_rotateUsSum / (_scanCount == 0 ? 1 : _scanCount) / 1000).toStringAsFixed(1)}/dec${(_decodeUsSum / (_scanCount == 0 ? 1 : _scanCount) / 1000).toStringAsFixed(1)}ms)';
     debugPrint('[vcode-rx] COMPLETE: $name ${payload.length} bytes in ${ms}ms, $note');
     // 履歴に保存 (QR 受信と同じ HistoryStore)。名前/種別はヘッダ優先、無ければ内容推定。
     try {
