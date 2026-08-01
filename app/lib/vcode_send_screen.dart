@@ -35,7 +35,7 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
   String? _pickedMime; // 選択ファイルの MIME (受信側で元種別を復元する用)
   int _pickedSize = 0;
 
-  int? _testSize; // 計測用テストデータのサイズ (null = ファイル/テキストを送る)
+  String? _testAsset; // 計測用テスト画像のアセットパス (null = ファイル/テキストを送る)
   int _fps = 15; // 実測: 2bit はクリーンキャプチャ保証が効く 15fps が最適 (1bit なら 20fps)
   double _repairRate = 0.5; // リペアパケット比率 (source 比)
   String _grid = '7x6'; // ブロック格子 (7x6=高密度, 5x4=標準)
@@ -87,8 +87,8 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
   }
 
   Future<Uint8List?> _buildPayload() async {
-    // 計測用テストデータが選ばれていれば最優先 (毎回同じ内容で条件比較できる)
-    if (_testSize != null) return makeTestPayload(_testSize!);
+    // 計測用テスト画像が選ばれていれば最優先 (毎回同じ内容で条件比較できる)
+    if (_testAsset != null) return loadTestImage(_testAsset!);
     if (_pickedPath != null) {
       return XFile(_pickedPath!).readAsBytes();
     }
@@ -128,11 +128,11 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
       return;
     }
     // 元のファイル名/MIME をヘッダに埋めて送る (受信側で元名・種別をそのまま復元)。
-    final name = _testSize != null
-        ? testPayloadName(_testSize!)
+    final name = _testAsset != null
+        ? testImageName(_testAsset!)
         : (_pickedName ?? 'message.txt');
-    final mime = _testSize != null
-        ? 'application/octet-stream'
+    final mime = _testAsset != null
+        ? 'image/jpeg'
         : (_pickedPath != null ? (_pickedMime ?? '') : 'text/plain;charset=utf-8');
     final payload = vcodeWrapFile(name: name, mime: mime, data: raw);
     final sourcePackets = (payload.length / packetSizeFor(_bpc)).ceil();
@@ -329,15 +329,15 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
                 children: [
                   ChoiceChip(
                     label: const Text('使わない'),
-                    selected: _testSize == null,
-                    onSelected: (_) => setState(() => _testSize = null),
+                    selected: _testAsset == null,
+                    onSelected: (_) => setState(() => _testAsset = null),
                   ),
-                  for (final (label, bytes) in kTestSizes)
+                  for (final (label, asset, _) in kTestImages)
                     ChoiceChip(
                       label: Text(label),
-                      selected: _testSize == bytes,
+                      selected: _testAsset == asset,
                       onSelected: (_) => setState(() {
-                        _testSize = bytes;
+                        _testAsset = asset;
                         // 誤って古い選択が残らないよう、ファイル選択は解除する
                         _pickedPath = null;
                         _pickedName = null;

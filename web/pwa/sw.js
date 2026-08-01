@@ -1,6 +1,6 @@
 // Vloom PWA Service Worker: アプリシェル + WASM をキャッシュしてオフライン動作させる。
 // バージョンを上げるとキャッシュを更新する。
-const CACHE = "vloom-pwa-v10";
+const CACHE = "vloom-pwa-v11";
 const ASSETS = [
   "./",
   "./index.html",
@@ -20,6 +20,7 @@ const ASSETS = [
   "./icon-maskable-512.png",
   "./apple-touch-icon.png",
   "./favicon.png",
+  // 計測用画像 (testdata/) は数MBあるため事前キャッシュせず、使用時に取得する
   "./pkg/vloom_core_wasm.js",
   "./pkg/vloom_core_wasm_bg.wasm",
 ];

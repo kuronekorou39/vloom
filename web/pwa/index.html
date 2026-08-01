@@ -154,6 +154,16 @@
     <!-- ============ V送信 (vcode) ============ -->
     <section id="paneVSend" class="pane">
       <div class="card">
+        <div class="row">
+          <label>計測データ (条件を振って比べる用):
+            <select id="vtxTest">
+              <option value="">使わない (ファイル/テキストを送る)</option>
+              <option value="./testdata/test-100KB.jpg">100KB の画像</option>
+              <option value="./testdata/test-500KB.jpg">500KB の画像</option>
+              <option value="./testdata/test-1MB.jpg">1MB の画像</option>
+              <option value="./testdata/test-2MB.jpg">2MB の画像</option>
+            </select></label>
+        </div>
         <div class="row"><input type="file" id="vtxFile" /></div>
         <div class="row">
           <textarea id="vtxText" rows="2" placeholder="または、ここにテキストを入力 (ファイル未選択時に送信)"></textarea>

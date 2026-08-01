@@ -129,8 +129,15 @@ updateVtxTheory();
 
 $("vtxStart").addEventListener("click", async () => {
   const file = $("vtxFile").files[0];
+  const testAsset = $("vtxTest").value;
   let bytes, name, mime;
-  if (file) {
+  if (testAsset) {
+    // 同梱の計測用画像。サイズを焼き込んであるので、受信側で開けば
+    // どの条件のデータが壊れずに届いたか一目で分かる。
+    bytes = new Uint8Array(await (await fetch(testAsset)).arrayBuffer());
+    name = testAsset.split("/").pop();
+    mime = "image/jpeg";
+  } else if (file) {
     bytes = new Uint8Array(await file.arrayBuffer());
     name = file.name;
     mime = file.type || "";
