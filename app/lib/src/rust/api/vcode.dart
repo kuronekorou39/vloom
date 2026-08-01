@@ -234,6 +234,11 @@ class VcodeScanReport {
   final int imgH;
   final int rot;
 
+  /// スキャン内訳 (マイクロ秒)。実機がカメラのフレーム間隔に追従できないとき、
+  /// Y プレーンの回転コピーと探索・デコードのどちらが効いているかを切り分ける。
+  final int rotateUs;
+  final int decodeUs;
+
   /// debug_dump=true のとき、回転処理後のグレースケール画像 (PC 側解析用)
   final Uint8List? debugGray;
   final int debugW;
@@ -252,6 +257,8 @@ class VcodeScanReport {
     required this.imgW,
     required this.imgH,
     required this.rot,
+    required this.rotateUs,
+    required this.decodeUs,
     this.debugGray,
     required this.debugW,
     required this.debugH,
@@ -271,6 +278,8 @@ class VcodeScanReport {
       imgW.hashCode ^
       imgH.hashCode ^
       rot.hashCode ^
+      rotateUs.hashCode ^
+      decodeUs.hashCode ^
       debugGray.hashCode ^
       debugW.hashCode ^
       debugH.hashCode;
@@ -292,6 +301,8 @@ class VcodeScanReport {
           imgW == other.imgW &&
           imgH == other.imgH &&
           rot == other.rot &&
+          rotateUs == other.rotateUs &&
+          decodeUs == other.decodeUs &&
           debugGray == other.debugGray &&
           debugW == other.debugW &&
           debugH == other.debugH;

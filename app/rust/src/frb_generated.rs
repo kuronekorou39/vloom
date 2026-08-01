@@ -1410,6 +1410,8 @@ impl SseDecode for crate::api::vcode::VcodeScanReport {
         let mut var_imgW = <u32>::sse_decode(deserializer);
         let mut var_imgH = <u32>::sse_decode(deserializer);
         let mut var_rot = <u32>::sse_decode(deserializer);
+        let mut var_rotateUs = <u32>::sse_decode(deserializer);
+        let mut var_decodeUs = <u32>::sse_decode(deserializer);
         let mut var_debugGray = <Option<Vec<u8>>>::sse_decode(deserializer);
         let mut var_debugW = <u32>::sse_decode(deserializer);
         let mut var_debugH = <u32>::sse_decode(deserializer);
@@ -1426,6 +1428,8 @@ impl SseDecode for crate::api::vcode::VcodeScanReport {
             img_w: var_imgW,
             img_h: var_imgH,
             rot: var_rot,
+            rotate_us: var_rotateUs,
+            decode_us: var_decodeUs,
             debug_gray: var_debugGray,
             debug_w: var_debugW,
             debug_h: var_debugH,
@@ -1668,6 +1672,8 @@ impl flutter_rust_bridge::IntoDart for crate::api::vcode::VcodeScanReport {
             self.img_w.into_into_dart().into_dart(),
             self.img_h.into_into_dart().into_dart(),
             self.rot.into_into_dart().into_dart(),
+            self.rotate_us.into_into_dart().into_dart(),
+            self.decode_us.into_into_dart().into_dart(),
             self.debug_gray.into_into_dart().into_dart(),
             self.debug_w.into_into_dart().into_dart(),
             self.debug_h.into_into_dart().into_dart(),
@@ -1942,6 +1948,8 @@ impl SseEncode for crate::api::vcode::VcodeScanReport {
         <u32>::sse_encode(self.img_w, serializer);
         <u32>::sse_encode(self.img_h, serializer);
         <u32>::sse_encode(self.rot, serializer);
+        <u32>::sse_encode(self.rotate_us, serializer);
+        <u32>::sse_encode(self.decode_us, serializer);
         <Option<Vec<u8>>>::sse_encode(self.debug_gray, serializer);
         <u32>::sse_encode(self.debug_w, serializer);
         <u32>::sse_encode(self.debug_h, serializer);

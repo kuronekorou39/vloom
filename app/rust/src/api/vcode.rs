@@ -139,6 +139,10 @@ pub struct VcodeScanReport {
     pub img_w: u32,
     pub img_h: u32,
     pub rot: u32,
+    /// スキャン内訳 (マイクロ秒)。実機がカメラのフレーム間隔に追従できないとき、
+    /// Y プレーンの回転コピーと探索・デコードのどちらが効いているかを切り分ける。
+    pub rotate_us: u32,
+    pub decode_us: u32,
     /// debug_dump=true のとき、回転処理後のグレースケール画像 (PC 側解析用)
     pub debug_gray: Option<Vec<u8>>,
     pub debug_w: u32,
@@ -159,6 +163,8 @@ fn fail(reason: &str) -> VcodeScanReport {
         img_w: 0,
         img_h: 0,
         rot: 0,
+        rotate_us: 0,
+        decode_us: 0,
         debug_gray: None,
         debug_w: 0,
         debug_h: 0,
@@ -172,6 +178,8 @@ fn success(
     rot: u32,
     img_w: usize,
     img_h: usize,
+    rotate_us: u32,
+    decode_us: u32,
 ) -> VcodeScanReport {
     let c = result.corners;
     let corners = vec![c[0].0, c[0].1, c[1].0, c[1].1, c[2].0, c[2].1, c[3].0, c[3].1];
@@ -201,6 +209,8 @@ fn success(
         img_w: img_w as u32,
         img_h: img_h as u32,
         rot,
+        rotate_us,
+        decode_us,
         debug_gray: None,
         debug_w: 0,
         debug_h: 0,
@@ -322,11 +332,15 @@ impl VcodeRx {
 
         // トラッキング: 前回成功した回転・レイアウト・4 隅から追従を試す
         if let Some((rot, layout, corners)) = self.last {
+            let t_rot = std::time::Instant::now();
             let (gray, rw, rh) = rotate_y_plane(&y, w, h, stride, rot);
+            let rotate_us = t_rot.elapsed().as_micros() as u32;
             let img = GrayImage { w: rw, h: rh, data: &gray };
+            let t_dec = std::time::Instant::now();
             if let Ok(result) = scan_frame_tracked(&img, &corners, layout) {
+                let decode_us = t_dec.elapsed().as_micros() as u32;
                 self.last = Some((rot, layout, result.corners));
-                return success(result, true, layout, rot, rw, rh);
+                return success(result, true, layout, rot, rw, rh, rotate_us, decode_us);
             }
             // 追従失敗 → フル探索へフォールバック (ロック解除はフル探索も失敗した時)
         }
@@ -341,7 +355,10 @@ impl VcodeRx {
         let cands = self.candidates();
         let mut errors = Vec::new();
         for rot in [rotation_deg % 360, (rotation_deg + 180) % 360] {
+            let t_rot = std::time::Instant::now();
             let (gray, rw, rh) = rotate_y_plane(&y, w, h, stride, rot);
+            let rotate_us = t_rot.elapsed().as_micros() as u32;
+            let t_dec = std::time::Instant::now();
             let img = GrayImage { w: rw, h: rh, data: &gray };
             let cx = rw as f32 / 2.0;
             let cy = rh as f32 / 2.0;
@@ -362,7 +379,8 @@ impl VcodeRx {
                         Err(e) => errors.push(format!("rot{rot}/{}x{}:{e:?}", layout.grid_w, layout.grid_h)),
                         Ok(result) => {
                             self.last = Some((rot, layout, result.corners));
-                            return success(result, false, layout, rot, rw, rh);
+                            let decode_us = t_dec.elapsed().as_micros() as u32;
+                            return success(result, false, layout, rot, rw, rh, rotate_us, decode_us);
                         }
                     }
                 }

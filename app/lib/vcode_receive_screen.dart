@@ -100,6 +100,10 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   final Set<int> _seenEsi = {};
   int _integrityFails = 0; // エンドツーエンド CRC 不一致で受信をやり直した回数
   int _lastScanMs = 0;
+  // スキャン内訳の累計 (Y プレーン回転コピー / 探索・デコード)。
+  // カメラのフレーム間隔に追従できないとき、どちらが効いているかの切り分けに使う。
+  int _rotateUsSum = 0;
+  int _decodeUsSum = 0;
   int _scanMsSum = 0;
   int _scanCount = 0;
   DateTime? _firstDetected;
@@ -528,6 +532,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _seenEsi.clear();
       _integrityFails = 0;
       _scanMsSum = 0;
+      _rotateUsSum = 0;
+      _decodeUsSum = 0;
       _scanCount = 0;
       _firstDetected = null;
       _elapsed = null;
@@ -674,6 +680,12 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       ('投入パケット', '$_packetsAdded'),
       if (_integrityFails > 0) ('整合性エラー再試行', '$_integrityFails 回'),
       ('平均スキャン時間', _scanCount > 0 ? '${(_scanMsSum / _scanCount).round()} ms' : '-'),
+      ('　うち回転コピー', _scanCount > 0
+          ? '${(_rotateUsSum / _scanCount / 1000).toStringAsFixed(1)} ms'
+          : '-'),
+      ('　うち探索・デコード', _scanCount > 0
+          ? '${(_decodeUsSum / _scanCount / 1000).toStringAsFixed(1)} ms'
+          : '-'),
     ];
     return Table(
       columnWidths: const {0: IntrinsicColumnWidth(), 1: FlexColumnWidth()},

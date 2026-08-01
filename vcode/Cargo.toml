@@ -13,3 +13,7 @@ path = "src/lib.rs"
 vloom-fountain = { path = "../fountain" }
 # テスト画像 (vcode/samples/, gitignore 済み) の出力用
 png = "0.17"
+
+[[bench]]
+name = "scan_speed"
+harness = false
