@@ -9,6 +9,7 @@ import 'package:screen_brightness/screen_brightness.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'history_store.dart';
+import 'preset.dart';
 import 'test_payload.dart';
 import 'ui_common.dart';
 import 'src/rust/api/vcode.dart';
@@ -25,9 +26,6 @@ class VcodeSendScreen extends StatefulWidget {
 /// 60Hz 画面で安全に出せる fps の上限。120Hz 画面ならこの倍まで出せる。
 const kRefreshSafeFps = 30;
 
-/// bpc ごとの RaptorQ packet_size (Layout.block = 20 前提で block_payload_len - 4)
-int packetSizeFor(int bpc) => bpc == 2 ? 92 : 42;
-
 class _VcodeSendScreenState extends State<VcodeSendScreen> {
   final _textCtrl = TextEditingController();
   String? _pickedPath;
@@ -36,10 +34,12 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
   int _pickedSize = 0;
 
   String? _testAsset; // 計測用テスト画像のアセットパス (null = ファイル/テキストを送る)
-  int _fps = 15; // 実測: 2bit はクリーンキャプチャ保証が効く 15fps が最適 (1bit なら 20fps)
+  // 選択中のプリセット (-1 = 詳細設定を直接触ったカスタム)
+  int _presetIndex = kDefaultPresetIndex;
   double _repairRate = 0.5; // リペアパケット比率 (source 比)
-  String _grid = '7x6'; // ブロック格子 (7x6=高密度, 5x4=標準)
-  int _bpc = 2; // 1=白黒, 2=輝度4値 (容量2倍)
+  String _grid = kPresets[kDefaultPresetIndex].grid;
+  int _bpc = kPresets[kDefaultPresetIndex].bpc;
+  int _fps = kPresets[kDefaultPresetIndex].fps;
 
   bool _running = false;
   DateTime? _startedAt; // 送信開始時刻 (経過時間の表示と履歴記録に使う)
@@ -351,6 +351,49 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
           ],
         ),
         const SizedBox(height: 8),
+        // プリセット: 格子・階調・fps をまとめて決める。個別に合わせると送受信で
+        // 食い違い、何が原因か分からなくなるため、まずこれを選ぶ。
+        Row(
+          children: [
+            const Text('プリセット'),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Wrap(
+                spacing: 6,
+                children: [
+                  for (var i = 0; i < kPresets.length; i++)
+                    ChoiceChip(
+                      label: Text(kPresets[i].name),
+                      selected: _presetIndex == i,
+                      onSelected: (_) => setState(() {
+                        _presetIndex = i;
+                        _grid = kPresets[i].grid;
+                        _bpc = kPresets[i].bpc;
+                        _fps = kPresets[i].fps;
+                      }),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Text(
+            _presetIndex >= 0
+                ? '${kPresets[_presetIndex].description}\n'
+                    '理論 ${_theoreticalKbps.toStringAsFixed(0)} KB/s'
+                    '  ·  受信側は「${kPresets[_presetIndex].name}」を選ぶ'
+                : 'カスタム  ·  理論 ${_theoreticalKbps.toStringAsFixed(0)} KB/s'
+                    '  ($_grid · ${_bpc}bit · ${_fps}fps)',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
+        ExpansionTile(
+          title: Text('詳細設定 (通常は触らない)',
+              style: Theme.of(context).textTheme.bodySmall),
+          tilePadding: EdgeInsets.zero,
+          children: [
         Row(
           children: [
             const Text('格子'),
@@ -364,7 +407,7 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
               ],
               selected: {_grid},
               showSelectedIcon: false,
-              onSelectionChanged: (s) => setState(() => _grid = s.first),
+              onSelectionChanged: (s) => setState(() { _grid = s.first; _presetIndex = -1; }),
             ),
           ],
         ),
@@ -379,7 +422,7 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
                 ButtonSegment(value: 2, label: Text('4値 2bit')),
               ],
               selected: {_bpc},
-              onSelectionChanged: (s) => setState(() => _bpc = s.first),
+              onSelectionChanged: (s) => setState(() { _bpc = s.first; _presetIndex = -1; }),
             ),
           ],
         ),
@@ -394,7 +437,7 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
                 max: 60,
                 divisions: 57,
                 label: '$_fps',
-                onChanged: (v) => setState(() => _fps = v.round()),
+                onChanged: (v) => setState(() { _fps = v.round(); _presetIndex = -1; }),
               ),
             ),
             Text('$_fps'),
@@ -424,6 +467,7 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
             Text('${(_repairRate * 100).round()}%'),
           ],
         ),
+        ]),
         const SizedBox(height: 8),
         FilledButton.icon(
           onPressed: _start,

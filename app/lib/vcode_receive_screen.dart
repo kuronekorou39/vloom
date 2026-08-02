@@ -9,6 +9,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'history_screen.dart' show shareReceived, saveReceivedToFile;
 import 'history_store.dart';
+import 'preset.dart';
 import 'src/rust/api/fountain.dart';
 import 'src/rust/api/vcode.dart';
 import 'test_payload.dart';
@@ -36,22 +37,18 @@ const kAutoAcquireMissFrames = 20;
 /// 自動 acquire の再試行間隔 (フレーム)。acquire は 300 回超の探索を伴うので連発させない。
 const kAutoAcquireCooldownFrames = 45;
 
-/// 受信で選べるカメラ解像度。密な格子ほど px/セル が要るので上げる必要がある。
-const kPresets = <(String, ResolutionPreset)>[
-  ('1080p', ResolutionPreset.veryHigh),
-  ('2160p', ResolutionPreset.ultraHigh),
-  ('最大', ResolutionPreset.max),
-];
-
 class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     with WidgetsBindingObserver {
   CameraController? _cam;
 
-  /// 探索する格子 (kGridAuto か '9x8' 等)。送信側の格子が分かっているなら固定するほど速い
-  String _forcedGrid = kGridAuto;
+  /// 選択中のプリセット。送信側と同じものを選べば格子も解像度も揃う
+  int _presetIndex = kDefaultPresetIndex;
+
+  /// 探索する格子 (kGridAuto か '9x8' 等)。送信側と揃えるほど初回検出が速い
+  String _forcedGrid = kPresets[kDefaultPresetIndex].grid;
 
   /// カメラ解像度。9x8 以上は 1080p では px/セル が足りない
-  ResolutionPreset _preset = ResolutionPreset.veryHigh;
+  ResolutionPreset _preset = kPresets[kDefaultPresetIndex].preset;
 
   /// 実際に得られたプレビュー寸法 (完了後もカメラ停止後に残すので統計に出せる)
   Size? _lastPreviewSize;
@@ -760,47 +757,41 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
             _missStreak = 0;
           }),
         ),
+        // 送信側と同じプリセットを選ぶ。格子と解像度が自動で揃うので、
+        // 「どれを選べばいいか分からない」状態にならない。
         Row(
           children: [
-            Text('解像度', style: small),
-            const SizedBox(width: 12),
-            SegmentedButton<ResolutionPreset>(
-              segments: [
-                for (final (label, p) in kPresets)
-                  ButtonSegment(value: p, label: Text(label)),
-              ],
-              selected: {_preset},
-              showSelectedIcon: false,
-              onSelectionChanged: (s) => _changePreset(s.first),
-            ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        Row(
-          children: [
-            Text('格子', style: small),
+            Text('プリセット', style: small),
             const SizedBox(width: 12),
             Expanded(
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: SegmentedButton<String>(
-                  segments: const [
-                    ButtonSegment(value: kGridAuto, label: Text('自動')),
-                    ButtonSegment(value: '5x4', label: Text('5x4')),
-                    ButtonSegment(value: '7x6', label: Text('7x6')),
-                    ButtonSegment(value: '9x8', label: Text('9x8')),
-                    ButtonSegment(value: '11x10', label: Text('11x10')),
-                  ],
-                  selected: {_forcedGrid},
-                  showSelectedIcon: false,
-                  onSelectionChanged: (s) => setState(() {
-                    _forcedGrid = s.first;
-                    _applyForcedGrid();
-                  }),
-                ),
+              child: Wrap(
+                spacing: 6,
+                children: [
+                  for (var i = 0; i < kPresets.length; i++)
+                    ChoiceChip(
+                      label: Text(kPresets[i].name),
+                      selected: _presetIndex == i,
+                      onSelected: (_) {
+                        setState(() {
+                          _presetIndex = i;
+                          _forcedGrid = kPresets[i].grid;
+                        });
+                        _applyForcedGrid();
+                        _changePreset(kPresets[i].preset);
+                      },
+                    ),
+                ],
               ),
             ),
           ],
+        ),
+        Text(
+          _presetIndex >= 0
+              ? '格子 ${kPresets[_presetIndex].grid} · '
+                  '${kPresets[_presetIndex].cellsWide} セル幅 · '
+                  '送信側も同じものを選ぶこと'
+              : 'カスタム',
+          style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
         ),
       ],
     );
