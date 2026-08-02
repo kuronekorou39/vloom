@@ -8,6 +8,18 @@
   <link rel="icon" href="./favicon.png" sizes="32x32" />
   <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
   <meta name="theme-color" content="#111318" />
+  <script>
+    // 旧ブラウザ診断 (ES5 のみで書く)。ES モジュールが構文エラーで死ぬと
+    // タブ切替ごと無反応になり原因が見えないため、ここでエラーを拾って表示する。
+    window.addEventListener('error', function (e) {
+      var el = document.getElementById('coreStatus');
+      if (!el || el.className === 'ng') return;
+      var where = e.filename ? ' @' + String(e.filename).split('/').pop() + ':' + e.lineno : '';
+      el.className = 'ng';
+      el.textContent = '読み込み失敗: ' + (e.message || '不明なエラー') + where +
+        ' — お使いのブラウザが古い可能性があります (iOS 15 以降を推奨)';
+    }, true);
+  </script>
   <style>
     :root { color-scheme: dark; }
     body {
