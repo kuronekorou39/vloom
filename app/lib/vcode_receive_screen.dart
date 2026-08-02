@@ -37,6 +37,10 @@ const kAutoAcquireMissFrames = 20;
 /// 自動 acquire の再試行間隔 (フレーム)。acquire は 300 回超の探索を伴うので連発させない。
 const kAutoAcquireCooldownFrames = 45;
 
+/// この回数連続で検出できたらフォーカスと露出をロックする。
+/// 連続成功中 = ピントが合っている、の裏付けを取ってからロックする。
+const kCamLockStreak = 15;
+
 class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     with WidgetsBindingObserver {
   CameraController? _cam;
@@ -73,6 +77,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   int _autoAcquireAt = 0; // 次に自動 acquire してよい _framesSeen (連発を防ぐクールダウン)
   int _autoAcquireCount = 0; // 自動 acquire の実行回数 (統計・UI 表示用)
   int _missStreak = 0; // 連続して検出できなかったフレーム数
+  int _detectStreak = 0; // 連続して検出できたフレーム数 (AF/AE ロックの判断に使う)
+  bool _camLocked = false; // フォーカス・露出をロック済みか
   bool _seeded = false; // acquire 結果で受信位置を確定済み (中央ガイド枠に頼らず追従)
   List<double>? _detCorners; // acquire で検出した 4 隅 (回転後画像座標, 8 値) — ハイライト表示用
   int _detImgW = 0, _detImgH = 0, _detRot = 0; // 検出時の回転後画像寸法と回転 (表示座標への変換用)
@@ -357,6 +363,14 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           return;
         }
         _missStreak = 0;
+        // 追従が安定したらフォーカスと露出をロックする。据え置きでも AF は数秒おきに
+        // ピントを探り直し、その間 (1〜2 秒) ボケて検出が全滅する。実機ログで
+        // 「順調な追従が周期的に途切れる」として観測された、光学経路最大の敵。
+        _detectStreak++;
+        if (!_camLocked && _detectStreak >= kCamLockStreak) {
+          _camLocked = true;
+          _lockCamera(true);
+        }
         // 「今どこを読んでいるか」を毎フレーム更新する。追従中も枠が動くので、
         // ロックできているかが画面を見れば分かる。
         if (report.corners.length >= 8) {
@@ -371,8 +385,15 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         // 移るので定常コストは増えない (= 手で位置を合わせる必要がなくなる)。
         // 単発のフレーム落ちで走らせないよう、連続失敗数で判定する。
         _missStreak++;
+        _detectStreak = 0;
         // 見失ったら枠を消す (古い位置を出したままにしない)
         if (_missStreak > kAutoAcquireMissFrames ~/ 2) _detCorners = null;
+        // ロングロスト: ロックしたピントが合わなくなった (距離が変わった等) 可能性が
+        // あるので AF に戻す。短いロストでは解除しない (解除するとまたハンチングする)
+        if (_camLocked && _missStreak >= kAutoAcquireMissFrames) {
+          _camLocked = false;
+          _lockCamera(false);
+        }
         if (_autoAcquire &&
             _missStreak >= kAutoAcquireMissFrames &&
             _framesSeen >= _autoAcquireAt) {
@@ -516,6 +537,21 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     );
   }
 
+  /// フォーカスと露出のロック/解除。据え置きの AF ハンチング (数秒おきのピント
+  /// 探り直しで 1〜2 秒検出が全滅する) を止める。ブラウザにはできないネイティブの強み。
+  /// 未対応端末では例外になるだけなので握りつぶす。
+  Future<void> _lockCamera(bool lock) async {
+    final cam = _cam;
+    if (cam == null || !cam.value.isInitialized) return;
+    debugPrint('[vcode-rx] camera ${lock ? "lock" : "unlock"} (AF/AE)');
+    try {
+      await cam.setFocusMode(lock ? FocusMode.locked : FocusMode.auto);
+    } catch (_) {}
+    try {
+      await cam.setExposureMode(lock ? ExposureMode.locked : ExposureMode.auto);
+    } catch (_) {}
+  }
+
   /// 受信中のやり直し。集めたパケットと追従状態を捨てて最初から始める。
   /// カメラは開いたままなので即座に再開する。
   void _restartReceive() {
@@ -536,6 +572,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _firstDetected = null;
       _elapsed = null;
       _missStreak = 0;
+      _detectStreak = 0;
       _autoAcquireAt = 0;
       _autoAcquireCount = 0;
       _seeded = false;
@@ -545,6 +582,10 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     // スキャナの追従状態も捨てる (古い位置に引きずられないように)
     _rx = VcodeRx();
     _applyForcedGrid();
+    if (_camLocked) {
+      _camLocked = false;
+      _lockCamera(false);
+    }
     showToast(context, '受信をやり直します');
   }
 
@@ -595,6 +636,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _autoAcquireAt = 0;
       _autoAcquireCount = 0;
       _missStreak = 0;
+      _detectStreak = 0;
+      _camLocked = false; // カメラは作り直すので AF/AE は自動に戻る
       _seeded = false;
       _detCorners = null;
       _status = 'カメラ起動待ち';
@@ -768,7 +811,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     final (String label, Color color, IconData icon) = switch (this) {
       _ when _acquireRequested || _acquiring => ('位置を検出中…', Colors.amber, Icons.travel_explore),
       _ when _framesDetected > 0 && _missStreak == 0 =>
-        (_seeded ? '追従中 (位置固定)' : '追従中', Colors.cyanAccent, Icons.center_focus_strong),
+        (_camLocked ? '追従中 (AF固定)' : _seeded ? '追従中 (位置固定)' : '追従中', Colors.cyanAccent, Icons.center_focus_strong),
       _ when _autoAcquire => ('位置を探しています…', Colors.orangeAccent, Icons.search),
       _ => ('枠にコードを合わせてください', Colors.orangeAccent, Icons.crop_free),
     };
