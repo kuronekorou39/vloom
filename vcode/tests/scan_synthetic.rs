@@ -396,3 +396,39 @@ fn scan_wide_recovers_tilted_code_from_tilted_guide() {
     let ok = result.frame.blocks.iter().filter(|b| b.is_some()).count();
     assert!(ok >= 18, "傾き構図の回収ブロックが少なすぎる: {ok}/20");
 }
+
+#[test]
+fn locate_code_finds_large_offcenter_code() {
+    // 実機で起きた「画面いっぱいに大きく写した + 中心から縦にずれた」構図。
+    // 固定スケールのガイド枠 sweep はこれを取りこぼす (コード幅が画像の ~87% だと
+    // どのスケール候補にも合わない)。locate_code のテクスチャ推定 → 広域探索で
+    // 掴めることを検証する。
+    use vloom_vcode::scan::locate_code;
+    let layout = Layout::V0;
+    let (header, blocks) = test_frame(layout, 0x9D);
+    let frame_px = encode_frame(&header, &blocks, 9); // 900x828 px = 幅の 83%
+    let (fw, fh) = (frame_px.w as f32, frame_px.h as f32);
+    // 中心 (540, 860) = 画像中心 (540, 960) から縦に 100px ずれ
+    let dst = [
+        (540.0 - fw / 2.0, 860.0 - fh / 2.0),
+        (540.0 + fw / 2.0, 860.0 - fh / 2.0 + 14.0),
+        (540.0 + fw / 2.0 - 10.0, 860.0 + fh / 2.0),
+        (540.0 - fw / 2.0 + 12.0, 860.0 + fh / 2.0 - 12.0),
+    ];
+    let canvas = synth_camera_image(&frame_px, 1080, 1920, &dst, 0x5151);
+    let img = GrayImage { w: 1080, h: 1920, data: &canvas };
+    let (cx, cy, bw, _bh) = locate_code(&img, 0.94).expect("locate_code が見つけるはず");
+    assert!((cx - 540.0).abs() < 60.0 && (cy - 860.0).abs() < 80.0,
+        "推定中心が遠すぎる: ({cx},{cy})");
+    let gh = bw * layout.height() as f32 / layout.width() as f32;
+    let guide = Quad {
+        tl: (cx - bw / 2.0, cy - gh / 2.0),
+        tr: (cx + bw / 2.0, cy - gh / 2.0),
+        br: (cx + bw / 2.0, cy + gh / 2.0),
+        bl: (cx - bw / 2.0, cy + gh / 2.0),
+    };
+    let result = scan_frame_wide(&img, &guide, layout).expect("locate 位置から取得できるはず");
+    assert_eq!(result.frame.header, header);
+    let ok = result.frame.blocks.iter().filter(|b| b.is_some()).count();
+    assert!(ok >= 18, "回収ブロックが少なすぎる: {ok}/20");
+}

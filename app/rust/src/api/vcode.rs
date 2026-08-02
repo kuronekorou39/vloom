@@ -7,7 +7,7 @@
 
 use vloom_fountain as fountain;
 use vloom_vcode as vcode;
-use vloom_vcode::scan::{scan_frame, scan_frame_tracked, scan_frame_wide, GrayImage, Quad};
+use vloom_vcode::scan::{locate_code, scan_frame, scan_frame_tracked, scan_frame_wide, GrayImage, Quad};
 
 /// 送信側ハンドル。payload を vcode フレーム列に変換する。
 pub struct VcodeTx {
@@ -368,6 +368,33 @@ impl VcodeRx {
         let cands = self.candidates();
         let mut errors = Vec::new();
 
+        // テクスチャからコードの位置と大きさを推定し、その 1 点を最初に試す。
+        // 固定スケールのガイド枠は「画面いっぱいに大きく写した」「中心から外れた」構図を
+        // 取りこぼす (実機で発生: コード幅が画像の 87% のとき、どのスケールも±48px に
+        // 収まらず永久に未検出)。推定は数 ms で、偽陽性はコーナー照合が棄却する。
+        if let Some((rot, layout)) = self.last_ok.or(self.forced.map(|l| (rotation_deg % 360, l))) {
+            let t_rot = std::time::Instant::now();
+            let (gray, rw, rh) = rotate_y_plane(&y, w, h, stride, rot);
+            let rotate_us = t_rot.elapsed().as_micros() as u32;
+            let img = GrayImage { w: rw, h: rh, data: &gray };
+            let t_dec = std::time::Instant::now();
+            if let Some((cx, cy, bw, _bh)) = locate_code(&img, 0.94) {
+                let gh = bw * layout.height() as f32 / layout.width() as f32;
+                let guide = Quad {
+                    tl: (cx - bw / 2.0, cy - gh / 2.0),
+                    tr: (cx + bw / 2.0, cy - gh / 2.0),
+                    br: (cx + bw / 2.0, cy + gh / 2.0),
+                    bl: (cx - bw / 2.0, cy + gh / 2.0),
+                };
+                if let Ok(result) = scan_frame(&img, &guide, layout) {
+                    let decode_us = t_dec.elapsed().as_micros() as u32;
+                    self.last = Some((rot, layout, result.corners));
+                    self.last_ok = Some((rot, layout));
+                    return success(result, false, layout, rot, rw, rh, rotate_us, decode_us);
+                }
+            }
+        }
+
         // 近道: 直近に検出できた回転・格子だけを先に試す。構図が変わっていなければ
         // これで戻れるので、総当たり (18 通り) に落ちる頻度を大きく下げられる。
         if let Some((rot, layout)) = self.last_ok {
@@ -490,6 +517,43 @@ impl VcodeRx {
         for rot in rots {
             let (gray, rw, rh) = rotate_y_plane(&y, w, h, stride, rot);
             let img = GrayImage { w: rw, h: rh, data: &gray };
+            // まずテクスチャ推定の 1 点から (スケール総当たりの穴を避ける本命経路)
+            if let Some((cx, cy, bw, _bh)) = locate_code(&img, 0.94) {
+                for &layout in &cands {
+                    let aspect = layout.height() as f32 / layout.width() as f32;
+                    let gh = bw * aspect;
+                    for &deg in &tilts {
+                        let (sin, cos) = deg.to_radians().sin_cos();
+                        let rot_pt = |dx: f32, dy: f32| {
+                            (cx + dx * cos - dy * sin, cy + dx * sin + dy * cos)
+                        };
+                        let (hw2, hh2) = (bw / 2.0, gh / 2.0);
+                        let guide = Quad {
+                            tl: rot_pt(-hw2, -hh2),
+                            tr: rot_pt(hw2, -hh2),
+                            br: rot_pt(hw2, hh2),
+                            bl: rot_pt(-hw2, hh2),
+                        };
+                        if let Ok(result) = scan_frame_wide(&img, &guide, layout) {
+                            let ok = result.frame.blocks.iter().filter(|b| b.is_some()).count();
+                            let c = result.corners;
+                            return VcodeAcquireReport {
+                                detected: true,
+                                rot,
+                                grid_w: layout.grid_w as u8,
+                                grid_h: layout.grid_h as u8,
+                                blocks_ok: ok as u32,
+                                blocks_total: layout.block_count() as u32,
+                                corners: vec![
+                                    c[0].0, c[0].1, c[1].0, c[1].1, c[2].0, c[2].1, c[3].0, c[3].1,
+                                ],
+                                img_w: rw as u32,
+                                img_h: rh as u32,
+                            };
+                        }
+                    }
+                }
+            }
             for &layout in &cands {
                 let aspect = layout.height() as f32 / layout.width() as f32;
                 for &s in &scales {

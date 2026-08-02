@@ -600,3 +600,76 @@ fn decode_at(
         homography: hmat,
     })
 }
+
+/// 画像内から「コードらしい市松テクスチャ」の外接矩形を推定する。
+/// 戻りは (中心x, 中心y, 幅, 高さ)。見つからなければ None。
+///
+/// 8px タイルごとの暗画素率を測り、市松 (黒白が混在 = 率が中間) のタイルだけを残して
+/// 投影で範囲を取る。白画面 (率~0) と暗い背景・ベゼル (率~1) は自然に除外される。
+/// acquire がスケール・位置を総当たりする代わりに、この推定 1 点から始めれば、
+/// 「画面いっぱいに大きく写した構図」でも探索の穴に落ちない。
+/// 偽陽性はあってよい (後段の scan_frame_wide がコーナー照合で棄却する)。
+pub fn locate_code(img: &GrayImage, aspect: f32) -> Option<(f32, f32, f32, f32)> {
+    const TS: usize = 8;
+    let (tw, th) = (img.w / TS, img.h / TS);
+    if tw < 8 || th < 8 {
+        return None;
+    }
+    let thr = otsu(img.data.iter().step_by(7).copied());
+    let mut mask = vec![false; tw * th];
+    for ty in 0..th {
+        for tx in 0..tw {
+            let mut dark = 0u32;
+            for y in 0..TS {
+                for x in 0..TS {
+                    if img.get(tx * TS + x, ty * TS + y) < thr {
+                        dark += 1;
+                    }
+                }
+            }
+            let f = dark as f32 / (TS * TS) as f32;
+            mask[ty * tw + tx] = (0.12..=0.88).contains(&f);
+        }
+    }
+    let col_cnt: Vec<usize> =
+        (0..tw).map(|x| (0..th).filter(|&y| mask[y * tw + x]).count()).collect();
+    let row_cnt: Vec<usize> =
+        (0..th).map(|y| (0..tw).filter(|&x| mask[y * tw + x]).count()).collect();
+    let cmax = *col_cnt.iter().max()?;
+    if cmax < 6 {
+        return None; // コードらしい塊が無い
+    }
+    // 幅: 列投影のしきい値レンジ
+    let cthr = (cmax as f32 * 0.3) as usize;
+    let x0 = col_cnt.iter().position(|&c| c > cthr)?;
+    let x1 = col_cnt.iter().rposition(|&c| c > cthr)?;
+    let w_tiles = x1 + 1 - x0;
+    // 高さ: 幅 × aspect の窓を行投影の上で滑らせ、最も密な位置を取る。
+    // 単純なしきい値レンジだと、コード外の市松状クラッタ (UI・背景) が上下に
+    // つながったとき範囲が伸びて中心がずれる。窓方式なら本体に吸い付く。
+    let h_tiles = ((w_tiles as f32) * aspect).round() as usize;
+    let (wy0, wh) = if h_tiles == 0 || h_tiles >= th {
+        let rmax = *row_cnt.iter().max()?;
+        let rthr = (rmax as f32 * 0.3) as usize;
+        let y0 = row_cnt.iter().position(|&c| c > rthr)?;
+        let y1 = row_cnt.iter().rposition(|&c| c > rthr)?;
+        (y0, y1 + 1 - y0)
+    } else {
+        let mut best = (0usize, 0usize);
+        for y in 0..=(th - h_tiles) {
+            let s: usize = row_cnt[y..y + h_tiles].iter().sum();
+            if s > best.1 {
+                best = (y, s);
+            }
+        }
+        (best.0, h_tiles)
+    };
+    let (px0, px1) = ((x0 * TS) as f32, ((x1 + 1) * TS) as f32);
+    let (py0, py1) = ((wy0 * TS) as f32, ((wy0 + wh) * TS) as f32);
+    Some((
+        (px0 + px1) / 2.0,
+        (py0 + py1) / 2.0,
+        px1 - px0,
+        py1 - py0,
+    ))
+}
