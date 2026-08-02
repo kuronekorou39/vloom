@@ -282,6 +282,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           // 検出が続かなければクールダウン後にまた自動取得が走って直る。
           _acquireIsAuto = false;
           if (rep.detected) {
+            _adoptDetectedGrid(rep);
             rx.seed(
               rot: rep.rot,
               gridW: rep.gridW,
@@ -496,6 +497,25 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     }
   }
 
+  /// acquire が検出した格子を受信設定に取り込む。格子はフレームのヘッダが自己記述して
+  /// いるので、送信側と食い違っていてもユーザーに合わせ直させるのではなく、こちらが
+  /// 検出結果に追従する (プリセット違いで「見えているのに掴めない」を防ぐ)。
+  void _adoptDetectedGrid(VcodeAcquireReport rep) {
+    final detected = '${rep.gridW}x${rep.gridH}';
+    if (_forcedGrid == detected) return;
+    final matched = kPresets.indexWhere((p) => p.grid == detected);
+    setState(() {
+      _forcedGrid = detected;
+      _presetIndex = matched; // 一致するプリセットが無ければ -1 (カスタム)
+    });
+    _applyForcedGrid();
+    showToast(
+      context,
+      '送信側の格子は $detected でした。受信設定を合わせました'
+      '${matched >= 0 ? ' (${kPresets[matched].name})' : ''}',
+    );
+  }
+
   /// 受信中のやり直し。集めたパケットと追従状態を捨てて最初から始める。
   /// カメラは開いたままなので即座に再開する。
   void _restartReceive() {
@@ -630,6 +650,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     );
     if (!mounted) return;
     if (confirmed == true) {
+      _adoptDetectedGrid(rep);
       // 検出した 4 隅・回転・格子をトラッキングの種にする。中央ガイド枠に頼らず即ロック。
       rx.seed(
         rot: rep.rot,

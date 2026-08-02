@@ -469,7 +469,24 @@ impl VcodeRx {
         // コーナーが粗探索の捕捉範囲 (±96px) から外れて掴めない。手持ちでは傾きが
         // 普通に起きるため、傾けた初期枠も試す。0° を先頭にして通常構図を最速で通す。
         let tilts = [0.0f32, 12.0, -12.0, 24.0, -24.0];
-        let cands = self.candidates();
+        // acquire は格子の固定指定 (forced) を無視して全候補を試す。
+        // 格子はヘッダに書いてあり、本来ユーザーが合わせるものではない。固定は毎フレームの
+        // scan() を速くするための最適化にすぎず、送信側と食い違ったとき acquire まで
+        // その格子しか試さないと「見えているのに 1 つも掴めない」状態に陥る
+        // (実機で発生: 受信 7x6 固定 × 送信 5x4 → 自動取得 26 連敗)。
+        // forced があれば先頭に置き、一致時は最速で確定させる。
+        let mut cands: Vec<vcode::Layout> = Vec::new();
+        if let Some(f) = self.forced {
+            cands.push(f);
+        }
+        for l in vcode::Layout::CANDIDATES {
+            if !cands.contains(&l) {
+                cands.push(l);
+            }
+        }
+        if !cands.contains(&vcode::Layout::V3_MAX) {
+            cands.push(vcode::Layout::V3_MAX);
+        }
         for rot in rots {
             let (gray, rw, rh) = rotate_y_plane(&y, w, h, stride, rot);
             let img = GrayImage { w: rw, h: rh, data: &gray };
