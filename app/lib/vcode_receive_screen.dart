@@ -41,6 +41,10 @@ const kAutoAcquireCooldownFrames = 45;
 /// 連続成功中 = ピントが合っている、の裏付けを取ってからロックする。
 const kCamLockStreak = 15;
 
+/// この回数連続で見失ったら AF/AE ロックを解除する。モード切替はカメラの
+/// フレーム供給を止めるため、acquire (20) より長く粘って発振を防ぐ。
+const kCamUnlockMissFrames = 60;
+
 class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     with WidgetsBindingObserver {
   CameraController? _cam;
@@ -265,12 +269,16 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       // seed でトラッキングの種にする。以降 scan() は最初からその位置にロックして始まる。
       if (_acquireRequested) {
         _acquireRequested = false;
+        final wasAuto = _acquireIsAuto;
         final rep = await rx.acquire(
           y: y.bytes,
           width: img.width,
           height: img.height,
           stride: y.bytesPerRow,
           rotationDeg: rotation,
+          // 自動起動は軽量版 (locate のみ)。全 sweep は見つからないとき数秒
+          // フレーム処理を止めるので、手動ボタンのときだけ使う
+          thorough: !wasAuto,
         );
         if (!mounted || !_active) return;
         setState(() {
@@ -389,8 +397,9 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         // 見失ったら枠を消す (古い位置を出したままにしない)
         if (_missStreak > kAutoAcquireMissFrames ~/ 2) _detCorners = null;
         // ロングロスト: ロックしたピントが合わなくなった (距離が変わった等) 可能性が
-        // あるので AF に戻す。短いロストでは解除しない (解除するとまたハンチングする)
-        if (_camLocked && _missStreak >= kAutoAcquireMissFrames) {
+        // あるので AF に戻す。短いロストでは解除しない。モード切替はカメラの
+        // フレーム供給を 0.5〜2 秒止めるので、acquire (20) より長く粘る
+        if (_camLocked && _missStreak >= kCamUnlockMissFrames) {
           _camLocked = false;
           _lockCamera(false);
         }

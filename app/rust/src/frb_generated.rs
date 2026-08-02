@@ -484,6 +484,7 @@ fn wire__crate__api__vcode__VcodeRx_acquire_impl(
             let api_height = <u32>::sse_decode(&mut deserializer);
             let api_stride = <u32>::sse_decode(&mut deserializer);
             let api_rotation_deg = <u32>::sse_decode(&mut deserializer);
+            let api_thorough = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, ()>((move || {
@@ -508,6 +509,7 @@ fn wire__crate__api__vcode__VcodeRx_acquire_impl(
                         api_height,
                         api_stride,
                         api_rotation_deg,
+                        api_thorough,
                     ))?;
                     Ok(output_ok)
                 })())

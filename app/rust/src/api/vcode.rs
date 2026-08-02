@@ -470,6 +470,10 @@ impl VcodeRx {
     /// 位置合わせ: 画面全体を多位置 × スケール × 全回転で sweep し、中央から外れた/傾いた
     /// コードでも初回取得する。1 回きりの重い処理なので scan() とは別 (非同期ワーカー実行)。
     /// 成功時は seed() に渡すべき rot・格子・4 隅を返す。self.last は変更しない (確認後に seed する)。
+    /// thorough=false は locate_code 由来の 1 点のみ試す軽量版 (自動起動用、数十 ms)。
+    /// thorough=true は従来の全 sweep も行う (手動ボタン用、数秒かかってよい)。
+    /// 自動起動で全 sweep を回すと、見つからないとき数秒間フレーム処理が止まり、
+    /// 「周期的にフリーズする」体感になる (実機で 7〜9 秒の停止として観測)。
     pub fn acquire(
         &mut self,
         y: Vec<u8>,
@@ -477,6 +481,7 @@ impl VcodeRx {
         height: u32,
         stride: u32,
         rotation_deg: u32,
+        thorough: bool,
     ) -> VcodeAcquireReport {
         let (w, h, stride) = (width as usize, height as usize, stride as usize);
         if stride < w || y.len() < stride * h {
@@ -553,6 +558,9 @@ impl VcodeRx {
                         }
                     }
                 }
+            }
+            if !thorough {
+                continue; // 自動起動は locate のみ。外したら次の機会に任せる
             }
             for &layout in &cands {
                 let aspect = layout.height() as f32 / layout.width() as f32;

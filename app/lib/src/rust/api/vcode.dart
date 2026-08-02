@@ -35,12 +35,17 @@ abstract class VcodeRx implements RustOpaqueInterface {
   /// 位置合わせ: 画面全体を多位置 × スケール × 全回転で sweep し、中央から外れた/傾いた
   /// コードでも初回取得する。1 回きりの重い処理なので scan() とは別 (非同期ワーカー実行)。
   /// 成功時は seed() に渡すべき rot・格子・4 隅を返す。self.last は変更しない (確認後に seed する)。
+  /// thorough=false は locate_code 由来の 1 点のみ試す軽量版 (自動起動用、数十 ms)。
+  /// thorough=true は従来の全 sweep も行う (手動ボタン用、数秒かかってよい)。
+  /// 自動起動で全 sweep を回すと、見つからないとき数秒間フレーム処理が止まり、
+  /// 「周期的にフリーズする」体感になる (実機で 7〜9 秒の停止として観測)。
   Future<VcodeAcquireReport> acquire({
     required List<int> y,
     required int width,
     required int height,
     required int stride,
     required int rotationDeg,
+    required bool thorough,
   });
 
   factory VcodeRx() => RustLib.instance.api.crateApiVcodeVcodeRxNew();
