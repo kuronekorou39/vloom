@@ -361,3 +361,38 @@ fn dense_layouts_degrade_below_4px_per_cell() {
     let (ok, total) = recover_at_cell_px(Layout::V2_ULTRA, 2, 4, 0x7A7A);
     assert!(ok < total, "4px/セル で全ブロック回収できてしまった: {ok}/{total}");
 }
+
+#[test]
+fn scan_wide_recovers_tilted_code_from_tilted_guide() {
+    // 面内に ~18° 傾いたコードを、12° 傾けた初期枠 (acquire の傾き刻みに相当) から
+    // 広域探索で掴めることを検証する。刻みが 12° なら真値との差は最大 6° 程度で、
+    // コーナー変位は ±96px の捕捉範囲に収まるはず。
+    let layout = Layout::V0;
+    let (header, blocks) = test_frame(layout, 0x4C);
+    let frame_px = encode_frame(&header, &blocks, 8);
+    let (fw, fh) = (frame_px.w as f32, frame_px.h as f32);
+    // 18° 回転した配置 (中心 640,540)
+    let (cx, cy) = (640.0f32, 540.0);
+    let ang = 18.0f32.to_radians();
+    let (sin, cos) = ang.sin_cos();
+    let rot_pt = |dx: f32, dy: f32| (cx + dx * cos - dy * sin, cy + dx * sin + dy * cos);
+    let (hw, hh) = (fw / 2.0, fh / 2.0);
+    let dst = [rot_pt(-hw, -hh), rot_pt(hw, -hh), rot_pt(hw, hh), rot_pt(-hw, hh)];
+    let canvas = synth_camera_image(&frame_px, 1280, 1080, &dst, 0x71E7);
+    let img = GrayImage { w: 1280, h: 1080, data: &canvas };
+    // 12° の初期枠 (寸法は 5% 大きめ = スケール不一致も混ぜる)
+    let gang = 12.0f32.to_radians();
+    let (gs, gc) = gang.sin_cos();
+    let g_pt = |dx: f32, dy: f32| (cx + dx * gc - dy * gs, cy + dx * gs + dy * gc);
+    let (gw2, gh2) = (hw * 1.05, hh * 1.05);
+    let guide = Quad {
+        tl: g_pt(-gw2, -gh2),
+        tr: g_pt(gw2, -gh2),
+        br: g_pt(gw2, gh2),
+        bl: g_pt(-gw2, gh2),
+    };
+    let result = scan_frame_wide(&img, &guide, layout).expect("傾き 18° を 12° 初期枠から取得できるはず");
+    assert_eq!(result.frame.header, header);
+    let ok = result.frame.blocks.iter().filter(|b| b.is_some()).count();
+    assert!(ok >= 18, "傾き構図の回収ブロックが少なすぎる: {ok}/20");
+}

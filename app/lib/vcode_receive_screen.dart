@@ -311,6 +311,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _framesSeen++;
       _lastScanMs = sw.elapsedMilliseconds;
       _scanMsSum += _lastScanMs;
+      _rotateUsSum += report.rotateUs;
+      _decodeUsSum += report.decodeUs;
       _scanCount++;
       if (report.detected) {
         _framesDetected++;

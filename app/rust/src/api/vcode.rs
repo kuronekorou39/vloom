@@ -465,6 +465,10 @@ impl VcodeRx {
         // ガイド枠の大きさ (画像幅比) と中心位置 (画像比) を振る。小さめスケールで隅寄りも拾う。
         let scales = [0.7f64, 0.5, 0.38];
         let centers = [0.5f32, 0.32, 0.68];
+        // 面内の傾き (deg)。ガイド枠は水平前提なので、コードが 10〜15° を超えて傾くと
+        // コーナーが粗探索の捕捉範囲 (±96px) から外れて掴めない。手持ちでは傾きが
+        // 普通に起きるため、傾けた初期枠も試す。0° を先頭にして通常構図を最速で通す。
+        let tilts = [0.0f32, 12.0, -12.0, 24.0, -24.0];
         let cands = self.candidates();
         for rot in rots {
             let (gray, rw, rh) = rotate_y_plane(&y, w, h, stride, rot);
@@ -478,11 +482,21 @@ impl VcodeRx {
                         for &cyf in &centers {
                             let cx = (cxf * rw as f32).clamp(gw / 2.0, rw as f32 - gw / 2.0);
                             let cy = (cyf * rh as f32).clamp(gh / 2.0, rh as f32 - gh / 2.0);
+                            // 傾きは中央位置でのみ振る (9 位置 × 5 傾きは重すぎる。
+                            // 傾いた構図はたいてい画面中央に収めようとしているため)。
+                            let is_center = cxf == 0.5 && cyf == 0.5;
+                            let tilt_set: &[f32] = if is_center { &tilts } else { &tilts[..1] };
+                            for &deg in tilt_set {
+                            let (sin, cos) = deg.to_radians().sin_cos();
+                            let rot_pt = |dx: f32, dy: f32| {
+                                (cx + dx * cos - dy * sin, cy + dx * sin + dy * cos)
+                            };
+                            let (hw, hh) = (gw / 2.0, gh / 2.0);
                             let guide = Quad {
-                                tl: (cx - gw / 2.0, cy - gh / 2.0),
-                                tr: (cx + gw / 2.0, cy - gh / 2.0),
-                                br: (cx + gw / 2.0, cy + gh / 2.0),
-                                bl: (cx - gw / 2.0, cy + gh / 2.0),
+                                tl: rot_pt(-hw, -hh),
+                                tr: rot_pt(hw, -hh),
+                                br: rot_pt(hw, hh),
+                                bl: rot_pt(-hw, hh),
                             };
                             if let Ok(result) = scan_frame_wide(&img, &guide, layout) {
                                 let ok = result.frame.blocks.iter().filter(|b| b.is_some()).count();
@@ -500,6 +514,7 @@ impl VcodeRx {
                                     img_w: rw as u32,
                                     img_h: rh as u32,
                                 };
+                            }
                             }
                         }
                     }
