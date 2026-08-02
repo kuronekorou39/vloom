@@ -32,7 +32,7 @@ const V_CAL_LEVELS = [
 const QR_PROBE_GRIDS = [[1, 1], [1, 2], [2, 2], [3, 3]];
 
 function makeQr(data, ec) {
-  const qrcode = globalThis.qrcode;
+  const qrcode = window.qrcode;
   const qr = qrcode(0, ec);
   let s = "";
   for (let i = 0; i < data.length; i++) s += String.fromCharCode(data[i]);

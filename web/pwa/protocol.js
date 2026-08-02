@@ -58,8 +58,8 @@ export class StreamManifest {
     try {
       const j = JSON.parse(td.decode(bytes.subarray(1)));
       return new StreamManifest({
-        name: j.n ?? "data",
-        type: j.t ?? "application/octet-stream",
+        name: j.n !== undefined && j.n !== null ? j.n : "data",
+        type: j.t !== undefined && j.t !== null ? j.t : "application/octet-stream",
         totalSize: j.s, blockSize: j.bs, blockCount: j.bc,
         otiFull: b64decode(j.of), otiLast: b64decode(j.ol),
       });

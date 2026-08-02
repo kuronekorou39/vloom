@@ -37,7 +37,7 @@ export function drawQRInCell(ctx, qr, x, y, w, h) {
  * rows=cols=1 のときは全画面 1 回 = 従来の単一 QR 読み取りと等価。
  */
 export function detectQRCodesGrid(imgData, rows, cols, overlap = 0.06) {
-  const jsQR = globalThis.jsQR;
+  const jsQR = window.jsQR;
   const out = [];
   const tileW = imgData.width / cols;
   const tileH = imgData.height / rows;

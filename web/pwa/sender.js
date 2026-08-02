@@ -15,7 +15,7 @@ function bytesToBinaryString(bytes) {
 }
 
 function makeQr(data, ec) {
-  const qrcode = globalThis.qrcode; // vendor/qrcode.js (classic script) が定義
+  const qrcode = window.qrcode; // vendor/qrcode.js (classic script) が定義
   const qr = qrcode(0, ec); // 0 = 自動最小版
   qr.addData(bytesToBinaryString(data), "Byte");
   qr.make();
@@ -33,7 +33,8 @@ export class Sender {
 
   async start(file, gridStr, ec, fps) {
     const [rows, cols] = gridStr.split("x").map(Number);
-    const packetSize = PACKET_BY_GRID[gridStr] ?? 200;
+    const ps = PACKET_BY_GRID[gridStr];
+    const packetSize = ps === undefined ? 200 : ps;
     const total = file.size;
     const blockCount = Math.max(1, Math.ceil(total / BLOCK_SIZE));
 
