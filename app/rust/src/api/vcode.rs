@@ -358,8 +358,13 @@ impl VcodeRx {
         // ガイド枠 (中央・guide_frac 幅) を初期値にコードを探す。手持ちで写る大きさが
         // 一定しないため、UI が示す基準枠 (guide_frac) を中心に一回り小さい/大きいスケールも
         // 試す。基準スケールを先頭に置き、よくある構図で早期確定させる。ロック後はトラッキングへ。
+        // 毎フレームのフル探索は軽さを最優先する。以前は 回転2 × スケール3 = 6 通りを
+        // 試して 1 フレーム 300ms かかっており、カメラが 32fps で進むため
+        // 「探索している間に 10 フレーム進み、位置がずれてまた探索」の悪循環になっていた。
+        // 大きく外れた向き・大きさは自動 acquire (4 回転 × 多位置 × 3 スケール) が拾うので、
+        // ここは「ほぼ正しい構図」だけを見ればよい。
         let base = guide_frac.clamp(0.4, 0.98);
-        let fracs = [base, (base * 0.78).max(0.4), (base * 1.15).min(0.98)];
+        let fracs = [base, (base * 0.8).max(0.4)];
         let cands = self.candidates();
         let mut errors = Vec::new();
 
@@ -389,7 +394,7 @@ impl VcodeRx {
                 }
             }
         }
-        for rot in [rotation_deg % 360, (rotation_deg + 180) % 360] {
+        for rot in [rotation_deg % 360] {
             let t_rot = std::time::Instant::now();
             let (gray, rw, rh) = rotate_y_plane(&y, w, h, stride, rot);
             let rotate_us = t_rot.elapsed().as_micros() as u32;

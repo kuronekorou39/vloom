@@ -494,6 +494,38 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     }
   }
 
+  /// 受信中のやり直し。集めたパケットと追従状態を捨てて最初から始める。
+  /// カメラは開いたままなので即座に再開する。
+  void _restartReceive() {
+    setState(() {
+      _dec = null;
+      _packetSize = null;
+      _seenEsi.clear();
+      _packetsAdded = 0;
+      _blocksOk = 0;
+      _framesSeen = 0;
+      _framesDetected = 0;
+      _framesTracked = 0;
+      _integrityFails = 0;
+      _scanMsSum = 0;
+      _rotateUsSum = 0;
+      _decodeUsSum = 0;
+      _scanCount = 0;
+      _firstDetected = null;
+      _elapsed = null;
+      _missStreak = 0;
+      _autoAcquireAt = 0;
+      _autoAcquireCount = 0;
+      _seeded = false;
+      _detCorners = null;
+      _lastError = null;
+    });
+    // スキャナの追従状態も捨てる (古い位置に引きずられないように)
+    _rx = VcodeRx();
+    _applyForcedGrid();
+    showToast(context, '受信をやり直します');
+  }
+
   /// カメラ解像度を変えて開き直す (プレビュー中でも即反映)
   Future<void> _changePreset(ResolutionPreset p) async {
     if (p == _preset) return;
@@ -912,17 +944,24 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
             mainAxisSize: MainAxisSize.min,
             children: [
               if (_payload == null && cam != null && cam.value.isInitialized) ...[
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: _acquiring ? null : () => _startAcquire(),
-                    icon: Icon(_seeded ? Icons.refresh : Icons.center_focus_strong),
-                    label: Text(_seeded
-                        ? '位置を再検出'
-                        : _autoAcquire
-                            ? '今すぐ位置を検出 (自動取得は有効)'
-                            : 'うまく取得できない時: 位置を検出'),
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: _acquiring ? null : () => _startAcquire(),
+                        icon: Icon(_seeded ? Icons.refresh : Icons.center_focus_strong),
+                        label: Text(_seeded ? '位置を再検出' : '今すぐ位置を検出'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    // 受信中でもやり直せるようにする。集めたパケットを捨てて最初から始める。
+                    // 途中で条件を変えたときや、間違ったデータを掴んだときに要る。
+                    FilledButton.tonalIcon(
+                      onPressed: _restartReceive,
+                      icon: const Icon(Icons.restart_alt),
+                      label: const Text('リセット'),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 6),
               ],
