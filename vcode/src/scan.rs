@@ -545,14 +545,24 @@ fn decode_at(
         None
     };
 
-    // 正規化した輝度からレベル (0..4) を判定
-    let quantize = |r: usize, c: usize, dx: f32, dy: f32| -> u8 {
+    // 正規化した輝度からレベル (0..4) を判定。
+    //
+    // gamma は表示デバイスの階調特性の補正候補。校正ストリップは白黒 2 値なので
+    // 黒白レベルしか実測できず、中間 2 レベルの位置は「等間隔」と仮定するしかない。
+    // PC モニタはコントラスト強調やガンマ設定で中間階調を潰すことがあり、その場合
+    // 線形仮定ではデータブロックの CRC が全滅する (実機で発生: ヘッダ・コーナーは
+    // 2 値なので通り、追従できているのに blocks=0/72)。norm^gamma の候補を CRC を
+    // 正解判定器として試し、ブロック単位で正しいカーブを選ぶ。
+    let quantize = |r: usize, c: usize, dx: f32, dy: f32, gamma: f32| -> u8 {
         let (black_top, white_top, black_bot, white_bot) = calib.as_ref().unwrap();
         let v = sample_raw(r, c, dx, dy);
         let t = r as f32 / (h - 1) as f32;
         let black = black_top[c] * (1.0 - t) + black_bot[c] * t;
         let white = white_top[c] * (1.0 - t) + white_bot[c] * t;
-        let norm = (v - black) / (white - black).max(1.0);
+        let mut norm = ((v - black) / (white - black).max(1.0)).clamp(0.0, 1.0);
+        if gamma != 1.0 {
+            norm = norm.powf(gamma);
+        }
         match norm {
             x if x < 1.0 / 6.0 => 0,
             x if x < 0.5 => 1,
@@ -561,18 +571,38 @@ fn decode_at(
         }
     };
 
-    // ブロック: 同様にオフセットリトライ付きで CRC が通ったものだけ回収
-    let blocks = (0..layout.block_count())
-        .map(|bi| {
-            let (or, oc) = layout.block_origin(bi);
-            offs.iter().find_map(|&(dx, dy)| {
+    // 中間階調の補正候補。線形 (素直なディスプレイ) を先頭に、
+    // 中間が暗く写る場合 (^0.45 で持ち上げ) と明るく写る場合 (^2.2 で下げ) を用意。
+    const GAMMAS: [f32; 3] = [1.0, 0.4545, 2.2];
+
+    // ブロック: オフセット × 補正カーブのリトライ付きで CRC が通ったものだけ回収。
+    // 正しいカーブはフレーム内で共通のことが多いので、直前に当たったものを先に試す。
+    let mut gamma_hint = 0usize;
+    let mut blocks = Vec::with_capacity(layout.block_count());
+    for bi in 0..layout.block_count() {
+        let (or, oc) = layout.block_origin(bi);
+        let mut found = None;
+        let gamma_order: Vec<usize> = if bpc == 1 {
+            vec![0] // 2 値はしきい値 1 本なのでカーブ補正は無意味
+        } else {
+            let mut v = vec![gamma_hint];
+            v.extend((0..GAMMAS.len()).filter(|&g| g != gamma_hint));
+            v
+        };
+        'search: for &gi in &gamma_order {
+            let gamma = GAMMAS[gi];
+            // ヒント外のカーブは中央寄りの 5 オフセットだけ試す (コスト抑制)。
+            // 正しいカーブは 1 ブロック当たればヒントに昇格し、以降は全オフセットで試される。
+            let offs_slice: &[(f32, f32)] =
+                if gi == gamma_hint { &offs } else { &offs[..5] };
+            for &(dx, dy) in offs_slice.iter() {
                 let mut bits = Vec::with_capacity(layout.block * layout.block * bpc as usize);
                 for i in 0..layout.block * layout.block {
                     let (r, c) = (or + i / layout.block, oc + i % layout.block);
                     if bpc == 1 {
                         bits.push(sample(r, c, dx, dy));
                     } else {
-                        let level = quantize(r, c, dx, dy);
+                        let level = quantize(r, c, dx, dy, gamma);
                         bits.push(level & 2 != 0);
                         bits.push(level & 1 != 0);
                     }
@@ -580,13 +610,14 @@ fn decode_at(
                 let bytes = bits_to_bytes(&bits);
                 let (payload, crc) = bytes.split_at(layout.block_payload_len(bpc));
                 if crate::crc32(payload) == u32::from_be_bytes([crc[0], crc[1], crc[2], crc[3]]) {
-                    Some(payload.to_vec())
-                } else {
-                    None
+                    gamma_hint = gi;
+                    found = Some(payload.to_vec());
+                    break 'search;
                 }
-            })
-        })
-        .collect();
+            }
+        }
+        blocks.push(found);
+    }
 
     let (wc, hc) = (w as f32, h as f32);
     Ok(ScanResult {

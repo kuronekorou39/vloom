@@ -432,3 +432,40 @@ fn locate_code_finds_large_offcenter_code() {
     let ok = result.frame.blocks.iter().filter(|b| b.is_some()).count();
     assert!(ok >= 18, "回収ブロックが少なすぎる: {ok}/20");
 }
+
+#[test]
+fn scan_2bpc_survives_display_gamma() {
+    // PC モニタが中間階調を潰す状況 (実機で blocks=0/72 として観測)。
+    // 表示ガンマ 2.2 相当で中間 2 レベルが暗い側に寄っても、CRC を判定器にした
+    // カーブ候補リトライで回収できることを検証する。
+    let layout = Layout::V0;
+    let (header, blocks) = test_frame_bpc(layout, 0xE1, 2);
+    let frame_px = encode_frame(&header, &blocks, 8);
+    let dst = [
+        (180.0f32, 130.0),
+        (1010.0, 155.0),
+        (985.0, 950.0),
+        (205.0, 920.0),
+    ];
+    let mut canvas = synth_camera_image(&frame_px, 1280, 1080, &dst, 0x2B2B);
+    // 表示ガンマを模擬: 中間値を v' = 255*(v/255)^2.2 で暗く潰す
+    for v in canvas.iter_mut() {
+        *v = (255.0 * (*v as f32 / 255.0).powf(2.2)).round() as u8;
+    }
+    let img = GrayImage { w: 1280, h: 1080, data: &canvas };
+    let guide = Quad {
+        tl: (dst[0].0 - 12.0, dst[0].1 + 10.0),
+        tr: (dst[1].0 + 12.0, dst[1].1 - 9.0),
+        br: (dst[2].0 + 10.0, dst[2].1 + 12.0),
+        bl: (dst[3].0 - 9.0, dst[3].1 - 11.0),
+    };
+    let result = scan_frame(&img, &guide, layout).expect("ガンマ潰れでもスキャンできるはず");
+    assert_eq!(result.frame.header, header);
+    let ok = result.frame.blocks.iter().filter(|b| b.is_some()).count();
+    assert!(ok >= 16, "ガンマ潰れ下の回収が少なすぎる: {ok}/20");
+    for (i, b) in result.frame.blocks.iter().enumerate() {
+        if let Some(payload) = b {
+            assert_eq!(payload, &blocks[i], "block {i} の内容不一致");
+        }
+    }
+}
