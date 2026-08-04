@@ -54,10 +54,17 @@ class VcodePreset {
 }
 
 /// 選べるプリセット。上から順に「まず通す」→「速度を狙う」。
+///
+/// 実機計測の結果、輝度 4 値 (bpc=2) は成立しなかった (100KB が 20 分でも完了せず、
+/// 1bit なら 15.8 秒)。原因は空間的な階調ズレではなく時間方向の混ざりで、
+/// LCD の残像とローリングシャッターにより中間 2 レベルが別レベルとして読まれる。
+/// 受信側のガンマ候補リトライでは救えないため、通常経路は 1bit に統一し、
+/// 容量はセル数 (格子) で稼ぐ。QR がファインダ・EC 領域に面積を取られるのに対し、
+/// vcode は格子全部がデータなので、同じ画角でもセル数を増やせる。
 const kPresets = <VcodePreset>[
   VcodePreset(
     name: '確実',
-    description: 'まずここから。低密度・低速で確実に通す',
+    description: 'まずここから。低密度で確実に通す (100 セル幅)',
     grid: '5x4',
     bpc: 1,
     fps: 10,
@@ -65,29 +72,37 @@ const kPresets = <VcodePreset>[
   ),
   VcodePreset(
     name: '標準',
-    description: '実績のある設定。7×6 の輝度4値',
+    description: '実測 6.3KB/s の実績。140 セル幅 / 1080p で 6.2px/セル',
     grid: '7x6',
-    bpc: 2,
+    bpc: 1,
     fps: 10,
     preset: ResolutionPreset.veryHigh,
   ),
   VcodePreset(
     name: '高速',
-    description: '密度で稼ぐ。2160p 受信が要る (6px/セルに 1080px)',
+    description: '密度で稼ぐ。180 セル幅 / 2160p 推奨',
     grid: '9x8',
-    bpc: 2,
+    bpc: 1,
     fps: 10,
     preset: ResolutionPreset.ultraHigh,
   ),
   VcodePreset(
     name: '限界',
-    description: '4K 受信・近距離・固定が前提',
+    description: '220 セル幅。4K 受信・近距離・固定が前提',
     grid: '11x10',
-    bpc: 2,
+    bpc: 1,
     fps: 10,
     preset: ResolutionPreset.max,
   ),
+  VcodePreset(
+    name: '4値(実験)',
+    description: '輝度4値。理論は倍だが実機では未成立 (OLED 送信なら可能性あり)',
+    grid: '7x6',
+    bpc: 2,
+    fps: 10,
+    preset: ResolutionPreset.veryHigh,
+  ),
 ];
 
-/// 既定は「標準」(実績のある 7×6)
+/// 既定は「標準」(実測実績のある 7×6 / 1bit)
 const kDefaultPresetIndex = 1;
