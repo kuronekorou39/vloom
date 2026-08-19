@@ -4,7 +4,7 @@
 // 受信側で CANDIDATES に無い格子は検出できないため、格子は 7x6 / 5x4 のみ。
 
 import { VcodeTx, VcodeRx, FountainDecoder, vcodeUnwrapPayload, vcodeUnwrapFile } from "./pkg/vloom_core_wasm.js";
-import { openCamera, ScanStats, cameraInfoText, lumaText, cellPxText } from "./camera.js";
+import { openCamera, ScanStats, ExposureGuard, cameraInfoText, lumaText, cellPxText } from "./camera.js";
 
 const REPAIR_RATE = 0.5;
 
@@ -110,6 +110,7 @@ export class VcodeReceiver {
     this._reset();
     this.grid = grid;
     this.stream = await openCamera(deviceId);
+    this.exposure = new ExposureGuard(this.stream); // スマホ画面の白飛び対策
     this.video.srcObject = this.stream;
     await this.video.play();
     this._ensureGuide();
@@ -146,10 +147,11 @@ export class VcodeReceiver {
     const now = performance.now();
     if (now - this._lastDiag < DIAG_INTERVAL_MS) return;
     this._lastDiag = now;
+    this.exposure.update(this.stats);
     const size = crop === target ? `${target}px` : `${crop}→${target}px`;
     this.onDiag(
       `${cameraInfoText(this.stream)}\n` +
-      `スキャン ${size} · ${this.stats.fps.toFixed(1)} fps · ${lumaText(this.stats)}\n` +
+      `スキャン ${size} · ${this.stats.fps.toFixed(1)} fps · ${lumaText(this.stats, this.exposure)}\n` +
       cellPxText(target * VCODE_GUIDE_FRAC, this.grid)
     );
   }

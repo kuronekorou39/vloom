@@ -6,7 +6,7 @@
 import { FountainDecoder } from "./pkg/vloom_core_wasm.js";
 import { FRAME_MANIFEST, FRAME_DATA, StreamManifest, parseDataQr } from "./protocol.js";
 import { detectQRCodesGrid } from "./qr_util.js";
-import { openCamera, ScanStats, cameraInfoText, lumaText } from "./camera.js";
+import { openCamera, ScanStats, ExposureGuard, cameraInfoText, lumaText } from "./camera.js";
 
 const DIAG_INTERVAL_MS = 500;
 
@@ -34,6 +34,7 @@ export class Receiver {
     this.grid = gridStr;
     this._reset();
     this.stream = await openCamera(deviceId);
+    this.exposure = new ExposureGuard(this.stream); // スマホ画面の白飛び対策
     this.video.srcObject = this.stream;
     await this.video.play();
     const loop = () => {
@@ -140,10 +141,11 @@ export class Receiver {
     const now = performance.now();
     if (now - this._lastDiag < DIAG_INTERVAL_MS) return;
     this._lastDiag = now;
+    this.exposure.update(this.stats);
     const size = crop === target ? `${target}px` : `${crop}→${target}px`;
     this.onDiag(
       `${cameraInfoText(this.stream)}\n` +
-      `スキャン ${size} · ${this.stats.fps.toFixed(1)} fps · ${lumaText(this.stats)}`
+      `スキャン ${size} · ${this.stats.fps.toFixed(1)} fps · ${lumaText(this.stats, this.exposure)}`
     );
   }
 

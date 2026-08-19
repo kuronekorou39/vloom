@@ -6,7 +6,7 @@
 import { VcodeTx, VcodeRx } from "./pkg/vloom_core_wasm.js";
 import { drawQRInCell, detectQRCodesGrid } from "./qr_util.js";
 import { VCODE_GUIDE_FRAC } from "./vcode.js";
-import { openCamera, CameraPicker, ScanStats, streamDeviceId, cameraInfoText, lumaText, cellPxText }
+import { openCamera, CameraPicker, ScanStats, ExposureGuard, streamDeviceId, cameraInfoText, lumaText, cellPxText }
   from "./camera.js";
 
 const DIAG_INTERVAL_MS = 500;
@@ -155,6 +155,7 @@ export function setupCalibration(els) {
   const cap = document.createElement("canvas");
   const picker = new CameraPicker(els.cameraSelect);
   let stats = new ScanStats();
+  let exposure = null;
   let lastDiag = 0;
 
   // カメラ実解像度・スキャン fps・明るさ の実測 (vcode では理論 px/セル も)。
@@ -162,10 +163,11 @@ export function setupCalibration(els) {
     const now = performance.now();
     if (now - lastDiag < DIAG_INTERVAL_MS) return;
     lastDiag = now;
+    if (exposure) exposure.update(stats);
     const size = crop === target ? `${target}px` : `${crop}→${target}px`;
     els.diag.textContent =
       `${cameraInfoText(stream)}\n` +
-      `スキャン ${size} · ${stats.fps.toFixed(1)} fps · ${lumaText(stats)}` +
+      `スキャン ${size} · ${stats.fps.toFixed(1)} fps · ${lumaText(stats, exposure)}` +
       (kind === "vcode" ? `\n${cellPxText(target * VCODE_GUIDE_FRAC)}` : "");
   };
 
@@ -223,6 +225,7 @@ export function setupCalibration(els) {
       els.best.textContent = "カメラ起動失敗: " + (e && e.message ? e.message : e);
       return;
     }
+    exposure = new ExposureGuard(stream); // スマホ画面の白飛び対策
     picker.refresh(streamDeviceId(stream)); // 許可後はデバイス名が取れるので一覧を更新
     els.video.srcObject = stream;
     await els.video.play();

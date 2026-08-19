@@ -1,4 +1,4 @@
-// 受信 3 画面 (受信 / V受信 / 校正-受信) で共有するカメラ選択と実測診断。
+// 受信 3 画面 (受信 / V受信 / 校正-受信) で共有するカメラ選択・実測診断・露出制御。
 //
 // PC には背面カメラが無いので facingMode:"environment" は満たされず、ブラウザは
 // 「最も近いデバイス」を暗黙に選ぶ。Windows Hello の IR (赤外線) カメラや仮想カメラ
@@ -128,6 +128,86 @@ export class ScanStats {
   }
 }
 
+// ExposureGuard の判定値。sat / mean は ScanStats の間引きサンプルの実測比・平均。
+const EXPO_SAT_HIGH = 0.08;  // 飽和画素がこれ以上なら露出を半減する
+const EXPO_DARK_MEAN = 25;   // 平均輝度がこれ未満 = 明確に暗すぎ (警告閾値 60 より大幅に下)
+const EXPO_DARK_TICKS = 4;   // ↑が連続 (500ms × 4) したら露出を倍に戻す
+
+/**
+ * 白飛びをカメラ露出で解消するコントローラ。部屋より明るいスマホ画面を写すと、
+ * 自動露出 (AE) は視野全体の平均に合わせるため画面領域が飽和して「真っ白」になり、
+ * 何を映しても復号できない。飽和した画素は情報が失われておりソフトでは復元できない
+ * ので、露出制御対応カメラ (Chromium + UVC カメラが典型) では露出時間を手動で
+ * 段階的に下げて飽和自体を解消する。未対応カメラでは何もしない (lumaText がヒントを
+ * 出す)。update() は診断と同じ周期 (500ms) で呼ぶこと。
+ */
+export class ExposureGuard {
+  constructor(stream) {
+    this.track = stream ? stream.getVideoTracks()[0] : null;
+    const caps = this.track && this.track.getCapabilities ? this.track.getCapabilities() : {};
+    const modes = caps.exposureMode || [];
+    const ok = modes.includes("manual") && modes.includes("continuous") && caps.exposureTime;
+    this.range = ok ? caps.exposureTime : null; // 露出時間 {min, max} (100µs 単位)
+    this.value = null;  // 手動設定中の露出時間。null = 自動露出のまま
+    this._auto0 = 0;    // 介入直前の自動露出値 (ここまで戻したら自動露出へ返す)
+    this._skip = 0;     // 設定反映待ちの tick 数 (反映前の映像で再判断しない)
+    this._dark = 0;     // 暗すぎ状態の連続 tick 数
+    this._busy = false;
+  }
+
+  get supported() { return this.range !== null; }
+  get active() { return this.value !== null; }
+
+  /** 現在の手動露出時間の表示用文字列 ("12ms")。active のときだけ呼ぶ。 */
+  valueText() {
+    const ms = this.value / 10;
+    return (ms >= 10 ? Math.round(ms) : ms.toFixed(1)) + "ms";
+  }
+
+  update(stats) {
+    if (!this.range || this._busy) return;
+    if (this._skip > 0) { this._skip--; return; }
+    if (stats.sat >= EXPO_SAT_HIGH) {
+      this._dark = 0;
+      if (this.value === null) this._auto0 = this._currentTime();
+      const cur = this.value !== null ? this.value : this._auto0;
+      const next = Math.max(this.range.min, cur / 2);
+      if (this.value === null || next < this.value) {
+        this._apply({ exposureMode: "manual", exposureTime: next }, next);
+      }
+      return;
+    }
+    if (this.value === null) return;
+    // 下げすぎ、または明るい画面が視野から消えた後の回復。明確に暗すぎる状態が
+    // 続いたら倍々で戻し、介入前の値まで戻ったら自動露出へ返す。明るい画面が
+    // 再び現れれば sat 側の分岐で即座にまた下がるので、発振はしない。
+    this._dark = stats.mean < EXPO_DARK_MEAN && stats.sat < 0.01 ? this._dark + 1 : 0;
+    if (this._dark < EXPO_DARK_TICKS) return;
+    this._dark = 0;
+    const next = this.value * 2;
+    if (next >= this._auto0) this._apply({ exposureMode: "continuous" }, null);
+    else this._apply({ exposureMode: "manual", exposureTime: next }, next);
+  }
+
+  _currentTime() {
+    const s = this.track.getSettings ? this.track.getSettings() : {};
+    return s.exposureTime || Math.sqrt(this.range.min * this.range.max);
+  }
+
+  _apply(constraints, value) {
+    this.value = value;
+    this._busy = true;
+    this._skip = 1;
+    const done = () => { this._busy = false; };
+    this.track.applyConstraints(constraints).then(done, () => {
+      // getCapabilities が対応を謳っていても実機で失敗するなら、以後は触らない
+      this.range = null;
+      this.value = null;
+      done();
+    });
+  }
+}
+
 /** カメラの実設定を "Integrated Webcam · 1280×720 @30fps" 形式で返す。 */
 export function cameraInfoText(stream) {
   const track = stream && stream.getVideoTracks()[0];
@@ -138,12 +218,15 @@ export function cameraInfoText(stream) {
   return `${track.label || "カメラ"} · ${s.width || "?"}×${s.height || "?"}${fps}${warn}`;
 }
 
-/** 明るさの実測を "明るさ 118 (飽和 2%)" 形式で返す。 */
-export function lumaText(stats) {
+/** 明るさの実測を "明るさ 118 (飽和 2%)" 形式で返す。guard (ExposureGuard) を渡すと
+ *  露出の手動調整状態を併記し、非対応カメラで白飛びしたときは対処ヒントを出す。 */
+export function lumaText(stats, guard) {
   const sat = Math.round(stats.sat * 100);
   let note = "";
   if (stats.mean < 60) note = " ⚠暗すぎ";
   else if (sat >= 20) note = " ⚠白飛び";
+  if (guard && guard.active) note += ` · 露出 ${guard.valueText()} (白飛び対策)`;
+  else if (sat >= 20 && guard && !guard.supported) note += " → 送信側の画面輝度を下げてください";
   return `明るさ ${Math.round(stats.mean)} (飽和 ${sat}%)${note}`;
 }
 
