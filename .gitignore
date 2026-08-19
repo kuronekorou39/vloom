@@ -37,8 +37,9 @@ scratch/
 certs/
 client_logs/
 
-# 作業環境の写真 (コミット不要)
+# 作業環境の写真・生成画像 (コミット不要)
 PXL_*.jpg
+Gemini_Generated_Image_*.png
 
 # PC PWA の WASM (CI で wasm-pack ビルド)
 web/pwa/pkg/
