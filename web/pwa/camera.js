@@ -156,10 +156,31 @@ export class ExposureGuard {
     this._skip = 0;     // 設定反映待ちの tick 数 (反映前の映像で再判断しない)
     this._dark = 0;     // 暗すぎ状態の連続 tick 数
     this._busy = false;
+    this._manual = false; // ユーザーが手動露出を選んでいる間は自動制御を止める
   }
 
   get supported() { return this.range !== null; }
   get active() { return this.value !== null; }
+  get manual() { return this._manual; }
+  get min() { return this.range ? this.range.min : 0; }
+  get max() { return this.range ? this.range.max : 0; }
+  /** スライダー初期値用。手動設定中ならその値、なければ現在の自動露出値。 */
+  currentValue() { return this.value !== null ? this.value : this._currentTime(); }
+
+  /** 手動露出に切り替え、露出時間 v を設定する。 */
+  setManual(v) {
+    if (!this.range) return;
+    this._manual = true;
+    const val = Math.max(this.range.min, Math.min(this.range.max, v));
+    this._apply({ exposureMode: "manual", exposureTime: val }, val);
+  }
+
+  /** 自動露出へ戻す (手動モード解除)。 */
+  setAuto() {
+    this._manual = false;
+    this._dark = 0;
+    if (this.value !== null) this._apply({ exposureMode: "continuous" }, null);
+  }
 
   /** 現在の手動露出時間の表示用文字列 ("12ms")。active のときだけ呼ぶ。 */
   valueText() {
@@ -168,7 +189,7 @@ export class ExposureGuard {
   }
 
   update(stats) {
-    if (!this.range || this._busy) return;
+    if (!this.range || this._busy || this._manual) return; // 手動モード中は自動制御しない
     if (this._skip > 0) { this._skip--; return; }
     // 露出を下げるのは「真の白飛び」= 画面全体がほぼ白のときだけ。1bit コードの白セル
     // (半分ほど飽和) を白飛びと誤判定して暗く潰さないよう、平均輝度でも門を切る。

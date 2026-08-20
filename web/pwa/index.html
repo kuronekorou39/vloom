@@ -143,6 +143,16 @@
     #vrxResult:not(:empty) { position: absolute; inset: 0; z-index: 4; overflow: auto; padding: 1.2em;
       background: rgba(8,10,14,0.94); display: flex; flex-direction: column;
       align-items: center; justify-content: center; gap: 0.5em; text-align: center; }
+    /* V受信ステージ下部: 露出コントロールと診断を縦に並べる */
+    #vrxBottom { flex-direction: column; align-items: stretch; gap: 0.4em; }
+    #vrxExpo { display: flex; align-items: center; gap: 0.6em; }
+    #vrxExpo label { color: #fff; white-space: nowrap; }
+    #vrxExpo input[type="range"] { flex: 1; min-width: 6em; }
+    #vrxExpoVal { min-width: 4em; text-align: right; }
+    #vrxExpoNote { font-size: 0.85em; }
+    /* 送信ステージの輝度/モアレ調整 */
+    .txctl { display: inline-flex; align-items: center; gap: 0.4em; color: var(--text); font-size: 0.9em; }
+    .txctl input[type="range"] { width: 6em; }
   </style>
 </head>
 <body>
@@ -323,6 +333,8 @@
   <div id="txStage">
     <canvas id="txCanvas" width="1080" height="1080"></canvas>
     <div id="txBar">
+      <label class="txctl">輝度 <input type="range" id="txBright" min="30" max="100" value="100" /></label>
+      <label class="txctl">モアレ <input type="range" id="txBlur" min="0" max="3" step="0.5" value="0" /></label>
       <div class="grow" id="txStatus"></div>
       <button id="txStop" class="secondary">停止</button>
     </div>
@@ -336,6 +348,12 @@
       <button id="vrxStop" class="secondary">停止</button>
     </div>
     <div id="vrxBottom" class="scanbar">
+      <div id="vrxExpo" hidden>
+        <label><input type="checkbox" id="vrxExpoAuto" checked /> 自動露出</label>
+        <input type="range" id="vrxExpoRange" disabled />
+        <span id="vrxExpoVal" class="muted"></span>
+      </div>
+      <div id="vrxExpoNote" class="muted" hidden>この端末は手動露出に非対応です (送信側の輝度で調整してください)</div>
       <div id="vrxDiag" class="diag"></div>
     </div>
     <div id="vrxResult"></div>

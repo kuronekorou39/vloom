@@ -83,6 +83,18 @@ function fitTxCanvas() {
 }
 window.addEventListener("resize", fitTxCanvas);
 
+// 送信の輝度/モアレ調整。QR・vcode とも同じ #txCanvas に描くので、キャンバスへの
+// CSS フィルタ一つで両方に効く。輝度=白レベルを下げて受信側の白飛びを抑える。
+// モアレ=軽いぼかしで表示グリッドとカメラ画素の干渉縞を減らす (格子を粗くするのも有効)。
+function applyTxFilter() {
+  const b = (parseInt($("txBright").value) || 100) / 100;
+  const blur = parseFloat($("txBlur").value) || 0;
+  $("txCanvas").style.filter = `brightness(${b}) blur(${blur}px)`;
+}
+$("txBright").addEventListener("input", applyTxFilter);
+$("txBlur").addEventListener("input", applyTxFilter);
+applyTxFilter();
+
 $("txStart").addEventListener("click", async () => {
   let file = $("txFile").files[0];
   if (!file) {
@@ -258,6 +270,7 @@ $("vrxStart").addEventListener("click", async () => {
   try {
     await vcodeReceiver.start(vrxPicker.deviceId, $("vrxGrid").value);
     vrxPicker.refresh(streamDeviceId(vcodeReceiver.stream)); // 許可後はデバイス名が取れるので一覧を更新
+    setupVrxExpo(); // 露出コントロールを対応状況に合わせて出す
     $("vrxStart").disabled = true;
     $("vrxStop").disabled = false;
   } catch (e) {
@@ -272,6 +285,43 @@ $("vrxStop").addEventListener("click", () => {
   $("vrxStage").classList.remove("active");
   $("vrxStart").disabled = false;
   $("vrxStop").disabled = true;
+});
+
+// V受信の手動露出。露出制御対応カメラでのみスライダーを出す (スマホ Chrome は非対応が
+// 多く、その場合は非対応の注記を出す)。手動中は自動制御 (白飛び対策) を止める。
+const vrxExpoAuto = $("vrxExpoAuto"), vrxExpoRange = $("vrxExpoRange"), vrxExpoVal = $("vrxExpoVal");
+function setupVrxExpo() {
+  const g = vcodeReceiver.exposure;
+  const ok = g && g.supported;
+  $("vrxExpo").hidden = !ok;
+  $("vrxExpoNote").hidden = ok;
+  if (!ok) return;
+  vrxExpoRange.min = g.min;
+  vrxExpoRange.max = g.max;
+  vrxExpoRange.step = Math.max(1, Math.round((g.max - g.min) / 100));
+  vrxExpoRange.value = g.currentValue();
+  vrxExpoAuto.checked = true;
+  vrxExpoRange.disabled = true;
+  vrxExpoVal.textContent = "";
+}
+vrxExpoAuto.addEventListener("change", () => {
+  const g = vcodeReceiver.exposure;
+  if (!g) return;
+  if (vrxExpoAuto.checked) {
+    g.setAuto();
+    vrxExpoRange.disabled = true;
+    vrxExpoVal.textContent = "";
+  } else {
+    vrxExpoRange.disabled = false;
+    g.setManual(parseInt(vrxExpoRange.value));
+    vrxExpoVal.textContent = g.valueText();
+  }
+});
+vrxExpoRange.addEventListener("input", () => {
+  const g = vcodeReceiver.exposure;
+  if (!g || vrxExpoAuto.checked) return;
+  g.setManual(parseInt(vrxExpoRange.value));
+  vrxExpoVal.textContent = g.valueText();
 });
 
 // ---- 起動 ----
