@@ -161,8 +161,9 @@ export class VcodeReceiver {
   _ensureGuide() {
     if (this.guideEl || !this.video.parentElement) return;
     const el = document.createElement("div");
+    // z-index は映像 (#vrxVideo は z-index:1) より上に。無いと枠が映像の下に潜って見えない。
     el.style.cssText =
-      "position:absolute;box-sizing:border-box;pointer-events:none;border:3px solid #f59e0b;" +
+      "position:absolute;z-index:2;box-sizing:border-box;pointer-events:none;border:3px solid #f59e0b;" +
       "border-radius:6px;box-shadow:0 0 0 9999px rgba(0,0,0,0.28);transition:border-color .12s;";
     this.video.parentElement.appendChild(el);
     this.guideEl = el;
