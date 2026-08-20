@@ -21,76 +21,109 @@
     }, true);
   </script>
   <style>
-    :root { color-scheme: dark; }
+    :root {
+      color-scheme: dark;
+      --bg: #111318; --surface: #1a1d24; --surface-2: #22262f; --hover: #2c313b;
+      --line: #2a2e37; --field: #0e1015;
+      --text: #e6e6e6; --muted: #9aa0aa; --label: #b8bec8;
+      --accent: #5b8cff; --accent-hover: #6f9bff;
+      --ok: #5ad17a; --ng: #f2777a; --radius: 8px;
+    }
+    * { box-sizing: border-box; }
     body {
       margin: 0; font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
-      background: #111318; color: #e6e6e6;
+      background: var(--bg); color: var(--text); line-height: 1.5;
     }
-    header { padding: 0.6em 1em; background: #1a1d24; border-bottom: 1px solid #2a2e37;
-      display: flex; align-items: center; gap: 1em; flex-wrap: wrap; }
-    header h1 { margin: 0; font-size: 1.05em; }
-    #coreStatus { font-size: 0.85em; }
-    nav { display: flex; gap: 0.4em; }
-    nav button { background: #333842; color: #e6e6e6; border: none; border-radius: 6px;
-      padding: 0.45em 1em; font-size: 0.95em; cursor: pointer; }
-    nav button.active { background: #5b8cff; color: #fff; }
-    main { padding: 1em; max-width: 1000px; margin: 0 auto; }
+    header { padding: 0.7em 1.1em; background: var(--surface); border-bottom: 1px solid var(--line);
+      display: flex; align-items: center; gap: 0.7em 1.2em; flex-wrap: wrap; }
+    header h1 { margin: 0; font-size: 1.05em; font-weight: 600; }
+    nav { display: flex; gap: 0.35em; flex-wrap: wrap; }
+    nav button { background: var(--surface-2); color: var(--text); border: none; border-radius: 6px;
+      padding: 0.45em 1em; font-size: 0.95em; cursor: pointer; transition: background 0.12s; }
+    nav button:hover { background: var(--hover); }
+    nav button.active { background: var(--accent); color: #fff; }
+    #coreStatus { font-size: 0.85em; margin-left: auto; display: inline-flex; align-items: center; gap: 0.45em; }
+    #coreStatus::before { content: ""; width: 8px; height: 8px; border-radius: 50%;
+      background: var(--muted); flex: none; }
+    #coreStatus.ok::before { background: var(--ok); }
+    #coreStatus.ng::before { background: var(--ng); }
+    main { padding: 1em; max-width: 860px; margin: 0 auto; }
     .pane { display: none; }
     .pane.active { display: block; }
-    .card { background: #1a1d24; border: 1px solid #2a2e37; border-radius: 8px; padding: 1em; margin: 0.8em 0; }
-    .row { display: flex; gap: 0.8em; align-items: center; flex-wrap: wrap; margin: 0.5em 0; }
-    .ok { color: #5ad17a; } .ng { color: #f2777a; } .muted { color: #9aa0aa; }
-    button { background: #5b8cff; color: #fff; border: none; border-radius: 6px;
-      padding: 0.55em 1.1em; font-size: 1em; cursor: pointer; }
-    button.secondary { background: #333842; }
+    .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+      padding: 1em 1.1em; margin: 0.8em 0; }
+    .row { display: flex; gap: 0.8em; align-items: center; flex-wrap: wrap; margin: 0.6em 0; }
+    .row:first-child { margin-top: 0; } .row:last-child { margin-bottom: 0; }
+    .ok { color: var(--ok); } .ng { color: var(--ng); } .muted { color: var(--muted); }
+    button { background: var(--accent); color: #fff; border: none; border-radius: 6px;
+      padding: 0.55em 1.1em; font-size: 1em; cursor: pointer; transition: background 0.12s; }
+    button:hover:not(:disabled) { background: var(--accent-hover); }
+    button.secondary { background: var(--surface-2); }
+    button.secondary:hover:not(:disabled) { background: var(--hover); }
     button:disabled { background: #262a31; color: #6a707a; cursor: default; }
-    select, input[type="number"] { background: #0e1015; color: #e6e6e6; border: 1px solid #2a2e37;
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    select, input[type="number"] { background: var(--field); color: var(--text); border: 1px solid var(--line);
       border-radius: 6px; padding: 0.4em 0.5em; font-size: 1em; }
-    label { font-size: 0.9em; color: #b8bec8; }
+    label { font-size: 0.9em; color: var(--label); display: inline-flex; align-items: center; gap: 0.4em; }
+    /* ファイル選択 (ネイティブ既定の不揃いな見た目を整える) */
+    input[type="file"] { color: var(--muted); font-size: 0.9em; max-width: 100%; }
+    input[type="file"]::file-selector-button { background: var(--surface-2); color: var(--text);
+      border: 1px solid var(--line); border-radius: 6px; padding: 0.45em 0.9em; margin-right: 0.7em;
+      font-size: 0.95em; cursor: pointer; transition: background 0.12s; }
+    input[type="file"]::file-selector-button:hover { background: var(--hover); }
     /* 送信ステージ: QR を白背景で大きく表示 */
     #txStage { display: none; position: fixed; inset: 0; background: #fff; z-index: 50;
       flex-direction: column; align-items: center; justify-content: center; }
     #txCanvas { image-rendering: pixelated; background: #fff; }
     #txBar { position: fixed; left: 0; right: 0; bottom: 0; background: rgba(20,22,28,0.92);
-      color: #e6e6e6; padding: 0.5em 1em; display: flex; gap: 1em; align-items: center; }
+      color: var(--text); padding: 0.5em 1em; display: flex; gap: 1em; align-items: center; }
     #txBar .grow { flex: 1; font-size: 0.9em; }
-    /* 受信 */
-    #rxVideoWrap, #vrxVideoWrap { position: relative; background: #000; border-radius: 8px;
-      overflow: hidden; max-width: 720px; }
-    #rxVideo, #vrxVideo { width: 100%; display: block; }
-    progress { width: 100%; height: 10px; }
-    /* カメラ実測の診断 (どのカメラ / 実解像度 / fps / 明るさ / px per セル) */
-    .diag { white-space: pre-line; font-size: 0.8em; color: #9aa0aa; line-height: 1.6;
-      margin-top: 0.5em; }
+    /* 受信: カメラ映像。開始前後で高さが変わらないよう 4:3 の枠を確保し、映像は
+       中身を歪めず枠内に収める (縦横比が違うカメラは上下に黒帯)。開始前は「停止中」。 */
+    #rxVideoWrap, #vrxVideoWrap, #calRxWrap { position: relative; background: #000;
+      border-radius: var(--radius); overflow: hidden; max-width: 600px;
+      aspect-ratio: 4 / 3; display: grid; place-items: center; }
+    #rxVideoWrap::after, #vrxVideoWrap::after, #calRxWrap::after { content: "カメラ停止中";
+      position: absolute; inset: 0; z-index: 0; display: grid; place-items: center;
+      color: #59606b; font-size: 0.9em; }
+    #rxVideo, #vrxVideo, #calVideo { position: relative; z-index: 1;
+      width: 100%; height: auto; display: block; }
+    progress { width: 100%; height: 10px; border: none; border-radius: 5px; overflow: hidden;
+      background: var(--field); }
+    progress::-webkit-progress-bar { background: var(--field); }
+    progress::-webkit-progress-value { background: var(--accent); }
+    progress::-moz-progress-bar { background: var(--accent); }
+    /* カメラ実測の診断 (どのカメラ / 実解像度 / fps / 明るさ / px per セル)。
+       行数が増えても下の要素が飛ばないよう最小高さを確保する。 */
+    .diag { white-space: pre-line; font-size: 0.8em; color: var(--muted); line-height: 1.6;
+      margin-top: 0.5em; min-height: 2.6em; }
     .camsel { max-width: 22em; }
     /* 受信完了時の計測値 */
     .stats { border-collapse: collapse; margin: 0.6em 0; font-size: 0.9em; }
-    .stats th { text-align: left; font-weight: 400; color: #9aa0aa; padding: 3px 12px 3px 0; }
+    .stats th { text-align: left; font-weight: 400; color: var(--muted); padding: 3px 12px 3px 0; }
     .stats td { font-weight: 600; padding: 3px 0; }
-    textarea { width: 100%; box-sizing: border-box; background: #0e1015; color: #e6e6e6;
-      border: 1px solid #2a2e37; border-radius: 6px; padding: 0.5em; font-size: 1em;
+    textarea { width: 100%; box-sizing: border-box; background: var(--field); color: var(--text);
+      border: 1px solid var(--line); border-radius: 6px; padding: 0.5em; font-size: 1em;
       font-family: inherit; resize: vertical; }
     /* セグメント切替 (校正) */
-    .seg { display: inline-flex; border: 1px solid #2a2e37; border-radius: 8px; overflow: hidden; }
+    .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
     .seg button { background: #262a31; border: none; color: #cfd3da; padding: 0.45em 0.9em;
-      font-size: 0.95em; cursor: pointer; border-radius: 0; }
-    .seg button.active { background: #5b8cff; color: #fff; }
+      font-size: 0.95em; cursor: pointer; border-radius: 0; transition: background 0.12s; }
+    .seg button:hover { background: var(--hover); }
+    .seg button.active { background: var(--accent); color: #fff; }
     /* 校正: レベル判定チップ */
     #calChips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0.6em 0; }
-    .chip { background: #262a31; border: 1px solid #2a2e37; border-radius: 14px;
-      padding: 0.2em 0.7em; font-size: 0.85em; color: #9aa0aa; }
-    .chip.ok { color: #5ad17a; border-color: #2e6b3f; }
+    .chip { background: #262a31; border: 1px solid var(--line); border-radius: 14px;
+      padding: 0.2em 0.7em; font-size: 0.85em; color: var(--muted); }
+    .chip.ok { color: var(--ok); border-color: #2e6b3f; }
     /* 校正: 全画面テストパターン表示 */
     #calStage { display: none; position: fixed; inset: 0; background: #fff; z-index: 60;
       flex-direction: column; align-items: center; justify-content: center; }
     #calCanvas { image-rendering: pixelated; background: #fff; max-width: 100vmin; max-height: 90vh; }
     #calBar { position: fixed; left: 0; right: 0; bottom: 0; background: rgba(20,22,28,0.92);
-      color: #e6e6e6; padding: 0.5em 1em; display: flex; gap: 0.8em; align-items: center; }
+      color: var(--text); padding: 0.5em 1em; display: flex; gap: 0.8em; align-items: center; }
     #calBar .grow { flex: 1; }
     #calBar #calLabel { font-size: 1em; }
-    #calRxWrap { position: relative; background: #000; border-radius: 8px; overflow: hidden;
-      max-width: 720px; }
-    #calVideo { width: 100%; display: block; }
   </style>
 </head>
 <body>

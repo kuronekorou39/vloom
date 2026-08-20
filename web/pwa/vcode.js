@@ -178,9 +178,12 @@ export class VcodeReceiver {
     const ASPECT = 132 / 140; // 高さ/幅 (V1_DENSE 相当。V0=92/100 とほぼ同じ)
     const side = Math.min(vw, vh);
     const bw = side * VCODE_GUIDE_FRAC, bh = bw * ASPECT;
+    // 映像は枠 (4:3) の中央に置かれ、縦横比が違うカメラでは上下/左右に黒帯が入る。
+    // ガイドは枠基準の絶対配置なので、映像自身のオフセットを足して中身に重ねる。
+    const ox = this.video.offsetLeft, oy = this.video.offsetTop;
     const s = this.guideEl.style;
     s.width = `${bw}px`; s.height = `${bh}px`;
-    s.left = `${(vw - bw) / 2}px`; s.top = `${(vh - bh) / 2}px`;
+    s.left = `${ox + (vw - bw) / 2}px`; s.top = `${oy + (vh - bh) / 2}px`;
   }
 
   _setGuideLocked(locked) {
