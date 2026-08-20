@@ -129,9 +129,12 @@ export class ScanStats {
 }
 
 // ExposureGuard の判定値。sat / mean は ScanStats の間引きサンプルの実測比・平均。
-const EXPO_SAT_HIGH = 0.08;  // 飽和画素がこれ以上なら露出を半減する
-const EXPO_DARK_MEAN = 25;   // 平均輝度がこれ未満 = 明確に暗すぎ (警告閾値 60 より大幅に下)
-const EXPO_DARK_TICKS = 4;   // ↑が連続 (500ms × 4) したら露出を倍に戻す
+// 注意: 1bit コード (白黒) は白セルが半分ほど 250 超になり sat≈0.5 が正常。飽和が多い
+// だけでは白飛びと見なせないので、平均輝度も高い「画面全体がほぼ白」のときだけ下げる。
+const EXPO_WHITEOUT_SAT = 0.7;   // 飽和画素がこの割合を超え、かつ↓も満たせば真の白飛び
+const EXPO_WHITEOUT_MEAN = 200;  // 平均輝度がこれ以上 = 画面全体が白く飛んでいる
+const EXPO_RECOVER_MEAN = 130;   // 平均がこれ未満に下がったら (明るい対象が外れた) 露出を戻す
+const EXPO_RECOVER_TICKS = 3;    // ↑が連続 (500ms × 3) したら露出を倍に戻す
 
 /**
  * 白飛びをカメラ露出で解消するコントローラ。部屋より明るいスマホ画面を写すと、
@@ -167,7 +170,9 @@ export class ExposureGuard {
   update(stats) {
     if (!this.range || this._busy) return;
     if (this._skip > 0) { this._skip--; return; }
-    if (stats.sat >= EXPO_SAT_HIGH) {
+    // 露出を下げるのは「真の白飛び」= 画面全体がほぼ白のときだけ。1bit コードの白セル
+    // (半分ほど飽和) を白飛びと誤判定して暗く潰さないよう、平均輝度でも門を切る。
+    if (stats.sat >= EXPO_WHITEOUT_SAT && stats.mean >= EXPO_WHITEOUT_MEAN) {
       this._dark = 0;
       if (this.value === null) this._auto0 = this._currentTime();
       const cur = this.value !== null ? this.value : this._auto0;
@@ -177,12 +182,11 @@ export class ExposureGuard {
       }
       return;
     }
-    if (this.value === null) return;
-    // 下げすぎ、または明るい画面が視野から消えた後の回復。明確に暗すぎる状態が
-    // 続いたら倍々で戻し、介入前の値まで戻ったら自動露出へ返す。明るい画面が
-    // 再び現れれば sat 側の分岐で即座にまた下がるので、発振はしない。
-    this._dark = stats.mean < EXPO_DARK_MEAN && stats.sat < 0.01 ? this._dark + 1 : 0;
-    if (this._dark < EXPO_DARK_TICKS) return;
+    if (this.value === null) return; // 介入していなければ自動露出のまま (通常はここ)
+    // 明るい対象が視野から外れて暗くなったら、下げていた露出を倍々で戻し、介入前の値まで
+    // 戻ったら自動露出へ返す。白飛びが再発すれば上の分岐で即下がるので発振しない。
+    this._dark = stats.mean < EXPO_RECOVER_MEAN ? this._dark + 1 : 0;
+    if (this._dark < EXPO_RECOVER_TICKS) return;
     this._dark = 0;
     const next = this.value * 2;
     if (next >= this._auto0) this._apply({ exposureMode: "continuous" }, null);
@@ -223,10 +227,11 @@ export function cameraInfoText(stream) {
 export function lumaText(stats, guard) {
   const sat = Math.round(stats.sat * 100);
   let note = "";
+  // 1bit コードは白セルで飽和 50% 前後が正常。真の白飛び (ほぼ全面が白) のみ警告する。
   if (stats.mean < 60) note = " ⚠暗すぎ";
-  else if (sat >= 20) note = " ⚠白飛び";
+  else if (sat >= 70) note = " ⚠白飛び";
   if (guard && guard.active) note += ` · 露出 ${guard.valueText()} (白飛び対策)`;
-  else if (sat >= 20 && guard && !guard.supported) note += " → 送信側の画面輝度を下げてください";
+  else if (sat >= 70 && guard && !guard.supported) note += " → 送信側の画面輝度を下げてください";
   return `明るさ ${Math.round(stats.mean)} (飽和 ${sat}%)${note}`;
 }
 
