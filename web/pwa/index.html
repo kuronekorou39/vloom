@@ -124,6 +124,25 @@
       color: var(--text); padding: 0.5em 1em; display: flex; gap: 0.8em; align-items: center; }
     #calBar .grow { flex: 1; }
     #calBar #calLabel { font-size: 1em; }
+    /* V受信ステージ: カメラを画面いっぱいに出し (cover)、状態/操作/診断を上に重ねる */
+    #vrxStage { display: none; position: fixed; inset: 0; z-index: 40; background: #000; }
+    #vrxStage.active { display: block; }
+    #vrxCam { position: absolute; inset: 0; }
+    #vrxStage #vrxVideo { width: 100%; height: 100%; object-fit: cover; }
+    .scanbar { position: absolute; left: 0; right: 0; z-index: 5; display: flex; align-items: center;
+      gap: 0.8em; padding: 0.7em 1em; color: #fff; }
+    #vrxTop { top: 0; justify-content: space-between;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.6), rgba(0,0,0,0));
+      padding-top: max(0.7em, env(safe-area-inset-top)); }
+    #vrxBottom { bottom: 0;
+      background: linear-gradient(to top, rgba(0,0,0,0.6), rgba(0,0,0,0));
+      padding-bottom: max(0.7em, env(safe-area-inset-bottom)); }
+    #vrxStage #vrxInfo { font-size: 0.95em; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
+    #vrxStage .diag { margin: 0; min-height: 0; color: #e6e9ef; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
+    #vrxResult:empty { display: none; }
+    #vrxResult:not(:empty) { position: absolute; inset: 0; z-index: 4; overflow: auto; padding: 1.2em;
+      background: rgba(8,10,14,0.94); display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 0.5em; text-align: center; }
   </style>
 </head>
 <body>
@@ -235,12 +254,9 @@
     </section>
 
     <!-- ============ V受信 (vcode) ============ -->
+    <!-- 開始するとカメラを全画面表示 (#vrxStage)。映像/枠/状態はそちらに置く。 -->
     <section id="paneVRecv" class="pane">
       <div class="card">
-        <div class="row">
-          <button id="vrxStart">カメラ開始</button>
-          <button id="vrxStop" class="secondary" disabled>停止</button>
-        </div>
         <div class="row">
           <label>カメラ: <select id="vrxCamera" class="camsel"></select></label>
           <label>格子:
@@ -252,12 +268,9 @@
               <option value="11x10">11×10</option>
             </select></label>
         </div>
-        <div id="vrxVideoWrap"><video id="vrxVideo" autoplay playsinline muted></video></div>
-        <div style="margin-top:0.6em">
-          <div id="vrxInfo" class="muted">待機中 — 送信側 (スマホ/PC) の vcode に向けてください</div>
-          <div id="vrxDiag" class="diag"></div>
-        </div>
-        <div id="vrxResult"></div>
+        <div class="row"><button id="vrxStart">V受信開始 (全画面)</button></div>
+        <div id="vrxError" class="ng"></div>
+        <div class="muted">カメラを全画面で開きます。送信側の vcode を中央のオレンジ枠に収めてください。</div>
       </div>
     </section>
 
@@ -313,6 +326,19 @@
       <div class="grow" id="txStatus"></div>
       <button id="txStop" class="secondary">停止</button>
     </div>
+  </div>
+
+  <!-- V受信ステージ (全画面カメラ + UI をオーバーレイ) -->
+  <div id="vrxStage">
+    <div id="vrxCam"><video id="vrxVideo" autoplay playsinline muted></video></div>
+    <div id="vrxTop" class="scanbar">
+      <span id="vrxInfo">スキャン中…</span>
+      <button id="vrxStop" class="secondary">停止</button>
+    </div>
+    <div id="vrxBottom" class="scanbar">
+      <div id="vrxDiag" class="diag"></div>
+    </div>
+    <div id="vrxResult"></div>
   </div>
 
   <!-- 校正ステージ (全画面テストパターン表示) -->

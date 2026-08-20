@@ -252,23 +252,26 @@ const vcodeReceiver = new VcodeReceiver({
 });
 $("vrxStart").addEventListener("click", async () => {
   $("vrxResult").innerHTML = "";
+  $("vrxError").textContent = "";
+  $("vrxInfo").textContent = "スキャン中 — 送信側の vcode を枠に収めてください";
+  $("vrxStage").classList.add("active"); // 先に全画面を出す (映像の表示サイズが確定してから走査)
   try {
     await vcodeReceiver.start(vrxPicker.deviceId, $("vrxGrid").value);
     vrxPicker.refresh(streamDeviceId(vcodeReceiver.stream)); // 許可後はデバイス名が取れるので一覧を更新
     $("vrxStart").disabled = true;
     $("vrxStop").disabled = false;
-    $("vrxInfo").textContent = "スキャン中 — 送信側の vcode に向けてください";
   } catch (e) {
-    $("vrxInfo").textContent = "カメラ起動失敗: " + (e && e.message ? e.message : e);
+    $("vrxStage").classList.remove("active");
+    $("vrxError").textContent = "カメラ起動失敗: " + (e && e.message ? e.message : e);
   }
 });
 // 受信中でも格子指定を切り替えられる (総当たり→固定で初回検出が速くなる)
 $("vrxGrid").addEventListener("change", () => vcodeReceiver.setGrid($("vrxGrid").value));
 $("vrxStop").addEventListener("click", () => {
   vcodeReceiver.stop();
+  $("vrxStage").classList.remove("active");
   $("vrxStart").disabled = false;
   $("vrxStop").disabled = true;
-  $("vrxInfo").textContent = "停止しました";
 });
 
 // ---- 起動 ----

@@ -172,19 +172,17 @@ export class VcodeReceiver {
 
   _positionGuide() {
     if (!this.guideEl) return;
-    const vw = this.video.clientWidth, vh = this.video.clientHeight;
-    if (!vw || !vh) return;
-    // scan() は video 画素の中央正方形 (一辺 = min(w,h)) を切り出し、その GUIDE_FRAC 幅 ×
-    // (コード高/幅) の中央ボックスをガイドにする。表示は等倍スケールなので client 座標でも同じ比。
+    // 映像は object-fit:cover で表示領域いっぱいに出す (外側は切れる)。scan() は「画面に
+    // 見えている中央正方形」だけを走査するので、ガイドもその正方形に一致させる。cover では
+    // 見える中央正方形の表示上の一辺は min(表示幅, 表示高) になり、表示領域の中央に来る。
+    const cw = this.video.clientWidth, ch = this.video.clientHeight;
+    if (!cw || !ch) return;
     const ASPECT = 132 / 140; // 高さ/幅 (V1_DENSE 相当。V0=92/100 とほぼ同じ)
-    const side = Math.min(vw, vh);
+    const side = Math.min(cw, ch);
     const bw = side * VCODE_GUIDE_FRAC, bh = bw * ASPECT;
-    // 映像は枠 (4:3) の中央に置かれ、縦横比が違うカメラでは上下/左右に黒帯が入る。
-    // ガイドは枠基準の絶対配置なので、映像自身のオフセットを足して中身に重ねる。
-    const ox = this.video.offsetLeft, oy = this.video.offsetTop;
     const s = this.guideEl.style;
     s.width = `${bw}px`; s.height = `${bh}px`;
-    s.left = `${ox + (vw - bw) / 2}px`; s.top = `${oy + (vh - bh) / 2}px`;
+    s.left = `${(cw - bw) / 2}px`; s.top = `${(ch - bh) / 2}px`;
   }
 
   _setGuideLocked(locked) {
@@ -209,8 +207,14 @@ export class VcodeReceiver {
     this._positionGuide();
     const vw = this.video.videoWidth, vh = this.video.videoHeight;
     if (!vw || !vh) return;
-    // 中央正方形を最大 SCAN_MAX に
-    const crop = Math.min(vw, vh);
+    // cover 表示で画面に見えている中央正方形だけを走査する (表示外に切れている部分は使わない)。
+    // これによりガイド枠 = 走査範囲が一致し、かつ拡大表示のぶん px/セルが上がって検出に有利。
+    const cw = this.video.clientWidth, ch = this.video.clientHeight;
+    let crop = Math.min(vw, vh);
+    if (cw && ch) {
+      const scale = Math.max(cw / vw, ch / vh); // object-fit: cover
+      crop = Math.min(crop, Math.floor(Math.min(cw, ch) / scale));
+    }
     const target = Math.min(SCAN_MAX, crop);
     const cx = (vw - crop) >> 1, cy = (vh - crop) >> 1;
     this.cap.width = target; this.cap.height = target;
