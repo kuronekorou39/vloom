@@ -35,12 +35,13 @@ import zlib
 # vcode フレームフォーマット (docs/vcode_format.md / vcode/src/lib.rs と 1:1)
 # ======================================================================
 
-STRIP_H = 6      # 上下ストリップの高さ (セル)
+STRIP_H = 7      # 上下ストリップの高さ (セル)。較正/ヘッダ 6 行 + セパレータ 1 行
+SEP = 1          # コーナーマーカーと隣接セルの間に置く白セパレータの幅 (セル)
 CORNER = 6       # コーナーマーカーの一辺 (セル)
 BLOCK = 20       # データブロックの一辺 (セル)
 MAGIC = 0xB9     # ヘッダ先頭のマジックバイト
 HEADER_LEN = 24  # ヘッダのシリアライズ長 (CRC-32 込み)
-VERSION = 1      # フォーマットバージョン (v0 とは非互換)
+VERSION = 2      # フォーマットバージョン (v1 とは非互換)
 
 LEVEL_GRAY = (0, 85, 170, 255)  # bpc=2 の輝度 4 値。レベル 0 = 黒
 BLACK, WHITE = 0, 255
@@ -105,7 +106,9 @@ def corner_black(which: str, r: int, c: int) -> bool:
         return False                             # 白抜きリング
     if which == "BL":
         return 2 <= r < 4 and 2 <= c < 4         # 中央 2x2 のみ黒
-    return (r + c) % 2 == 0                      # BR: 市松
+    # BR: 内部の下半分 2 行を黒。市松 (1 セルごとの反転) はコード内で最も空間周波数が
+    # 高く、ピンぼけ・モアレで真っ先に潰れるため v2 で塊に置き換えた。
+    return r >= CORNER // 2
 
 
 def calib_black(r: int, c: int) -> bool:
@@ -164,10 +167,11 @@ def frame_template(grid_w: int, grid_h: int) -> bytearray:
             for c in range(CORNER):
                 cells[row + ocol + c] = BLACK if corner_black(which, r, c) else WHITE
 
-    # 行 0: 上端タイミング行。下ストリップ: 較正パターン (水平スケール誤差の拘束)
-    for r in [0] + list(range(h - STRIP_H, h)):
+    # 行 0: 上端タイミング行。下ストリップ: 較正パターン (水平スケール誤差の拘束)。
+    # セパレータ (ストリップ内側の 1 行と、コーナー隣接列) は誰も塗らないので白のまま残る。
+    for r in [0] + list(range(h - STRIP_H + SEP, h)):
         row = r * w
-        for c in range(CORNER, w - CORNER):
+        for c in range(CORNER + SEP, w - CORNER - SEP):
             cells[row + c] = BLACK if calib_black(r, c) else WHITE
     return cells
 
@@ -178,12 +182,13 @@ def encode_frame(template: bytearray, header: bytes, blocks: list[bytes],
     w, _ = frame_size(grid_w, grid_h)
     cells = bytearray(template)
 
-    # ヘッダ: 行 1..STRIP_H のコーナー間に入るだけコピーを繰り返す (端数は白のまま)
+    # ヘッダ: 行 1..STRIP_H-SEP のコーナー/セパレータ間に入るだけコピーを繰り返す
+    # (端数は白のまま)
     hdr = b"".join(_CELLS_1BPC[b] for b in header)
-    span = w - 2 * CORNER
-    total = (STRIP_H - 1) * span
+    span = w - 2 * (CORNER + SEP)
+    total = (STRIP_H - SEP - 1) * span
     for i in range(total // _HEADER_BITS * _HEADER_BITS):
-        r, c = 1 + i // span, CORNER + i % span
+        r, c = 1 + i // span, CORNER + SEP + i % span
         cells[r * w + c] = hdr[i % _HEADER_BITS]
 
     # データブロック: ペイロード + CRC-32 を行優先で敷き詰める

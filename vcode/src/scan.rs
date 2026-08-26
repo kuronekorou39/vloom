@@ -201,13 +201,14 @@ fn corner_cells(layout: Layout) -> Vec<(usize, usize, bool)> {
 fn known_cells(layout: Layout) -> Vec<(usize, usize, bool)> {
     let (w, h) = (layout.width(), layout.height());
     let mut cells = corner_cells(layout);
-    for c in CORNER..w - CORNER {
-        cells.push((0, c, crate::calib_black(0, c)));
-    }
-    for r in h - STRIP_H..h {
-        for c in CORNER..w - CORNER {
+    for r in crate::calib_rows(h) {
+        for c in crate::strip_cols(w) {
             cells.push((r, c, crate::calib_black(r, c)));
         }
+    }
+    // セパレータ (既知の白)。マーカーの外縁がどこで終わるかを座標降下に教える。
+    for (r, c) in crate::separator_cells(w, h) {
+        cells.push((r, c, false));
     }
     cells
 }
@@ -504,7 +505,7 @@ fn decode_at(
             let mut blk: Vec<Vec<f32>> = vec![Vec::new(); w];
             let mut wht: Vec<Vec<f32>> = vec![Vec::new(); w];
             for &r in rows {
-                for c in CORNER..w - CORNER {
+                for c in crate::strip_cols(w) {
                     let v = sample_raw(r, c, 0.0, 0.0);
                     if crate::calib_black(r, c) {
                         blk[c].push(v);
@@ -516,10 +517,11 @@ fn decode_at(
             let smooth = |acc: &[Vec<f32>]| -> Vec<f32> {
                 (0..w)
                     .map(|c| {
-                        let cc = c.clamp(CORNER, w - CORNER - 1);
+                        let cols = crate::strip_cols(w);
+                        let cc = c.clamp(cols.start, cols.end - 1);
                         for win in [6usize, 16, w] {
-                            let lo = cc.saturating_sub(win).max(CORNER);
-                            let hi = (cc + win + 1).min(w - CORNER);
+                            let lo = cc.saturating_sub(win).max(cols.start);
+                            let hi = (cc + win + 1).min(cols.end);
                             let (mut sum, mut n) = (0.0f32, 0u32);
                             for k in lo..hi {
                                 for &v in &acc[k] {
@@ -538,7 +540,7 @@ fn decode_at(
             (smooth(&blk), smooth(&wht))
         };
         let (black_top, white_top) = estimate(&[0]);
-        let bot_rows: Vec<usize> = (h - STRIP_H..h).collect();
+        let bot_rows: Vec<usize> = (h - STRIP_H + crate::SEP..h).collect();
         let (black_bot, white_bot) = estimate(&bot_rows);
         Some((black_top, white_top, black_bot, white_bot))
     } else {

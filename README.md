@@ -109,6 +109,14 @@ uv sync --group desktop --group dev       # 両方
 ```
 
 `--group desktop` は `py/` の PyO3 クレートを maturin でビルドするので Rust が要ります。
+**Rust コア (`vcode/` や `fountain/`) を変更したときは `--reinstall-package vloom-core` を
+付けてください。** uv のキャッシュキーは `py/` の内容だけを見るため、path 依存の先が
+変わってもキャッシュが無効化されず、古いホイールがそのまま入ります。
+
+```bash
+uv sync --group desktop --reinstall-package vloom-core
+```
+
 `uv sync` は宣言どおりの状態に**揃える**ので、グループを指定し直すと前のグループの
 パッケージは消えます。両方要るときは同時に指定してください。
 

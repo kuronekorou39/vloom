@@ -6,34 +6,47 @@
 //! 設計の柱:
 //!   - フレームは独立した「ブロック」の格子。各ブロックが RaptorQ パケット 1 個 + CRC-32 を持ち、
 //!     部分的に壊れたフレームからも読めたブロックだけ回収できる (全か無かをやめる)
-//!   - 機能パターンは四隅マーカー + 上下ストリップのみ (面積 ~12%、QR の機能パターン+EC より小さい)
+//!   - 機能パターンは四隅マーカー + 上下ストリップのみ (面積 ~13%、QR の機能パターン+EC より小さい)
 //!   - フレーム内 EC は持たない。フレーム欠落・ブロック欠落は上位の fountain (RaptorQ) が吸収する
-//!   - v0 は 1 bit/セル (白黒)。ヘッダに bits_per_cell を持ち、将来の輝度多値化 (2bit) に備える
+//!   - 1 bit/セル (白黒) と 2 bit/セル (輝度 4 値) を持つ。ヘッダの bits_per_cell で切り替える
 //!
-//! フレーム構造 (セル座標、デフォルトレイアウト 100x92):
-//!   - 上ストリップ (行 0..6): 両端に 6x6 コーナーマーカー、間にヘッダ (24 byte、CRC-32 込み) のコピー
-//!   - データ領域 (行 6..86): 20x20 セルのブロックが 5x4 = 20 個。ブロック = 46 byte payload + CRC-32
-//!   - 下ストリップ (行 86..92): 両端にコーナーマーカー、間に市松の較正/タイミングパターン
+//! フレーム構造 (セル座標、デフォルトレイアウト 100x94):
+//!   - 上ストリップ (行 0..7): 両端に 6x6 コーナーマーカー、間にヘッダ (24 byte、CRC-32 込み) の
+//!     コピー。行 6 とコーナー隣接列は白セパレータ
+//!   - データ領域 (行 7..87): 20x20 セルのブロックが 5x4 = 20 個。ブロック = 46 byte payload + CRC-32
+//!   - 下ストリップ (行 87..94): 行 87 が白セパレータ、以降は擬似ランダム較正パターンとコーナー
 //!
-//! v1 でブロック/ヘッダの CRC を 16→32 bit に拡張した。サンプリングオフセットの
-//! リトライ (25 通り) x 長時間受信では CRC-16 の偽陽性 (1/65536) が現実に発生し、
-//! ゴミパケットが RaptorQ を汚染して復元結果全体を壊すため。
+//! バージョン履歴:
+//!   - v1: ブロック/ヘッダの CRC を 16→32 bit に拡張。サンプリングオフセットのリトライ
+//!     (25 通り) x 長時間受信では CRC-16 の偽陽性 (1/65536) が現実に発生し、ゴミパケットが
+//!     RaptorQ を汚染して復元結果全体を壊すため
+//!   - v2: コーナーマーカーの周囲に 1 セルの白セパレータを追加 (STRIP_H 6→7)。また BR の
+//!     内部パターンを市松から下半分 2 行の塊へ変更。実キャプチャでのコーナー一致率が
+//!     TR/BL=1.00 に対し BR だけ 0.67 と突出して低く、市松の 1 セル反転がピンぼけ・モアレで
+//!     真っ先に潰れていたため
 //!
-//! この v0 デコーダは「理想チャネル」(スケール整数倍・歪みなしのビットマップ) を仮定する。
-//! 実カメラ画像からの検出・射影補正・サンプリングは次段で別モジュールとして実装する。
+//! `decode_frame` は「理想チャネル」(スケール整数倍・歪みなしのビットマップ) を仮定する。
+//! 実カメラ画像からの検出・射影補正・サンプリングは `scan` モジュール。
 
 pub mod scan;
 
-/// 上下ストリップの高さ (セル)
-pub const STRIP_H: usize = 6;
+/// 上下ストリップの高さ (セル)。内訳: 較正/ヘッダ 6 行 + セパレータ 1 行。
+pub const STRIP_H: usize = 7;
+/// コーナーマーカーと隣接セルの間に置く白セパレータの幅 (セル)。
+///
+/// マーカーの外周 1 セルは黒なので、隣がデータやヘッダの黒セルだと境界が溶ける。
+/// QR のファインダが同じ理由で 1 モジュールのセパレータを持つ。マーカーの下隣は
+/// 20x20 ブロックの一部で削れないため、ストリップを 1 行増やして確保している。
+pub const SEP: usize = 1;
 /// コーナーマーカーの一辺 (セル)
 pub const CORNER: usize = 6;
 /// ヘッダ先頭のマジックバイト
 pub const MAGIC: u8 = 0xB9;
 /// ヘッダのシリアライズ長 (CRC-32 込み)
 pub const HEADER_LEN: usize = 24;
-/// フォーマットバージョン (v1: CRC を 16→32 bit 化。v0 とは非互換)
-pub const VERSION: u8 = 1;
+/// フォーマットバージョン
+/// (v2: コーナーに白セパレータを追加し、BR の市松を粗いパターンへ。v1 とは非互換)
+pub const VERSION: u8 = 2;
 
 /// CRC-32/ISO-HDLC (init=0xFFFFFFFF, poly=0xEDB88320 反転形, xorout=0xFFFFFFFF)
 pub fn crc32(data: &[u8]) -> u32 {
@@ -262,7 +275,10 @@ pub(crate) fn corner_black(which: Corner, r: usize, c: usize) -> bool {
         Corner::TopLeft => true,                                     // 塗りつぶし
         Corner::TopRight => false,                                   // 白抜きリング
         Corner::BottomLeft => (2..4).contains(&r) && (2..4).contains(&c), // 中央 2x2 のみ黒
-        Corner::BottomRight => (r + c) % 2 == 0,                     // 市松
+        // 下半分 2 行を黒。市松 (1 セルごとの反転) はコード内で最も空間周波数が
+        // 高く、ピンぼけ・モアレで真っ先に潰れる。実測でも BR だけ一致率 0.67 と
+        // 突出して低かったため、4x2 の塊に置き換えて判別力を保ったまま粗くした。
+        Corner::BottomRight => r >= CORNER / 2,
     }
 }
 
@@ -276,9 +292,36 @@ pub(crate) fn corner_origins(w: usize, h: usize) -> [(Corner, usize, usize); 4] 
     ]
 }
 
-/// ヘッダ領域のセルを行優先で列挙 (上ストリップのコーナー間、行 0 のタイミング行を除く)
+/// ストリップ内でヘッダ/較正を書ける列範囲 (コーナーとセパレータを除く)
+pub(crate) fn strip_cols(w: usize) -> std::ops::Range<usize> {
+    CORNER + SEP..w - CORNER - SEP
+}
+
+/// 較正パターンを書く行 (上端タイミング行 + 下ストリップ。セパレータ行は除く)
+pub(crate) fn calib_rows(h: usize) -> impl Iterator<Item = usize> {
+    std::iter::once(0).chain(h - STRIP_H + SEP..h)
+}
+
+/// ヘッダ領域のセルを行優先で列挙 (行 0 のタイミング行とセパレータを除く)
 pub(crate) fn header_cells(w: usize) -> impl Iterator<Item = (usize, usize)> {
-    (1..STRIP_H).flat_map(move |r| (CORNER..w - CORNER).map(move |c| (r, c)))
+    (1..STRIP_H - SEP).flat_map(move |r| strip_cols(w).map(move |c| (r, c)))
+}
+
+/// セパレータのセル (すべて白)。コーナーとデータ/ヘッダの境界を切る。
+/// 位置合わせの既知セルとしても使うので、エンコーダと共有する。
+pub(crate) fn separator_cells(w: usize, h: usize) -> Vec<(usize, usize)> {
+    let mut v = Vec::new();
+    for r in 0..STRIP_H {
+        v.push((r, CORNER));
+        v.push((r, w - CORNER - SEP));
+        v.push((h - 1 - r, CORNER));
+        v.push((h - 1 - r, w - CORNER - SEP));
+    }
+    for c in 0..w {
+        v.push((STRIP_H - SEP, c));
+        v.push((h - STRIP_H, c));
+    }
+    v
 }
 
 /// 較正パターンのセル値 (上端タイミング行と下ストリップで使用)。
@@ -345,8 +388,9 @@ pub fn encode_frame(header: &FrameHeader, blocks: &[Vec<u8>], scale: usize) -> B
         }
     }
 
-    // 上端タイミング行 (行 0、擬似ランダム較正パターン)
-    for c in CORNER..w - CORNER {
+    // 上端タイミング行 (行 0、擬似ランダム較正パターン)。
+    // セパレータのセルは誰も塗らないので白のまま残る。
+    for c in strip_cols(w) {
         bm.fill_cell(scale, 0, c, calib_black(0, c));
     }
 
@@ -361,9 +405,9 @@ pub fn encode_frame(header: &FrameHeader, blocks: &[Vec<u8>], scale: usize) -> B
         }
     }
 
-    // 下ストリップ: 擬似ランダム較正パターン
-    for r in h - STRIP_H..h {
-        for c in CORNER..w - CORNER {
+    // 下ストリップ: 擬似ランダム較正パターン (セパレータ行は白のまま)
+    for r in h - STRIP_H + SEP..h {
+        for c in strip_cols(w) {
             bm.fill_cell(scale, r, c, calib_black(r, c));
         }
     }
@@ -651,13 +695,14 @@ mod tests {
     #[test]
     fn layout_v0_capacity() {
         let l = Layout::V0;
-        assert_eq!((l.width(), l.height()), (100, 92));
+        assert_eq!((l.width(), l.height()), (100, 94));
         assert_eq!(l.block_count(), 20);
         assert_eq!(l.block_bytes(1), 50);
         assert_eq!(l.block_payload_len(1), 46);
         assert_eq!(l.packet_size(1), 42);
-        // ヘッダ領域 = 5 * (100-12) = 440 セル → 24byte*8=192bit が 2 コピー (+56 セル余り)
-        assert_eq!(header_cells(l.width()).count(), 440);
+        // ヘッダ領域 = 5 行 * (100 - コーナー12 - セパレータ2) = 430 セル
+        // → 24byte*8=192bit が 2 コピー (+46 セル余り)
+        assert_eq!(header_cells(l.width()).count(), 430);
     }
 
     #[test]
@@ -696,7 +741,7 @@ mod tests {
         let header = test_header(8);
         let blocks = test_blocks(20, Layout::V0.block_payload_len(1), 0x5A);
         let bm = encode_frame(&header, &blocks, 3);
-        assert_eq!((bm.w, bm.h), (300, 276));
+        assert_eq!((bm.w, bm.h), (300, 282));
         let decoded = decode_frame(&bm, 3).unwrap();
         assert_eq!(decoded.header, header);
         for (i, b) in decoded.blocks.iter().enumerate() {
@@ -726,8 +771,8 @@ mod tests {
         let mut bm = encode_frame(&header, &blocks, 1);
 
         // ブロック格子 (bx,by) = (1..3, 1..3) の 4 ブロックを覆う黒塗り
-        // = セル座標 行 26..66, 列 20..60 (データ領域は行 6 開始)
-        for y in 26..66 {
+        // = セル座標 行 27..67, 列 20..60 (データ領域は STRIP_H=7 行目開始)
+        for y in 27..67 {
             for x in 20..60 {
                 bm.set(x, y, 0);
             }
