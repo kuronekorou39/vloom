@@ -59,7 +59,7 @@ vcode は格子 (5×4 / 7×6 / 9×8 / 11×10) と階調 (1bit / 2bit)、fps を�
 
 - **Rust** (stable) + `wasm-pack` — `cargo install wasm-pack`
 - **Flutter** 3.41+ — ネイティブアプリをビルドする場合
-- **Python 3.10+** — 開発用 HTTPS サーバと CLI の vcode エンコーダ
+- **[uv](https://docs.astral.sh/uv/)** — Python 側 (デスクトップアプリ・開発スクリプト) の環境管理
 
 ### ビルドとテスト
 
@@ -76,14 +76,32 @@ flutter build apk --release     # Android
 
 `web/pwa/pkg/` は git 管理外なので、クローン直後は必ず WASM ビルドが要ります。
 
+### Python 環境 (uv)
+
+Python 側は uv で管理しています。用途ごとに依存グループを分けてあり、既定では何も
+入りません (`tools/vcode_encode.py` は標準ライブラリだけで動くため)。
+
+```bash
+uv sync                                   # 素の環境 (CLI エンコーダ用)
+uv sync --group desktop                   # デスクトップ送信アプリ (要 Rust)
+uv sync --group dev                       # 開発スクリプト (Pillow / cryptography)
+uv sync --group desktop --group dev       # 両方
+```
+
+`--group desktop` は `py/` の PyO3 クレートを maturin でビルドするので Rust が要ります。
+`uv sync` は宣言どおりの状態に**揃える**ので、グループを指定し直すと前のグループの
+パッケージは消えます。両方要るときは同時に指定してください。
+
+既に `.venv` がある場合、`uv sync` はそこに対して同期します。宣言に無いパッケージは
+削除されるので、別環境で試すなら `UV_PROJECT_ENVIRONMENT` を指定してください。
+
 ### PWA を実機で試す
 
 カメラ API (`getUserMedia`) は HTTPS または localhost でしか動きません。スマホから開くには HTTPS が
 必要なので、自己署名証明書付きの開発サーバーを同梱しています。
 
 ```bash
-pip install cryptography
-python web/pwa/serve_https.py
+uv run --group dev python web/pwa/serve_https.py
 ```
 
 PC とスマホを同じ Wi-Fi に繋ぎ、表示された `https://<PC の IP>:8443/` を開きます。証明書警告は
@@ -95,11 +113,12 @@ PC を送信機として使うだけなら、ブラウザより表示タイミ�
 あります。符号化は Rust コアをそのまま呼ぶので、出るフレームは PWA と同一です。
 
 ```bash
-pip install maturin
-maturin develop --release -m py/Cargo.toml   # Rust コアを Python 拡張として入れる
-pip install -r desktop/requirements.txt
-python -m desktop
+uv sync --group desktop     # PySide6 + Rust コア (py/) をビルドして入れる
+uv run python -m desktop
 ```
+
+uv を使わない場合は `pip install pyside6 maturin && maturin develop --release -m py/Cargo.toml`
+でも同じ状態になります。
 
 ファイルを選んで「送信開始」で全画面表示に入ります。全画面中は輝度とスムージングを
 その場で調整でき、Esc で戻ります。受信は入れていません (PC の内蔵カメラは 720p 級が
@@ -115,8 +134,10 @@ python -m desktop
 ライブラリだけで動くので追加インストールは要りません。
 
 ```bash
-python tools/vcode_encode.py photo.jpg --grid 9x8 --bpc 2 --fps 15
+uv run python tools/vcode_encode.py photo.jpg --grid 9x8 --bpc 2 --fps 15
 ```
+
+標準ライブラリだけで動くので、uv を通さず `python tools/vcode_encode.py ...` でも構いません。
 
 `photo_vcode/` に PNG のフレーム列と `index.html` が出ます。HTML をブラウザで開き、クリックで
 全画面にすればそのまま「受信」で受け取れます。送信側の `VcodeTx` とバイト単位で同じ

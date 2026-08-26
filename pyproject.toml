@@ -1,0 +1,26 @@
+[project]
+name = "vloom"
+version = "0.4.0"
+description = "光だけでファイルを渡す — Python ツールとデスクトップ送信アプリ"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+# 素の状態では依存なし。tools/vcode_encode.py は標準ライブラリだけで動く。
+dependencies = []
+
+[dependency-groups]
+# デスクトップ送信アプリ (desktop/)。vloom-core は py/ の PyO3 クレートを
+# maturin でビルドするので、このグループを入れるときだけ Rust が要る。
+desktop = ["vloom-core", "pyside6>=6.6"]
+# 開発用スクリプト: tools/make_testdata.py と web/pwa/serve_https.py
+dev = ["pillow>=10", "cryptography>=42"]
+
+[tool.uv]
+# リポジトリ自体はライブラリとして配布しないので、インストール対象にしない。
+# スクリプトは uv run python ... で直接叩く。
+package = false
+# 既定では何も入れない。用途に応じて --group desktop / --group dev を付ける。
+default-groups = []
+
+[tool.uv.sources]
+vloom-core = { path = "py", editable = true }

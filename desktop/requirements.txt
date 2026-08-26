@@ -1,5 +1,0 @@
-# デスクトップ送信アプリの依存。
-# vloom-core は py/ の PyO3 クレートから自前でビルドする (下記):
-#     pip install maturin
-#     maturin develop --release -m py/Cargo.toml
-PySide6>=6.6

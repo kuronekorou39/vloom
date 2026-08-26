@@ -113,6 +113,8 @@ Qt の `PreciseTimer` を使い、デッドラインを積み上げてドリフ�
 | `app.py` | 設定画面 (ファイル/テキスト・格子・階調・fps・リペア率・表示先モニタ) |
 | `sender.py` | 全画面ステージ。フレームループ、輝度調整、スムージング切替 |
 
+起動は `uv sync --group desktop` の後 `uv run python -m desktop`。
+
 輝度調整は画素を触らず `QImage` のカラーテーブル (256 エントリ) を差し替えるだけなので、
 フレームごとの追加コストがない。送信中は `SetThreadExecutionState` でディスプレイの
 消灯を止める (Windows のみ)。
@@ -120,13 +122,29 @@ Qt の `PreciseTimer` を使い、デッドラインを積み上げてドリフ�
 受信は入れていない。PC の内蔵カメラは 720p 級が多く、vcode の目安である 6px/セル を
 満たせないため、受信はスマホの方が現実的なため。
 
-## Python (開発用)
+## Python 環境 (uv)
 
-| | 用途 | 依存 |
+Python 側は uv で一元管理する。ルートの `pyproject.toml` に依存グループを定義し、
+`uv.lock` で固定している。`package = false` にしてあるのでリポジトリ自体はインストール
+されない (ライブラリとして配布しないため)。スクリプトは `uv run python ...` で直接叩く。
+
+| グループ | 中身 | 用途 |
 |---|---|---|
-| `tools/vcode_encode.py` | ファイル → vcode フレーム列 (PNG + 再生 HTML) | **標準ライブラリのみ** |
-| `tools/make_testdata.py` | 計測用テスト画像の生成 | Pillow |
-| `web/pwa/serve_https.py` | 開発用 HTTPS サーバ (実機は HTTPS でないとカメラが開かない) | cryptography |
+| (既定) | 依存なし | `tools/vcode_encode.py` は標準ライブラリだけで動く |
+| `desktop` | `vloom-core` (= `py/`) + PySide6 | デスクトップ送信アプリ。**Rust が要る** |
+| `dev` | Pillow, cryptography | `tools/make_testdata.py`, `web/pwa/serve_https.py` |
+
+`vloom-core` は `[tool.uv.sources]` で `py/` を editable 指定しているので、`uv sync` が
+maturin を呼んで Rust 拡張をビルドする。手で `maturin develop` を打つ必要はない。
+
+`uv sync` は宣言どおりの状態に揃える (宣言外のパッケージは消す) ので、複数グループが
+要るときは `uv sync --group desktop --group dev` のように同時指定する。
+
+| スクリプト | 用途 | 必要グループ |
+|---|---|---|
+| `tools/vcode_encode.py` | ファイル → vcode フレーム列 (PNG + 再生 HTML) | なし |
+| `tools/make_testdata.py` | 計測用テスト画像の生成 | `dev` |
+| `web/pwa/serve_https.py` | 開発用 HTTPS サーバ (実機は HTTPS でないとカメラが開かない) | `dev` |
 
 `tools/vcode_encode.py` だけは Rust に依存しない独立実装で、RaptorQ の source パケットを
 純 Python で組み立てる (リペアパケットは持たない)。Rust の `encode_frame` とバイト単位で
