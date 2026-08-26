@@ -157,8 +157,22 @@ class SenderWindow(QWidget):
         self._table = [0xFF000000 | (int(v * b) * 0x010101) for v in range(256)]
         self._draw(self.index)
 
-    def _draw(self, i: int) -> None:
-        gray = self.tx.frame_gray(i % self.frame_count)
+    def _frame_arg(self, slot: int) -> int:
+        """スロット番号 → VcodeTx に渡すフレーム番号。
+
+        パケットは frame_gray(i) の中で (i * ブロック数 + j) mod パケット総数 に
+        割り当てられる。i をそのまま 0..frame_count-1 で回すと、毎巡まったく同じ
+        パケットが同じスロットに並ぶ。送信 fps とカメラの取り込み位相がビートして
+        特定スロットを構造的に取りこぼすと、そのパケットは何巡しても入らない。
+
+        巡ごとに 1 つ余分に進めることで、同じスロットが毎巡ちがうパケット群を運ぶ。
+        受信側は「ヘッダとブロックが読めれば何でもよい」ので、送信側だけの変更で
+        互換性は保たれる。
+        """
+        return slot + self.pass_no - 1
+
+    def _draw(self, slot: int) -> None:
+        gray = self.tx.frame_gray(self._frame_arg(slot))
         self.view.set_frame(gray, self.tx.frame_width, self.tx.frame_height, self._table)
 
     def _tick(self) -> None:

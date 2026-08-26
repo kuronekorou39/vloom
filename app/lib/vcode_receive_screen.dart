@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
@@ -102,6 +103,11 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   int _framesTracked = 0;
   int _blocksOk = 0;
   int _packetsAdded = 0;
+  /// 検出フレーム 1 枚あたりの回収ブロック数の分布 (0 / ~25% / ~50% / ~75% / ~99% / 100%)。
+  /// 二極化 (0 と満点だけ) ならローリングシャッターや残像による時間方向の混入、
+  /// 中間に散るなら px/セル・ピント・露出といった空間方向の問題を示す。
+  /// どちらの壁に当たっているかで打ち手が変わるので、切り分けの一次情報として出す。
+  final List<int> _blockHist = List<int>.filled(6, 0);
   // 受信できた ESI (Encoding Symbol ID) の集合。重複を除いた"実データ被覆"。
   // RaptorQ は distinct が必要数 K に届くと復元できる。カバレッジ格子と distinct 数の表示に使う。
   final Set<int> _seenEsi = {};
@@ -334,6 +340,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         if (report.tracked) _framesTracked++;
         _firstDetected ??= DateTime.now();
         _blocksOk += report.blocksOk;
+        _blockHist[_histBucket(report.blocksOk, report.blocksTotal)]++;
         _dec ??= FountainDecoder(otiBytes: report.oti);
         if (_packetSize == null && report.packets.isNotEmpty) {
           _packetSize = report.packets.first.length - 4;
@@ -570,6 +577,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _seenEsi.clear();
       _packetsAdded = 0;
       _blocksOk = 0;
+      _blockHist.fillRange(0, _blockHist.length, 0);
       _framesSeen = 0;
       _framesDetected = 0;
       _framesTracked = 0;
@@ -630,6 +638,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _framesDetected = 0;
       _framesTracked = 0;
       _blocksOk = 0;
+      _blockHist.fillRange(0, _blockHist.length, 0);
       _packetsAdded = 0;
       _seenEsi.clear();
       _integrityFails = 0;
@@ -763,8 +772,36 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     );
   }
 
-  /// 受信完了時の統計テーブル
-  Widget _statsTable() {
+  /// 回収ブロック数 → ヒストグラムのバケット番号
+  static int _histBucket(int ok, int total) {
+    if (total <= 0 || ok <= 0) return 0;
+    if (ok >= total) return 5;
+    final r = ok / total;
+    if (r < 0.25) return 1;
+    if (r < 0.50) return 2;
+    if (r < 0.75) return 3;
+    return 4;
+  }
+
+  static const _histLabels = ['0', '~25%', '~50%', '~75%', '~99%', '満点'];
+
+  /// ヒストグラムを "0:12 ~25%:3 ... 満点:80" の 1 行にする
+  String _histText() {
+    final total = _blockHist.fold<int>(0, (a, b) => a + b);
+    if (total == 0) return '-';
+    final parts = <String>[];
+    for (var i = 0; i < _blockHist.length; i++) {
+      if (_blockHist[i] > 0) {
+        final pct = (_blockHist[i] * 100 / total).round();
+        parts.add('${_histLabels[i]}:${_blockHist[i]}($pct%)');
+      }
+    }
+    return parts.join('  ');
+  }
+
+  /// 受信完了時の統計。テーブル表示とクリップボードコピーで同じデータを使う
+  /// (条件を振って比べるとき、目視で書き写すと必ず取りこぼすため)。
+  List<(String, String)> _statsRows() {
     final p = _payload!;
     final ms = _elapsed?.inMilliseconds ?? 0;
     final kbps = ms > 0 ? (p.length / 1024) / (ms / 1000) : 0.0;
@@ -782,7 +819,9 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       ('カメラフレーム数', '$_framesSeen (検出 $_framesDetected / 追従 $_framesTracked)'),
       ('カメラ実効fps', _camFps.toStringAsFixed(1)),
       ('回収ブロック', '$_blocksOk (部分回収込み)'),
+      ('　1 枚あたり分布', _histText()),
       ('投入パケット', '$_packetsAdded'),
+      ('distinct パケット', '${_seenEsi.length}'),
       if (_integrityFails > 0) ('整合性エラー再試行', '$_integrityFails 回'),
       ('平均スキャン時間', _scanCount > 0 ? '${(_scanMsSum / _scanCount).round()} ms' : '-'),
       ('　うち回転コピー', _scanCount > 0
@@ -792,6 +831,34 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           ? '${(_decodeUsSum / _scanCount / 1000).toStringAsFixed(1)} ms'
           : '-'),
     ];
+    return rows;
+  }
+
+  /// 計測ログ用にタブ区切りで書き出す。表計算にそのまま貼れる。
+  Future<void> _copyStats() async {
+    // 受信側の設定がプリセットのどれとも一致しない場合、_presetIndex は -1 になる
+    final preset = _presetIndex >= 0 ? kPresets[_presetIndex] : null;
+    final header = <(String, String)>[
+      ('プリセット', preset?.name ?? 'カスタム'),
+      ('格子(受信設定)', _forcedGrid),
+      ('bit/セル', preset != null ? '${preset.bpc}' : '-'),
+      ('送信fps(想定)', preset != null ? '${preset.fps}' : '-'),
+      ('理論スループット',
+          preset != null ? '${preset.theoreticalKbps.toStringAsFixed(1)} KB/s' : '-'),
+    ];
+    final text = [...header, ..._statsRows()]
+        .map((r) => '${r.$1.trim()}\t${r.$2}')
+        .join('\n');
+    await Clipboard.setData(ClipboardData(text: text));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('統計をコピーしました')),
+      );
+    }
+  }
+
+  Widget _statsTable() {
+    final rows = _statsRows();
     return Table(
       columnWidths: const {0: IntrinsicColumnWidth(), 1: FlexColumnWidth()},
       defaultVerticalAlignment: TableCellVerticalAlignment.middle,
@@ -953,6 +1020,13 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                                 icon: const Icon(Icons.share),
                                 label: const Text('共有'),
                               ),
+                            // 条件を振って比べるとき、統計を手で書き写すと必ず抜けるので
+                            // タブ区切りで丸ごとコピーできるようにする
+                            FilledButton.tonalIcon(
+                              onPressed: _copyStats,
+                              icon: const Icon(Icons.copy_all),
+                              label: const Text('統計をコピー'),
+                            ),
                             // 端末に保存する前でも中身を確認できるようにする
                             // (動画・PDF・Office など内蔵表示できない形式向け)
                             FilledButton.tonalIcon(
