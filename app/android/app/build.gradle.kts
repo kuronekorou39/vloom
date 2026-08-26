@@ -33,10 +33,18 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "app.vloom.vloom"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
+        // 計測用ビルドを配布版と併存させるための任意サフィックス。
+        //   flutter build apk --release -PappIdSuffix=.lab
+        // 配布版とは別パッケージになるので、リリース鍵を持たない環境でも
+        // 既存インストール (と受信履歴) を消さずに横に入れられる。
+        // 未指定なら空文字なので通常のビルドには影響しない。
+        val appIdSuffix = (project.findProperty("appIdSuffix") as String?) ?: ""
+        applicationIdSuffix = appIdSuffix
+        // ランチャー上で見分けが付くようにラベルも変える
+        // (マニフェストの android:label がこのプレースホルダを参照する)。
+        manifestPlaceholders["appLabel"] =
+            if (appIdSuffix.isEmpty()) "Vloom" else "Vloom (${appIdSuffix.removePrefix(".")})"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

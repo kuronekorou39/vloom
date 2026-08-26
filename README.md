@@ -84,6 +84,16 @@ flutter pub get
 flutter build apk --release     # Android
 ```
 
+リリース鍵 (`app/android/key.properties`) を持たない環境では debug 鍵にフォールバックするため、
+配布版が入っている端末には署名不一致で上書きインストールできません。計測用に横へ入れたい
+ときは、別パッケージになるサフィックスを付けてください。
+
+```bash
+flutter build apk --release -PappIdSuffix=.lab   # app.vloom.vloom.lab / ランチャー名 "Vloom (lab)"
+```
+
+配布版と受信履歴を残したまま併存します。サフィックス未指定なら通常どおりです。
+
 `web/pwa/pkg/` は git 管理外なので、クローン直後は必ず WASM ビルドが要ります。
 
 ### Python 環境 (uv)
