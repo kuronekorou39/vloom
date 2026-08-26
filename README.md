@@ -12,6 +12,7 @@
 | [**Web で開く**](https://kuronekorou39.github.io/vloom/) | どの端末でも | インストール不要。まずここから |
 | [Releases の APK](../../releases) | Android | ネイティブの方が高速。カメラ制御が細かい |
 | ソースからビルド | iOS | Mac + Xcode が必要 (後述) |
+| `desktop/` を実行 | Windows (送信のみ) | フレーム間隔を正確に刻める。後述 |
 
 ## 仕組み
 
@@ -21,12 +22,9 @@
 ありません。一方向の光チャネルは再送要求ができないため、順送り方式では 1 枚落とすたびに一巡
 待つことになりますが、Fountain code はこれを構造的に解決します。
 
-コード形式は 2 系統。
-
-**QR** — 標準形式。既存のデコーダが使え、どの端末でも動きます。
-
-**vcode** — 独自の輝度ブロック格子。QR のファインダ・アライメント・フォーマット情報・EC 領域を
-持たず、格子全体をデータに使い、1 セルに 2bit を載せます。
+コード形式は **vcode** — 動画ネイティブな独自の輝度ブロック格子です。QR のファインダ・
+アライメント・フォーマット情報・EC 領域を持たず、格子全体をデータに使い、1 セルに 2bit を
+載せます。
 
 | | セル数 | データ量 | 効率 |
 |---|---|---|---|
@@ -37,8 +35,11 @@
 埋まりません。加えて vcode はブロック単位の CRC で**部分回収**ができ、フレームの一部が潰れても
 読めたブロックだけを回収します。
 
-実測は QR 経路で 200KB を約 45 秒 (4.4 KB/s)。vcode は理論値のみで実機計測はこれからです
-(9×8 / 30fps で理論 194 KB/s)。
+実機実測は Pixel 9a + PC モニタで **26.8 KB/s** (7×6 / 2bit / 1080p / フレーム間トラッキング)。
+条件ごとの内訳は [docs/vcode_format.md](docs/vcode_format.md) にあります。
+
+v0.3 まで併走させていた QR 経路 (6.7 KB/s) は、比較対象としての役目を終えたので v0.4 で
+削除しました。経緯と得失は [docs/tech_stack.md](docs/tech_stack.md) に残しています。
 
 ## 使い方
 
@@ -58,7 +59,7 @@ vcode は格子 (5×4 / 7×6 / 9×8 / 11×10) と階調 (1bit / 2bit)、fps を�
 
 - **Rust** (stable) + `wasm-pack` — `cargo install wasm-pack`
 - **Flutter** 3.41+ — ネイティブアプリをビルドする場合
-- **Python 3.10+** — 開発用 HTTPS サーバと QR ベンチ
+- **Python 3.10+** — 開発用 HTTPS サーバと CLI の vcode エンコーダ
 
 ### ビルドとテスト
 
@@ -88,6 +89,43 @@ python web/pwa/serve_https.py
 PC とスマホを同じ Wi-Fi に繋ぎ、表示された `https://<PC の IP>:8443/` を開きます。証明書警告は
 「詳細設定 → アクセスする」で許容してください。開発専用です。
 
+### デスクトップ送信アプリ (Windows)
+
+PC を送信機として使うだけなら、ブラウザより表示タイミングを正確に刻める PySide6 版が
+あります。符号化は Rust コアをそのまま呼ぶので、出るフレームは PWA と同一です。
+
+```bash
+pip install maturin
+maturin develop --release -m py/Cargo.toml   # Rust コアを Python 拡張として入れる
+pip install -r desktop/requirements.txt
+python -m desktop
+```
+
+ファイルを選んで「送信開始」で全画面表示に入ります。全画面中は輝度とスムージングを
+その場で調整でき、Esc で戻ります。受信は入れていません (PC の内蔵カメラは 720p 級が
+多く、vcode の目安 6px/セル に届かないため)。スマホの「受信」を向けてください。
+
+**PySide6 は LGPL-3.0** です。Vloom で唯一のコピーレフト依存で、このアプリにのみ
+関係します。exe 化する場合の注意は [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) に
+書いています。
+
+### コマンドラインから vcode を作る
+
+ブラウザやアプリを開かずに、ファイルを vcode のフレーム列へ変換できます。Python の標準
+ライブラリだけで動くので追加インストールは要りません。
+
+```bash
+python tools/vcode_encode.py photo.jpg --grid 9x8 --bpc 2 --fps 15
+```
+
+`photo_vcode/` に PNG のフレーム列と `index.html` が出ます。HTML をブラウザで開き、クリックで
+全画面にすればそのまま「受信」で受け取れます。送信側の `VcodeTx` とバイト単位で同じ
+フレームを吐くので、受信側の変更は要りません。
+
+RaptorQ は source パケットのみを生成します (リペア無し)。RFC 6330 の中間シンボル生成は純
+Python には重すぎるためで、取りこぼしたブロックは次の周回で拾うことになります。リペアの
+損失耐性が要る場面では PWA かアプリを使ってください。
+
 ### iOS について
 
 iOS 版のバイナリは配布していません。署名なしの IPA は受け取った側での再署名が必要で、無料
@@ -110,14 +148,20 @@ fountain/    RaptorQ ラッパー (Fountain Encoder/Decoder)。符号化の中�
 vcode/       独自コード形式のエンコーダとスキャナ (ホモグラフィ推定・部分回収)
 core-wasm/   Fountain + vcode を wasm-bindgen でブラウザへ公開
 app/         Flutter アプリ (送受信兼用)。Rust を FFI ブリッジで共有
+py/          Rust コアの Python バインディング (PyO3 / maturin)
+desktop/     Windows 送信アプリ (PySide6)。py/ 経由で Rust コアを呼ぶ
 web/pwa/     ブラウザ版 + 開発用 HTTPS サーバ
-qr_bench/    QR 検出率ベンチ (Python / pyzbar)
-docs/        形式仕様と関連研究の調査
+tools/       vcode エンコーダ (Python 標準ライブラリのみ) 等の補助スクリプト
+docs/        技術スタック・形式仕様・関連研究の調査
+licenses/    サードパーティのライセンス全文
 ```
 
 Rust コアは WASM と FFI の両方から使うので、ブラウザ版・ネイティブ版・送受信で符号化/復号の
-実装が分岐しません。
+実装が分岐しません。構成の全体像と選定理由は [docs/tech_stack.md](docs/tech_stack.md)。
 
 ## ライセンス
 
-[MIT](LICENSE)
+[MIT](LICENSE)。同梱するサードパーティの表記は
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) にあります。コピーレフトの依存は
+デスクトップアプリの PySide6 (LGPL-3.0) のみで、PWA・モバイルアプリ・Rust コアには
+ありません。

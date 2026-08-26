@@ -48,3 +48,7 @@ web/pwa/pkg/
 key.properties
 *.jks
 *.keystore
+
+# Pages デプロイ時に web/pwa へコピーされる表記 (正本はリポジトリ直下)
+web/pwa/THIRD-PARTY-NOTICES.md
+web/pwa/licenses/
