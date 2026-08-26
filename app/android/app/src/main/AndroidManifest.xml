@@ -1,6 +1,12 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+    <!-- camera_android_camerax が RECORD_AUDIO をマージしてくるが、Vloom はマイクを
+         使わない (enableAudio: false で開いている)。不要な権限要求は避けたいので落とす。
+         リリースビルド後は merged_manifests/release で消えていることを確認すること。 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" tools:node="remove" />
     <application
         android:label="Vloom"
         android:name="${applicationName}"
