@@ -1,4 +1,4 @@
-//! Vloom の WebAssembly バインディング (Phase 1: Fountain code)。
+//! Vloom の WebAssembly バインディング (Fountain code + vcode)。
 //!
 //! `wasm-pack build --target web --release` で `pkg/` に JS モジュールを生成する。
 //! JS 側からは `import init, { FountainEncoder, FountainDecoder } from "./pkg/vloom_core_wasm.js"` で使う。
@@ -10,7 +10,7 @@ use wasm_bindgen::prelude::*;
 pub fn init() {}
 
 // =============================================================
-// Phase 1: Fountain code (RaptorQ) over QR streaming
+// Fountain code (RaptorQ)
 // =============================================================
 
 /// JS から見える Fountain エンコーダのハンドル。

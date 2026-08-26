@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.3.4+10
+version: 0.4.0+11
 
 environment:
   sdk: ^3.11.0
@@ -39,8 +39,7 @@ dependencies:
   flutter_rust_bridge: 2.12.0
   wakelock_plus: ^1.6.1
   screen_brightness: ^2.1.11
-  mobile_scanner: ^7.2.0
-  # vcode 受信用 (生 YUV フレームが必要なため mobile_scanner とは別に使用)
+  # vcode 受信用 (生 YUV フレームをそのまま Rust スキャナに渡す)
   camera: ^0.11.0
   image_picker: ^1.2.3
   file_selector: ^1.1.0

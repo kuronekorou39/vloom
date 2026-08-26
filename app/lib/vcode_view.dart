@@ -48,7 +48,7 @@ class VcodeCameraView extends StatelessWidget {
   }
 }
 
-/// スキャンの照準となる緑の枠 (四隅強調)。QR/vcode 受信・校正すべてで共用し、
+/// スキャンの照準となる緑の枠 (四隅強調)。受信・校正で共用し、
 /// 「枠に収める」という操作感を統一する。
 class ScanGuideOverlay extends StatelessWidget {
   const ScanGuideOverlay({super.key, this.widthFrac = 0.8, this.aspect = 1.0});

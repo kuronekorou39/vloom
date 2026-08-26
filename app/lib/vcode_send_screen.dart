@@ -15,7 +15,7 @@ import 'ui_common.dart';
 import 'src/rust/api/vcode.dart';
 
 /// vcode (独自フォーマット) 送信画面。研究用: 単一ブロック・生バイトを
-/// アニメーション vcode で送出する。QR 送信 (SendScreen) とは独立。
+/// アニメーション vcode で送出する。
 class VcodeSendScreen extends StatefulWidget {
   const VcodeSendScreen({super.key});
   @override

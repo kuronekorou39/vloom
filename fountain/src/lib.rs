@@ -1,4 +1,4 @@
-//! Fountain code (RaptorQ) を薄くラップして、QR ストリーミング用の符号化/復号 API を提供する。
+//! Fountain code (RaptorQ) を薄くラップして、コードのストリーミング用の符号化/復号 API を提供する。
 //!
 //! 設計方針 (MVP):
 //!   - 事前に K+ N パケット (= K source + N repair) を生成して固定配列で持つ
