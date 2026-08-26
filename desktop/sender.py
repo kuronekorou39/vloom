@@ -59,7 +59,11 @@ class FrameView(QWidget):
 
     def paintEvent(self, event) -> None:  # noqa: N802 (Qt の命名)
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor(0, 0, 0))
+        # 背景は白。コーナーマーカーは外周 1 セルが黒なので、黒背景だとコードの
+        # 外縁が背景に溶けて境界が消える。ガイド枠起点の通常スキャンは耐えるが、
+        # 位置の自動検出 (scan_frame_wide) は黒背景だと全 sweep 失敗することを
+        # 合成画像で確認した。PWA・スマホアプリの送信も白で塗っている。
+        p.fillRect(self.rect(), QColor(255, 255, 255))
         if self._image is None:
             return
         # 既定は最近傍。セル境界をぼかさないほうが受信側の量子化に有利。

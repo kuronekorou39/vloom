@@ -433,7 +433,12 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
 
   Future<void> _saveDump(VcodeScanReport report) async {
     try {
-      final dir = await getApplicationDocumentsDirectory();
+      // 外部ストレージを優先する。内部 (getApplicationDocumentsDirectory) だと
+      // release ビルドでは run-as が使えず adb で取り出せない。ここは PC で
+      // scan_file にかけるためのダンプなので、取り出せないと意味がない。
+      //   adb shell ls /sdcard/Android/data/<pkg>/files/
+      final dir = await getExternalStorageDirectory() ??
+          await getApplicationDocumentsDirectory();
       final path = '${dir.path}/vcode_dump_${report.debugW}x${report.debugH}.gray';
       await File(path).writeAsBytes(report.debugGray!);
       debugPrint('[vcode-rx] DUMP saved: $path (err=${report.error})');
