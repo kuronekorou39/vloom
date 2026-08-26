@@ -198,10 +198,20 @@ Android の権限は `CAMERA` のみを宣言している。ただしマージ�
 プラグイン由来のものが加わる。v0.3 までは QR 受信の `mobile_scanner` が ML Kit を引き込み、
 その推移的依存 `com.google.android.datatransport:transport-backend-cct` が `INTERNET` と
 `ACCESS_NETWORK_STATE`、および送信ジョブ (`JobInfoSchedulerService` /
-`AlarmManagerSchedulerBroadcastReceiver`) をマージしていた。**QR 経路の削除で ML Kit ごと
-消えたため、`INTERNET` を宣言するライブラリは無くなった** (削除前のマージャレポートで、
-`INTERNET` の寄与元が `transport-backend-cct` 単独であることを確認済み)。リリースビルドの
-たびに `app/build/app/outputs/logs/manifest-merger-release-report.txt` で確認するとよい。
+`AlarmManagerSchedulerBroadcastReceiver`) をマージしていた。
+
+**v0.4 のリリースビルドで、マージ後の権限が以下だけになったことを確認済み** (2026-08-26):
+
+```
+CAMERA
+READ_MEDIA_AUDIO / READ_MEDIA_IMAGES / READ_MEDIA_VIDEO   (open_filex 由来)
+app.vloom.vloom.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION  (Flutter 由来)
+```
+
+`INTERNET` / `ACCESS_NETWORK_STATE` / `RECORD_AUDIO` はいずれも消えた。マージ後の
+service / receiver / provider にも `datatransport` と `mlkit` は 1 つも残っていない。
+**これで「アプリは通信しない」が権限レベルで担保される。** 依存を足したときは
+`app/build/app/intermediates/merged_manifests/release/` で再確認すること。
 
 `RECORD_AUDIO` は `camera_android_camerax` がマージしてくるが、Vloom はカメラを
 `enableAudio: false` で開いておりマイクを使わないので、`AndroidManifest.xml` の
