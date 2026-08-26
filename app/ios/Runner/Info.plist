@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>NSCameraUsageDescription</key>
-	<string>QRコードを読み取ってデータを受信するためにカメラを使用します。</string>
+	<string>コードを読み取ってデータを受信するためにカメラを使用します。</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>送信する画像を選ぶために写真ライブラリにアクセスします。</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
