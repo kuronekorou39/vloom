@@ -1,4 +1,4 @@
-"""送信の設定画面。ファイル/テキストを選び、格子・階調・fps を決めて全画面表示に入る。
+"""送信の設定画面。ファイル/テキストを選び、格子・階調・fps を決めて送信ウィンドウを開く。
 
 符号化は Rust コア (vloom_core) をそのまま呼ぶので、吐くフレームは PWA・スマホアプリと
 バイト単位で同一。受信側に手を入れる必要はない。
@@ -11,7 +11,7 @@ import mimetypes
 import pathlib
 
 import vloom_core
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox,
@@ -104,7 +104,7 @@ class MainWindow(QWidget):
         self.info.setWordWrap(True)
         self.info.setStyleSheet("color:#8a919c;")
 
-        start = QPushButton("送信開始 (全画面)")
+        start = QPushButton("送信開始")
         start.setDefault(True)
         start.clicked.connect(self._start)
 
@@ -180,13 +180,26 @@ class MainWindow(QWidget):
 
         self.stage = SenderWindow(tx, fps, len(data), name)
         self.stage.closed.connect(self._on_stage_closed)
-        screens = QGuiApplication.screens()
-        idx = min(self.screen.currentIndex(), len(screens) - 1)
-        self.stage.setGeometry(screens[idx].geometry())
+        self.stage.setGeometry(self._stage_rect())
         self.stage.start()
         self.info.setText(
             f"送信中: {tx.frame_count} フレーム / {tx.packet_count} パケット "
             f"(うちリペア {extra_repair})  ·  1 巡 {tx.frame_count / fps:.1f} 秒")
+
+    def _stage_rect(self) -> QRect:
+        """送信ウィンドウの初期位置。選んだモニタの作業領域に収まる正方形を中央に置く。
+
+        コードは縦横比がほぼ 1:1 なので、正方形にしておくと最初から無駄な余白が出ない。
+        """
+        screens = QGuiApplication.screens()
+        area = screens[min(self.screen.currentIndex(), len(screens) - 1)].availableGeometry()
+        side = int(min(area.width(), area.height()) * 0.85)
+        return QRect(
+            area.x() + (area.width() - side) // 2,
+            area.y() + (area.height() - side) // 2,
+            side,
+            side,
+        )
 
     def _on_stage_closed(self) -> None:
         self.stage = None

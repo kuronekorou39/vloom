@@ -1,4 +1,4 @@
-"""全画面でコードを表示する送信ステージ。
+"""コードを表示する送信ウィンドウ。
 
 ブラウザ版と違い、フレームの表示間隔を自前で制御できるのがネイティブ版の利点。
 ディスプレイのリフレッシュに対して表示が短すぎると受信側が中間状態を撮ってしまうため、
@@ -72,7 +72,11 @@ class FrameView(QWidget):
 
 
 class SenderWindow(QWidget):
-    """全画面の送信ウィンドウ。下部に輝度・スムージング・状態のオーバーレイを出す。"""
+    """送信ウィンドウ。下部に輝度・スムージング・状態のバーを出す。
+
+    通常ウィンドウなので、受信側を構えながらサイズや位置を動かせる。コードは
+    アスペクト比を保って中央にフィットするので、窓を広げるほどセルが大きくなる。
+    """
 
     closed = Signal()
 
@@ -141,7 +145,9 @@ class SenderWindow(QWidget):
 
     def start(self) -> None:
         _keep_display_awake(True)
-        self.showFullScreen()
+        self.show()
+        self.raise_()
+        self.activateWindow()
         self._deadline = time.perf_counter()
         self._tick()
 
