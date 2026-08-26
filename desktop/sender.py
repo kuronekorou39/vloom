@@ -132,6 +132,7 @@ class SenderWindow(QWidget):
         self.pass_no = 1
         self.started = time.perf_counter()
         self._deadline = self.started
+        self._recent: list[float] = []  # 実測 fps 用の直近の描画時刻
         # _rebuild_table() は 1 枚目を描くので、index 等を決めた後に呼ぶ
         self._table: list[int] = []
         self._rebuild_table()
@@ -176,11 +177,22 @@ class SenderWindow(QWidget):
         self.view.set_frame(gray, self.tx.frame_width, self.tx.frame_height, self._table)
 
     def _tick(self) -> None:
+        now = time.perf_counter()
         self._draw(self.index)
-        elapsed = time.perf_counter() - self.started
+        # 実測 fps。要求値どおり出ているかは計測の前提になるので必ず出す
+        # (コンポジタは垂直同期で刻むので、リフレッシュの整数分の 1 でない
+        #  fps を要求するとフレームの表示時間が不揃いになる)。
+        self._recent.append(now)
+        if len(self._recent) > 40:
+            del self._recent[:-40]
+        span = self._recent[-1] - self._recent[0]
+        measured = (len(self._recent) - 1) / span if span > 0 else 0.0
+
+        elapsed = now - self.started
         loop_sec = self.frame_count / self.fps
         self.status.setText(
-            f"{self.label} · {self.payload_len:,} B · {self.fps}fps · "
+            f"{self.label} · {self.payload_len:,} B · "
+            f"{self.fps}fps 要求 / 実測 {measured:.1f}fps · "
             f"frame {self.index + 1}/{self.frame_count} · {self.pass_no} 巡目 · "
             f"{elapsed:.0f} 秒経過 (1 巡 {loop_sec:.1f} 秒)"
         )

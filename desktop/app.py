@@ -37,8 +37,6 @@ AUTO_DETECT_GRIDS = {(5, 4), (7, 6), (9, 8)}
 
 # ソースパケットに対するリペアパケットの比率。PWA の REPAIR_RATE と同値。
 REPAIR_RATE = 0.5
-# 1 フレームは 2 リフレッシュ周期以上表示する必要がある。60Hz 画面での上限の目安。
-REFRESH_SAFE_FPS = 30
 
 
 def parse_grid(text: str) -> tuple[int, int]:
@@ -78,7 +76,8 @@ class MainWindow(QWidget):
         self.fps.setRange(2, 60)
         self.fps.setValue(12)
         self.repair = QSpinBox()
-        self.repair.setRange(0, 200)
+        # 捕捉率が低いほど高いリペア率が効くので、振り幅を広く取っておく
+        self.repair.setRange(0, 400)
         self.repair.setValue(int(REPAIR_RATE * 100))
         self.repair.setSuffix(" %")
 
@@ -152,14 +151,41 @@ class MainWindow(QWidget):
 
     # ---- 表示 ----
 
+    def _refresh_note(self, fps: int) -> str:
+        """要求 fps とモニタのリフレッシュレートの噛み合わせを見る。
+
+        コンポジタは垂直同期でしか画を出さないので、実際の表示時間はリフレッシュ
+        周期の整数倍に丸められる。リフレッシュの整数分の 1 でない fps を要求すると
+        フレームごとに表示時間が変わり、計測の条件が揃わない (例: 60Hz で 8fps を
+        要求すると 7 周期と 8 周期が交互になる)。
+        """
+        screens = QGuiApplication.screens()
+        hz = screens[min(self.screen.currentIndex(), len(screens) - 1)].refreshRate()
+        if hz <= 0:
+            return ""
+        periods = hz / fps
+        nearest = round(periods)
+        if nearest < 2:
+            return f"   ※{hz:.0f}Hz では 1 フレームが 2 リフレッシュ未満 (fps 下げを推奨)"
+        if abs(periods - nearest) > 0.02:
+            # hz を割り切る fps だけを挙げる (hz/n が整数になる n)
+            clean = sorted(
+                {round(hz / n) for n in range(2, 31) if abs(hz / n - round(hz / n)) < 0.02},
+                reverse=True,
+            )
+            return (f"   ※{hz:.0f}Hz の整数分の 1 でない (表示時間が不揃いになる)。"
+                    f"割り切れる fps: {', '.join(str(c) for c in clean)}")
+        return f"   ({hz:.0f}Hz の {nearest} リフレッシュ分を表示)"
+
     def _update_theory(self) -> None:
         gw, gh = parse_grid(self.grid.currentText())
         bpc = 2 if self.bpc.currentIndex() == 0 else 1
         fps = self.fps.value()
         kbps = gw * gh * vloom_core.packet_size(bpc) * fps / 1024
-        warn = f"   ※{REFRESH_SAFE_FPS}fps 超は 120Hz 画面向け" if fps > REFRESH_SAFE_FPS else ""
         note = "" if (gw, gh) in AUTO_DETECT_GRIDS else "   ※受信側で格子の明示指定が要る"
-        self.theory.setText(f"理論 {kbps:.0f} KB/s  ({gw}x{gh} · {bpc}bit · {fps}fps){warn}{note}")
+        self.theory.setText(
+            f"理論 {kbps:.0f} KB/s  ({gw}x{gh} · {bpc}bit · {fps}fps){note}"
+            f"\n{self._refresh_note(fps).strip()}")
 
     def _start(self) -> None:
         payload = self._payload()
