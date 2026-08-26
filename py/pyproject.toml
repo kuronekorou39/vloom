@@ -1,0 +1,18 @@
+[build-system]
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "vloom-core"
+description = "Python bindings for the Vloom core (vcode frame encoder + RaptorQ fountain code)."
+requires-python = ">=3.10"
+license = "MIT"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+dynamic = ["version"]
+
+[tool.maturin]
+module-name = "vloom_core"
+features = ["pyo3/extension-module"]

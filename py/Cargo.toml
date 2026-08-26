@@ -1,0 +1,22 @@
+[package]
+name = "vloom-py"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Python bindings for the Vloom core (vcode + fountain)."
+
+[lib]
+name = "vloom_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+# abi3-py310: 1 つの wheel が Python 3.10 以降で動く (ビルドを Python バージョンごとに
+# 分けなくて済む)。extension-module は maturin 側で feature として有効化する。
+pyo3 = { version = "0.24", features = ["abi3-py310"] }
+vloom-fountain = { path = "../fountain" }
+vloom-vcode = { path = "../vcode" }
+
+# ワークスペース直下の [profile.release] は wasm 向けに opt-level = "z" なので、
+# ここは独立して速度優先にする (このクレートはワークスペース外)。
+[profile.release]
+opt-level = 3

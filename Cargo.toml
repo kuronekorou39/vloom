@@ -1,8 +1,10 @@
 [workspace]
 members = ["core-wasm", "fountain", "vcode"]
 # app/ 配下の Flutter ブリッジ crate (rust_lib_vloom) は cargokit が独立ビルドするため除外。
-# ../../fountain への path 依存で本ワークスペースのコアを再利用する。
-exclude = ["app"]
+# py/ の PyO3 クレートも maturin が独立ビルドし、pyo3 の extension-module が
+# cargo test --workspace とかみ合わないため除外する。どちらも path 依存で本ワークスペースの
+# コアを再利用するので、実装は分岐しない。
+exclude = ["app", "py"]
 resolver = "2"
 
 [workspace.package]
