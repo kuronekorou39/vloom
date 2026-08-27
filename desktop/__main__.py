@@ -37,6 +37,7 @@ def main() -> int:
     p.add_argument("--bpc", type=int, choices=(1, 2), help="1 セルあたりのビット数")
     p.add_argument("--fps", type=int, help="送信フレームレート")
     p.add_argument("--repair", type=int, help="リペア率 (%%)")
+    p.add_argument("--margin", type=int, help="コード四辺の白余白 (セル数)")
     p.add_argument("--geometry", type=_geometry,
                    help="送信ウィンドウの位置とサイズ X,Y,幅,高 (省略時は前回位置)")
     p.add_argument("--start", action="store_true", help="起動と同時に送信を始める")
@@ -46,7 +47,8 @@ def main() -> int:
     app.setApplicationName("Vloom")
     win = MainWindow()
     win.apply_settings(file=args.file, grid=args.grid, bpc=args.bpc,
-                       fps=args.fps, repair=args.repair, geometry=args.geometry)
+                       fps=args.fps, repair=args.repair, margin=args.margin,
+                       geometry=args.geometry)
     win.show()
     if args.start:
         win.start_now()

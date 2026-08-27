@@ -37,6 +37,9 @@ AUTO_DETECT_GRIDS = {(5, 4), (7, 6), (9, 8)}
 
 # ソースパケットに対するリペアパケットの比率。PWA の REPAIR_RATE と同値。
 REPAIR_RATE = 0.5
+# コードの四辺に置く白余白 (セル数)。QR の quiet zone は 4 モジュールだが、
+# こちらはウィンドウ枠や操作バーと隣接するぶん余裕を見て 8 セルにしている。
+DEFAULT_MARGIN_CELLS = 8
 
 
 def parse_grid(text: str) -> tuple[int, int]:
@@ -83,6 +86,11 @@ class MainWindow(QWidget):
         self.repair.setRange(0, 400)
         self.repair.setValue(int(REPAIR_RATE * 100))
         self.repair.setSuffix(" %")
+        # コードの四辺に置く白余白 (セル数)。QR の quiet zone 相当。
+        self.margin = QSpinBox()
+        self.margin.setRange(0, 20)
+        self.margin.setValue(DEFAULT_MARGIN_CELLS)
+        self.margin.setSuffix(" セル")
 
         self.screen = QComboBox()
         for i, s in enumerate(QGuiApplication.screens()):
@@ -97,6 +105,7 @@ class MainWindow(QWidget):
         form.addRow("bit/セル:", self.bpc)
         form.addRow("FPS:", self.fps)
         form.addRow("リペア:", self.repair)
+        form.addRow("余白:", self.margin)
         form.addRow("表示先:", self.screen)
         form.addRow("ファイル名:", self.name_override)
 
@@ -207,7 +216,7 @@ class MainWindow(QWidget):
         extra_repair = math.ceil(source_packets * self.repair.value() / 100)
         tx = vloom_core.VcodeTx(source, extra_repair, gw, gh, bpc)
 
-        self.stage = SenderWindow(tx, fps, len(data), name)
+        self.stage = SenderWindow(tx, fps, len(data), name, self.margin.value())
         self.stage.closed.connect(self._on_stage_closed)
         self.stage.setGeometry(self.stage_geometry or self._stage_rect())
         self.stage.start()
@@ -241,7 +250,7 @@ class MainWindow(QWidget):
 
     def apply_settings(self, *, file: str | None = None, grid: str | None = None,
                        bpc: int | None = None, fps: int | None = None,
-                       repair: int | None = None,
+                       repair: int | None = None, margin: int | None = None,
                        geometry: tuple[int, int, int, int] | None = None) -> None:
         """コマンドラインから条件を流し込む。指定のないものは UI の値のまま。"""
         if file:
@@ -259,6 +268,8 @@ class MainWindow(QWidget):
             self.fps.setValue(fps)
         if repair is not None:
             self.repair.setValue(repair)
+        if margin is not None:
+            self.margin.setValue(margin)
         if geometry is not None:
             self.stage_geometry = QRect(*geometry)
         self._update_theory()

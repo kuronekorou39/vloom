@@ -38,11 +38,15 @@ def _keep_display_awake(on: bool) -> None:
 class FrameView(QWidget):
     """コードのフレームだけを描く面。白背景にアスペクト維持でフィットさせる。"""
 
-    def __init__(self) -> None:
+    def __init__(self, margin_cells: int = 0) -> None:
         super().__init__()
         self._image: QImage | None = None
         self._buffer: bytes | None = None  # QImage は参照を持たないので手元で保持する
         self._smooth = False
+        # コードの四辺に確保する白の余白 (セル数)。QR の quiet zone に相当する。
+        # コードが窓いっぱいだと外縁がウィンドウ枠や背景と隣接し、コーナー
+        # マーカーの外周 (黒) がどこで終わるか読み取りにくくなる。
+        self._margin = max(0, margin_cells)
         self.setAutoFillBackground(False)
 
     def set_smooth(self, on: bool) -> None:
@@ -69,7 +73,10 @@ class FrameView(QWidget):
         # 既定は最近傍。セル境界をぼかさないほうが受信側の量子化に有利。
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, self._smooth)
         iw, ih = self._image.width(), self._image.height()
-        scale = min(self.width() / iw, self.height() / ih)
+        # 余白ぶんセル数が増えたものとして縮尺を決めると、四辺に正確に
+        # margin セル分の白が残る (縮尺に関わらず「何セル分」で効く)
+        m = self._margin
+        scale = min(self.width() / (iw + 2 * m), self.height() / (ih + 2 * m))
         dw, dh = int(iw * scale), int(ih * scale)
         target = QRect((self.width() - dw) // 2, (self.height() - dh) // 2, dw, dh)
         p.drawImage(target, self._image)
@@ -84,7 +91,8 @@ class SenderWindow(QWidget):
 
     closed = Signal()
 
-    def __init__(self, tx, fps: int, payload_len: int, label: str) -> None:
+    def __init__(self, tx, fps: int, payload_len: int, label: str,
+                 margin_cells: int = 0) -> None:
         super().__init__()
         self.tx = tx
         self.payload_len = payload_len
@@ -93,7 +101,7 @@ class SenderWindow(QWidget):
         self.fps = fps
 
         self.setWindowTitle("Vloom 送信")
-        self.view = FrameView()
+        self.view = FrameView(margin_cells)
         self.status = QLabel("")
         self.status.setStyleSheet("color:#e6e9ef; font-size:12px;")
 
@@ -119,17 +127,26 @@ class SenderWindow(QWidget):
         bar.addWidget(self.status, 1)
         bar.addWidget(stop)
 
-        bar_widget = QWidget()
-        bar_widget.setLayout(bar)
-        bar_widget.setStyleSheet("background: rgba(20,22,28,235);")
+        self.bar_widget = QWidget()
+        self.bar_widget.setLayout(bar)
+        self.bar_widget.setStyleSheet("background: rgba(20,22,28,235);")
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
         root.addWidget(self.view, 1)
-        root.addWidget(bar_widget)
+        root.addWidget(self.bar_widget)
 
         QShortcut(QKeySequence(Qt.Key.Key_Escape), self, self.close)
+
+        # 操作バーは濃色なので、コードのすぐ下にあると外縁が暗い帯と隣接して
+        # quiet zone の意味が薄れる。触っていない間は畳んで、白い面を最大化する
+        # (畳むとレイアウトが領域を返すので、コードもその分大きく描ける)。
+        self.setMouseTracking(True)
+        self.view.setMouseTracking(True)
+        self._bar_timer = QTimer(self)
+        self._bar_timer.setSingleShot(True)
+        self._bar_timer.timeout.connect(lambda: self.bar_widget.setVisible(False))
 
         self.label = label
         self.index = 0
@@ -148,8 +165,14 @@ class SenderWindow(QWidget):
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self._tick)
 
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 (Qt の命名)
+        self.bar_widget.setVisible(True)
+        self._bar_timer.start(2500)
+        super().mouseMoveEvent(event)
+
     def start(self) -> None:
         _keep_display_awake(True)
+        self._bar_timer.start(2500)
         self.show()
         self.raise_()
         self.activateWindow()
