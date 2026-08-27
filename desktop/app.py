@@ -51,6 +51,9 @@ class MainWindow(QWidget):
         self.setMinimumWidth(560)
         self.path: pathlib.Path | None = None
         self.stage: SenderWindow | None = None
+        # 一度開いた送信ウィンドウの位置とサイズを覚えておく。三脚でカメラを固定して
+        # 条件を振るとき、送信のたびに位置が既定値へ戻ると毎回構図を取り直すことになる。
+        self.stage_geometry: QRect | None = None
 
         self.file_label = QLabel("未選択")
         self.file_label.setWordWrap(True)
@@ -206,7 +209,7 @@ class MainWindow(QWidget):
 
         self.stage = SenderWindow(tx, fps, len(data), name)
         self.stage.closed.connect(self._on_stage_closed)
-        self.stage.setGeometry(self._stage_rect())
+        self.stage.setGeometry(self.stage_geometry or self._stage_rect())
         self.stage.start()
         self.info.setText(
             f"送信中: {tx.frame_count} フレーム / {tx.packet_count} パケット "
@@ -228,5 +231,42 @@ class MainWindow(QWidget):
         )
 
     def _on_stage_closed(self) -> None:
+        # 次回も同じ構図で出せるよう、閉じる直前の位置を覚える
+        if self.stage is not None:
+            self.stage_geometry = self.stage.geometry()
         self.stage = None
         self.info.setText("停止しました。")
+
+    # ---- 外部からの制御 (計測の自動化用) ----
+
+    def apply_settings(self, *, file: str | None = None, grid: str | None = None,
+                       bpc: int | None = None, fps: int | None = None,
+                       repair: int | None = None,
+                       geometry: tuple[int, int, int, int] | None = None) -> None:
+        """コマンドラインから条件を流し込む。指定のないものは UI の値のまま。"""
+        if file:
+            self.path = pathlib.Path(file)
+            self.file_label.setText(f"{self.path.name} ({self.path.stat().st_size:,} B)")
+        if grid:
+            i = next((k for k in range(self.grid.count())
+                      if self.grid.itemText(k).startswith(grid)), None)
+            if i is None:
+                raise SystemExit(f"未知の格子: {grid} (選択肢: {GRIDS})")
+            self.grid.setCurrentIndex(i)
+        if bpc is not None:
+            self.bpc.setCurrentIndex(0 if bpc == 2 else 1)
+        if fps is not None:
+            self.fps.setValue(fps)
+        if repair is not None:
+            self.repair.setValue(repair)
+        if geometry is not None:
+            self.stage_geometry = QRect(*geometry)
+        self._update_theory()
+
+    def start_now(self) -> None:
+        """UI 操作なしで送信を始める。"""
+        self._start()
+        if self.stage is not None:
+            g = self.stage.geometry()
+            print(f"送信ウィンドウ: --geometry {g.x()},{g.y()},{g.width()},{g.height()}",
+                  flush=True)
