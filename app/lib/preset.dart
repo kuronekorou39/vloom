@@ -78,7 +78,7 @@ const kPresets = <VcodePreset>[
   ),
   VcodePreset(
     name: '標準',
-    description: '実測 15.2KB/s。140 セル幅 / 1080p で 6.2px/セル',
+    description: '冷間 16.9KB/s / 温間 6.5KB/s。140 セル幅 / 1080p で 6.2px/セル',
     grid: '7x6',
     bpc: 1,
     fps: 10,
