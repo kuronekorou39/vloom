@@ -71,6 +71,13 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   int _lumaMin = 255, _lumaMax = 0;
   /// 直近の検出失敗理由 (Rust 側が返す FrameError)
   String? _lastError;
+  /// 失敗理由の内訳 (CornerMismatch / HeaderNotFound / ...)。
+  /// 「たまに読める」ときに、読めない側が どの工程で落ちているか を切り分ける。
+  final Map<String, int> _errorKinds = {};
+  /// 成功例と失敗例のダンプをそれぞれ 1 枚ずつ残したか。
+  /// 追従できる/できないの差を PC で直接比べるために、両方が要る。
+  bool _needOkDump = true;
+  bool _needNgDump = true;
 
   bool _busy = false;
   bool _active = false;
@@ -268,7 +275,10 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         _lumaMax = hi;
       }
       // 未検出のあいだ 150 フレームごとに処理済み画像を上書き保存 (PC 解析用)
-      final wantDump = _framesDetected == 0 && _framesSeen > 0 && _framesSeen % 150 == 0;
+      // 成功例・失敗例を 1 枚ずつ確保するまでは定期的にダンプを要求する。
+      // どちらが返ってくるかはスキャンしてみないと分からないので、結果を見て振り分ける。
+      final wantDump =
+          (_needOkDump || _needNgDump) && _framesSeen > 0 && _framesSeen % 20 == 0;
       final rx = _rx;
       if (rx == null) return;
       // 位置検出 (acquire): 画面全体を sweep して実際の 4 隅を取得し、ポップアップで確認 →
@@ -327,7 +337,15 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       );
       sw.stop();
       if (!_active || _payload != null) return;
-      if (report.debugGray != null) _saveDump(report);
+      if (report.debugGray != null) {
+        if (report.detected && _needOkDump) {
+          _needOkDump = false;
+          _saveDump(report, 'ok');
+        } else if (!report.detected && _needNgDump) {
+          _needNgDump = false;
+          _saveDump(report, 'ng');
+        }
+      }
 
       _framesSeen++;
       _lastScanMs = sw.elapsedMilliseconds;
@@ -419,6 +437,11 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           _startAcquire(auto: true);
         }
       }
+      if (!report.detected) {
+        // 理由は "rot90/7x6:CornerMismatch" のような形。末尾の種別だけ数える。
+        final kind = (report.error ?? '?').split(':').last.split(' ').first;
+        _errorKinds[kind] = (_errorKinds[kind] ?? 0) + 1;
+      }
       if (!report.detected && _framesSeen % 30 == 0) {
         _lastError = report.error;
         debugPrint('[vcode-rx] not detected (${report.error}) '
@@ -431,7 +454,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     }
   }
 
-  Future<void> _saveDump(VcodeScanReport report) async {
+  Future<void> _saveDump(VcodeScanReport report, String tag) async {
     try {
       // 外部ストレージを優先する。内部 (getApplicationDocumentsDirectory) だと
       // release ビルドでは run-as が使えず adb で取り出せない。ここは PC で
@@ -439,7 +462,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       //   adb shell ls /sdcard/Android/data/<pkg>/files/
       final dir = await getExternalStorageDirectory() ??
           await getApplicationDocumentsDirectory();
-      final path = '${dir.path}/vcode_dump_${report.debugW}x${report.debugH}.gray';
+      final path =
+          '${dir.path}/vcode_${tag}_${report.debugW}x${report.debugH}.gray';
       await File(path).writeAsBytes(report.debugGray!);
       debugPrint('[vcode-rx] DUMP saved: $path (err=${report.error})');
     } catch (e) {
@@ -583,6 +607,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _packetsAdded = 0;
       _blocksOk = 0;
       _blockHist.fillRange(0, _blockHist.length, 0);
+      _errorKinds.clear();
       _framesSeen = 0;
       _framesDetected = 0;
       _framesTracked = 0;
@@ -644,6 +669,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _framesTracked = 0;
       _blocksOk = 0;
       _blockHist.fillRange(0, _blockHist.length, 0);
+      _errorKinds.clear();
       _packetsAdded = 0;
       _seenEsi.clear();
       _integrityFails = 0;
@@ -790,6 +816,16 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
 
   static const _histLabels = ['0', '~25%', '~50%', '~75%', '~99%', '満点'];
 
+  /// 失敗理由の内訳を "CornerMismatch:120(80%) HeaderNotFound:30(20%)" の 1 行に
+  String _errorKindsText() {
+    final total = _errorKinds.values.fold<int>(0, (a, b) => a + b);
+    if (total == 0) return '-';
+    final e = _errorKinds.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    return e
+        .map((x) => '${x.key}:${x.value}(${(x.value * 100 / total).round()}%)')
+        .join('  ');
+  }
+
   /// ヒストグラムを "0:12 ~25%:3 ... 満点:80" の 1 行にする
   String _histText() {
     final total = _blockHist.fold<int>(0, (a, b) => a + b);
@@ -825,6 +861,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       ('カメラ実効fps', _camFps.toStringAsFixed(1)),
       ('回収ブロック', '$_blocksOk (部分回収込み)'),
       ('　1 枚あたり分布', _histText()),
+      ('未検出の内訳', _errorKindsText()),
       ('投入パケット', '$_packetsAdded'),
       ('distinct パケット', '${_seenEsi.length}'),
       if (_integrityFails > 0) ('整合性エラー再試行', '$_integrityFails 回'),
