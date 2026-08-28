@@ -38,11 +38,18 @@ def _keep_display_awake(on: bool) -> None:
 class FrameView(QWidget):
     """コードのフレームだけを描く面。白背景にアスペクト維持でフィットさせる。"""
 
-    def __init__(self, margin_cells: int = 0) -> None:
+    def __init__(self, margin_cells: int = 0, zoom: float = 1.0,
+                 dx: float = 0.0, dy: float = 0.0) -> None:
         super().__init__()
         self._image: QImage | None = None
         self._buffer: bytes | None = None  # QImage は参照を持たないので手元で保持する
         self._smooth = False
+        # 面の中でのコードの大きさ (フィット時を 1.0 とする倍率) と、中心からの
+        # ずれ (ウィンドウの幅・高さに対する比)。窓ごと動かすのと違い、白い面は
+        # 動かないままコードだけが動くので、カメラから見て周囲の環境が変わらない。
+        self._zoom = zoom
+        self._dx = dx
+        self._dy = dy
         # コードの四辺に確保する白の余白 (セル数)。QR の quiet zone に相当する。
         # コードが窓いっぱいだと外縁がウィンドウ枠や背景と隣接し、コーナー
         # マーカーの外周 (黒) がどこで終わるか読み取りにくくなる。
@@ -52,6 +59,21 @@ class FrameView(QWidget):
     def set_smooth(self, on: bool) -> None:
         self._smooth = on
         self.update()
+
+    def set_placement(self, zoom: float | None = None,
+                      dx: float | None = None, dy: float | None = None) -> None:
+        """コードの大きさ・位置を変える (指定したものだけ)。値は範囲内に丸める。"""
+        if zoom is not None:
+            self._zoom = min(1.0, max(0.05, zoom))
+        if dx is not None:
+            self._dx = min(0.5, max(-0.5, dx))
+        if dy is not None:
+            self._dy = min(0.5, max(-0.5, dy))
+        self.update()
+
+    @property
+    def placement(self) -> tuple[float, float, float]:
+        return self._zoom, self._dx, self._dy
 
     def set_frame(self, data: bytes, w: int, h: int, table: list[int]) -> None:
         self._buffer = data
@@ -76,23 +98,27 @@ class FrameView(QWidget):
         # 余白ぶんセル数が増えたものとして縮尺を決めると、四辺に正確に
         # margin セル分の白が残る (縮尺に関わらず「何セル分」で効く)
         m = self._margin
-        scale = min(self.width() / (iw + 2 * m), self.height() / (ih + 2 * m))
-        dw, dh = int(iw * scale), int(ih * scale)
-        target = QRect((self.width() - dw) // 2, (self.height() - dh) // 2, dw, dh)
+        fit = min(self.width() / (iw + 2 * m), self.height() / (ih + 2 * m))
+        dw, dh = int(iw * fit * self._zoom), int(ih * fit * self._zoom)
+        cx = self.width() * (0.5 + self._dx)
+        cy = self.height() * (0.5 + self._dy)
+        target = QRect(int(cx - dw / 2), int(cy - dh / 2), dw, dh)
         p.drawImage(target, self._image)
 
 
 class SenderWindow(QWidget):
     """送信ウィンドウ。下部に輝度・スムージング・状態のバーを出す。
 
-    通常ウィンドウなので、受信側を構えながらサイズや位置を動かせる。コードは
-    アスペクト比を保って中央にフィットするので、窓を広げるほどセルが大きくなる。
+    通常ウィンドウなので、受信側を構えながらサイズや位置を動かせる。窓を広げる
+    ほどセルが大きくなるほか、矢印キーと +/- で「窓の中での」コードの位置と
+    大きさも変えられる (三脚の構図を崩さずに追い込むため)。
     """
 
     closed = Signal()
 
     def __init__(self, tx, fps: int, payload_len: int, label: str,
-                 margin_cells: int = 0) -> None:
+                 margin_cells: int = 0, zoom: float = 1.0,
+                 dx: float = 0.0, dy: float = 0.0) -> None:
         super().__init__()
         self.tx = tx
         self.payload_len = payload_len
@@ -101,7 +127,7 @@ class SenderWindow(QWidget):
         self.fps = fps
 
         self.setWindowTitle("Vloom 送信")
-        self.view = FrameView(margin_cells)
+        self.view = FrameView(margin_cells, zoom, dx, dy)
         self.status = QLabel("")
         self.status.setStyleSheet("color:#e6e9ef; font-size:12px;")
 
@@ -165,10 +191,45 @@ class SenderWindow(QWidget):
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self._tick)
 
-    def mouseMoveEvent(self, event) -> None:  # noqa: N802 (Qt の命名)
+    def _show_bar(self) -> None:
         self.bar_widget.setVisible(True)
         self._bar_timer.start(2500)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 (Qt の命名)
+        self._show_bar()
         super().mouseMoveEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 (Qt の命名)
+        """矢印でコードを動かし、+/- で拡縮する (Shift で粗く、0 で戻す)。
+
+        受信側を三脚に据えたまま構図を追い込めるようにする。窓ごと動かすと
+        背景のデスクトップまで変わって検出の条件が動くので、白い面の中で
+        コードだけを動かす。合わせた値はバーに出るので、そのまま --zoom /
+        --dx / --dy に渡して同じ構図を再現できる。
+        """
+        shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        step = 0.02 if shift else 0.005
+        zstep = 0.05 if shift else 0.01
+        z, dx, dy = self.view.placement
+        match event.key():
+            case Qt.Key.Key_Left:
+                self.view.set_placement(dx=dx - step)
+            case Qt.Key.Key_Right:
+                self.view.set_placement(dx=dx + step)
+            case Qt.Key.Key_Up:
+                self.view.set_placement(dy=dy - step)
+            case Qt.Key.Key_Down:
+                self.view.set_placement(dy=dy + step)
+            case Qt.Key.Key_Plus | Qt.Key.Key_Equal:
+                self.view.set_placement(zoom=z + zstep)
+            case Qt.Key.Key_Minus | Qt.Key.Key_Underscore:
+                self.view.set_placement(zoom=z - zstep)
+            case Qt.Key.Key_0:
+                self.view.set_placement(zoom=1.0, dx=0.0, dy=0.0)
+            case _:
+                super().keyPressEvent(event)
+                return
+        self._show_bar()
 
     def start(self) -> None:
         _keep_display_awake(True)
@@ -217,11 +278,13 @@ class SenderWindow(QWidget):
 
         elapsed = now - self.started
         loop_sec = self.frame_count / self.fps
+        z, dx, dy = self.view.placement
         self.status.setText(
             f"{self.label} · {self.payload_len:,} B · "
             f"{self.fps}fps 要求 / 実測 {measured:.1f}fps · "
             f"frame {self.index + 1}/{self.frame_count} · {self.pass_no} 巡目 · "
-            f"{elapsed:.0f} 秒経過 (1 巡 {loop_sec:.1f} 秒)"
+            f"{elapsed:.0f} 秒経過 (1 巡 {loop_sec:.1f} 秒) · "
+            f"配置 --zoom {z:.2f} --dx {dx:+.3f} --dy {dy:+.3f}"
         )
         self.index += 1
         if self.index >= self.frame_count:

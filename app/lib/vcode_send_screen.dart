@@ -398,16 +398,25 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
           children: [
             const Text('格子'),
             const SizedBox(width: 12),
-            SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(value: '5x4', label: Text('5x4')),
-                ButtonSegment(value: '7x6', label: Text('7x6')),
-                ButtonSegment(value: '9x8', label: Text('9x8')),
-                ButtonSegment(value: '11x10', label: Text('11x10')),
-              ],
-              selected: {_grid},
-              showSelectedIcon: false,
-              onSelectionChanged: (s) => setState(() { _grid = s.first; _presetIndex = -1; }),
+            // 6 つ並ぶと端末幅に入らないので横スクロールさせる
+            Flexible(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: '5x4', label: Text('5x4')),
+                    ButtonSegment(value: '7x6', label: Text('7x6')),
+                    ButtonSegment(value: '9x8', label: Text('9x8')),
+                    ButtonSegment(value: '11x10', label: Text('11x10')),
+                    ButtonSegment(value: '11x14', label: Text('11x14')),
+                    ButtonSegment(value: '13x12', label: Text('13x12')),
+                  ],
+                  selected: {_grid},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (s) =>
+                      setState(() { _grid = s.first; _presetIndex = -1; }),
+                ),
+              ),
             ),
           ],
         ),

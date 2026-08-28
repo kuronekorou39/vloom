@@ -221,8 +221,9 @@ service / receiver / provider にも `datatransport` と `mlkit` は 1 つも残
 ## 経緯: QR 経路の削除 (v0.4)
 
 初期は QR (`mobile_scanner` + jsQR + qrcode.js) と vcode の 2 系統を並走させ、
-vcode の性能を QR と比較しながら育てていた。実機で vcode が QR 経路の 4 倍
-(26.8 KB/s 対 6.7 KB/s) に達し、比較対象としての役目が終わったので削除した。
+vcode の性能を QR と比較しながら育てていた。実機で vcode が QR 経路を明確に
+上回り、比較対象としての役目が終わったので削除した (削除を決めた時点では 4 倍。
+その後の計測で 11×10 / 20fps の 60 KB/s まで伸びており、QR 経路の 9 倍にあたる)。
 
 削除で得たもの:
 

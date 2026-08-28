@@ -124,8 +124,11 @@ impl VcodeTx {
         let bpc = if bits_per_cell == 2 { 2 } else { 1 };
         let layout = vcode::Layout {
             block: 20,
-            grid_w: grid_w.clamp(2, 12) as usize,
-            grid_h: grid_h.clamp(2, 12) as usize,
+            // 上限はヘッダの u8 と、受信側が現実に読める密度で決まる。縦長格子
+            // (11x14) や超密 (13x12) を通すため 20 まで許す。ここで黙って丸めると
+            // 「指定した格子と違うものが出る」ので、範囲は広めに取っておく。
+            grid_w: grid_w.clamp(2, 20) as usize,
+            grid_h: grid_h.clamp(2, 20) as usize,
         };
         let wrapped = vcode::wrap_payload(payload);
         VcodeTx {

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
@@ -11,37 +13,40 @@ const double kVcodeGuideFrac = 0.8;
 
 /// カメラプレビュー + 緑ガイド枠。受信系はすべてこれを使う。
 ///
-/// アスペクト比を保ったまま領域いっぱいに表示する (cover)。StackFit.expand で
-/// CameraPreview を直接引き伸ばすと縦横比が崩れる (縦潰れ) ため、領域比に合わせて
-/// 拡大しクリップする。緑枠は表示領域の中央 (= スキャン中心) に重ねる。
+/// **カメラ画像の全体を映す (contain)。** 以前は幅いっぱいに拡げて縦をクリップして
+/// いたが、それだと「写っているのに画面に出ていない」領域ができる。スキャンは
+/// 画像全体を見るので、そこでコードに当たると利用者には「枠の外で検出された」
+/// としか見えない。表示範囲とスキャン範囲は一致していなければならない。
+/// 縦長の画面ではカメラ画像の上下に余りが出るので、そこに UI を重ねる。
+///
+/// [overlay] はカメラ画像の矩形そのものに重なる。ガイド枠や検出枠のように
+/// 「画像座標に対応させたい描画」はここに渡すこと。表示領域全体に重ねると
+/// 上下の余白ぶんだけ画像とずれる。
 class VcodeCameraView extends StatelessWidget {
-  const VcodeCameraView(this.controller, {super.key});
+  const VcodeCameraView(this.controller, {super.key, this.overlay});
   final CameraController controller;
+  final Widget? overlay;
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (ctx, c) {
-      // 拡大率を「表示幅」だけで決める (幅いっぱい・アスペクト維持・縦のはみ出しは
-      // クリップ)。cover と違い表示領域の縦横比に依存しないので、下部バーの高さが
-      // 異なる各受信/校正画面でも 4 つすべて同じ拡大率になる。
       // CameraPreview は縦表示で 1/aspectRatio の縦横比なので、
-      // 幅=maxWidth のとき高さ=maxWidth*aspectRatio (歪みなし)。
+      // 幅 w のとき高さ w*aspectRatio (歪みなし)。表示領域に収まる最大の w を取る。
       final ar = controller.value.aspectRatio;
-      return ClipRect(
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            OverflowBox(
-              maxHeight: double.infinity,
-              child: SizedBox(
-                width: c.maxWidth,
-                height: c.maxWidth * ar,
-                child: CameraPreview(controller),
-              ),
-            ),
-            // vcode の枠 (guideFrac 準拠, 縦横比 0.92 = ブロック格子形状)
-            const ScanGuideOverlay(widthFrac: kVcodeGuideFrac, aspect: 0.92),
-          ],
+      final w = math.min(c.maxWidth, c.maxHeight / ar);
+      return Center(
+        child: SizedBox(
+          width: w,
+          height: w * ar,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              CameraPreview(controller),
+              // vcode の枠 (guideFrac 準拠, 縦横比 0.92 = ブロック格子形状)
+              const ScanGuideOverlay(widthFrac: kVcodeGuideFrac, aspect: 0.92),
+              ?overlay,
+            ],
+          ),
         ),
       );
     });

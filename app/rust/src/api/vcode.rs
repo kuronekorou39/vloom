@@ -34,8 +34,11 @@ impl VcodeTx {
         let bpc = if bits_per_cell == 2 { 2 } else { 1 };
         let layout = vcode::Layout {
             block: 20,
-            grid_w: grid_w.clamp(2, 12) as usize,
-            grid_h: grid_h.clamp(2, 12) as usize,
+            // 上限はヘッダの u8 と、受信側が現実に読める密度で決まる。縦長格子
+            // (11x14) や超密 (13x12) を通すため 20 まで許す。ここで黙って丸めると
+            // 「指定した格子と違うものが出る」ので、範囲は広めに取っておく。
+            grid_w: grid_w.clamp(2, 20) as usize,
+            grid_h: grid_h.clamp(2, 20) as usize,
         };
         let wrapped = vcode::wrap_payload(&payload);
         VcodeTx {
@@ -487,13 +490,20 @@ impl VcodeRx {
         if stride < w || y.len() < stride * h {
             return fail_acquire();
         }
-        // 90 度単位の全回転を試す (縦横入れ替え・上下逆にも対応)。取得は 1 回きりなので重くてよい。
-        let rots = [
-            rotation_deg % 360,
-            (rotation_deg + 90) % 360,
-            (rotation_deg + 180) % 360,
-            (rotation_deg + 270) % 360,
-        ];
+        // コードの上下は利用者に合わせてもらう前提なので、通常は 0/180 の 2 通りしか
+        // 試さない (端末を逆さに持つのはよくあるが、コードを横倒しに置く構図は捨てる)。
+        // 回転候補が半分になると acquire の試行数もそのまま半分になり、初回ロックが速くなる。
+        // 手動の「今すぐ位置を検出」(thorough) のときだけ 90/270 も含めて救済する。
+        let rots: &[u32] = if thorough {
+            &[
+                rotation_deg % 360,
+                (rotation_deg + 180) % 360,
+                (rotation_deg + 90) % 360,
+                (rotation_deg + 270) % 360,
+            ]
+        } else {
+            &[rotation_deg % 360, (rotation_deg + 180) % 360]
+        };
         // ガイド枠の大きさ (画像幅比) と中心位置 (画像比) を振る。小さめスケールで隅寄りも拾う。
         let scales = [0.7f64, 0.5, 0.38];
         let centers = [0.5f32, 0.32, 0.68];
@@ -519,7 +529,7 @@ impl VcodeRx {
         if !cands.contains(&vcode::Layout::V3_MAX) {
             cands.push(vcode::Layout::V3_MAX);
         }
-        for rot in rots {
+        for &rot in rots {
             let (gray, rw, rh) = rotate_y_plane(&y, w, h, stride, rot);
             let img = GrayImage { w: rw, h: rh, data: &gray };
             // まずテクスチャ推定の 1 点から (スケール総当たりの穴を避ける本命経路)

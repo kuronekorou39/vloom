@@ -15,6 +15,7 @@ from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -32,7 +33,8 @@ from .sender import SenderWindow
 
 # 受信側の総当たり候補に入っている格子だけを既定で出す。11×10 は候補外なので
 # 受信側で格子を明示指定しない限り検出されない (選べるようにはしておく)。
-GRIDS = ["7x6 (高密度)", "5x4 (標準)", "9x8 (超高密度)", "11x10 (最大・受信側で要指定)"]
+GRIDS = ["7x6 (高密度)", "5x4 (標準)", "9x8 (超高密度)",
+         "11x10 (最大)", "11x14 (縦長)", "13x12 (超密)"]
 AUTO_DETECT_GRIDS = {(5, 4), (7, 6), (9, 8)}
 
 # ソースパケットに対するリペアパケットの比率。PWA の REPAIR_RATE と同値。
@@ -40,6 +42,9 @@ REPAIR_RATE = 0.5
 # コードの四辺に置く白余白 (セル数)。QR の quiet zone は 4 モジュールだが、
 # こちらはウィンドウ枠や操作バーと隣接するぶん余裕を見て 8 セルにしている。
 DEFAULT_MARGIN_CELLS = 8
+# カメラの実効フレームレートが 23-25 fps なので、20 までは 1 枚ずつ拾える。
+# 30 にすると混ざって回収率が落ちる (実測: 11x10 で 60 -> 33 KB/s)。
+DEFAULT_FPS = 20
 
 
 def parse_grid(text: str) -> tuple[int, int]:
@@ -80,7 +85,7 @@ class MainWindow(QWidget):
         self.bpc.addItems(["2 (輝度4値)", "1 (白黒)"])
         self.fps = QSpinBox()
         self.fps.setRange(2, 60)
-        self.fps.setValue(12)
+        self.fps.setValue(DEFAULT_FPS)
         self.repair = QSpinBox()
         # 捕捉率が低いほど高いリペア率が効くので、振り幅を広く取っておく
         self.repair.setRange(0, 400)
@@ -91,6 +96,22 @@ class MainWindow(QWidget):
         self.margin.setRange(0, 20)
         self.margin.setValue(DEFAULT_MARGIN_CELLS)
         self.margin.setSuffix(" セル")
+        # 窓の中でのコードの大きさと位置。窓ごと動かすと背景のデスクトップまで
+        # 変わって検出の条件が動くうえ、setGeometry はクライアント矩形を指すので
+        # OS のフレーム分ずれる。白い面は据えたまま、中のコードだけを動かせると
+        # 三脚の構図を崩さずに追い込める。送信中は矢印キーと +/- でも動かせる。
+        self.zoom = QDoubleSpinBox()
+        self.zoom.setRange(0.05, 1.00)
+        self.zoom.setSingleStep(0.05)
+        self.zoom.setDecimals(2)
+        self.zoom.setValue(1.00)
+        self.dx = QDoubleSpinBox()
+        self.dy = QDoubleSpinBox()
+        for w in (self.dx, self.dy):
+            w.setRange(-0.50, 0.50)
+            w.setSingleStep(0.01)
+            w.setDecimals(3)
+            w.setValue(0.0)
 
         self.screen = QComboBox()
         for i, s in enumerate(QGuiApplication.screens()):
@@ -106,6 +127,17 @@ class MainWindow(QWidget):
         form.addRow("FPS:", self.fps)
         form.addRow("リペア:", self.repair)
         form.addRow("余白:", self.margin)
+        place = QHBoxLayout()
+        place.setContentsMargins(0, 0, 0, 0)
+        place.addWidget(QLabel("倍率"))
+        place.addWidget(self.zoom)
+        place.addWidget(QLabel("横"))
+        place.addWidget(self.dx)
+        place.addWidget(QLabel("縦"))
+        place.addWidget(self.dy)
+        place_row = QWidget()
+        place_row.setLayout(place)
+        form.addRow("配置:", place_row)
         form.addRow("表示先:", self.screen)
         form.addRow("ファイル名:", self.name_override)
 
@@ -216,7 +248,8 @@ class MainWindow(QWidget):
         extra_repair = math.ceil(source_packets * self.repair.value() / 100)
         tx = vloom_core.VcodeTx(source, extra_repair, gw, gh, bpc)
 
-        self.stage = SenderWindow(tx, fps, len(data), name, self.margin.value())
+        self.stage = SenderWindow(tx, fps, len(data), name, self.margin.value(),
+                                  self.zoom.value(), self.dx.value(), self.dy.value())
         self.stage.closed.connect(self._on_stage_closed)
         self.stage.setGeometry(self.stage_geometry or self._stage_rect())
         self.stage.start()
@@ -251,6 +284,8 @@ class MainWindow(QWidget):
     def apply_settings(self, *, file: str | None = None, grid: str | None = None,
                        bpc: int | None = None, fps: int | None = None,
                        repair: int | None = None, margin: int | None = None,
+                       zoom: float | None = None, dx: float | None = None,
+                       dy: float | None = None,
                        geometry: tuple[int, int, int, int] | None = None) -> None:
         """コマンドラインから条件を流し込む。指定のないものは UI の値のまま。"""
         if file:
@@ -270,6 +305,12 @@ class MainWindow(QWidget):
             self.repair.setValue(repair)
         if margin is not None:
             self.margin.setValue(margin)
+        if zoom is not None:
+            self.zoom.setValue(zoom)
+        if dx is not None:
+            self.dx.setValue(dx)
+        if dy is not None:
+            self.dy.setValue(dy)
         if geometry is not None:
             self.stage_geometry = QRect(*geometry)
         self._update_theory()

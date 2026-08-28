@@ -10,6 +10,7 @@ import 'history_screen.dart';
 import 'vcode_send_screen.dart';
 import 'vcode_receive_screen.dart';
 import 'calibration_screen.dart';
+import 'launch_args.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,6 +18,9 @@ Future<void> main() async {
   // 前提が崩れて読めなくなるのを防ぐ (スキャナ系アプリの定石)。
   await SystemChrome.setPreferredOrientations(
       [DeviceOrientation.portraitUp, DeviceOrientation.portraitDown]);
+  // 計測の自動化用。カメラを作る前にプリセットを確定させたいので、
+  // 画面が組み上がる前にここで読んでおく (以降は同期で参照できる)。
+  await LaunchArgs.load();
   await RustLib.init();
   await HistoryStore.instance.init();
   _registerNativeLicenses();
@@ -66,7 +70,8 @@ class HomeShell extends StatefulWidget {
 }
 
 class _HomeShellState extends State<HomeShell> {
-  int _index = 0;
+  // 起動 Intent でタブを指定できる (計測の自動化用。既定は送信タブ)
+  int _index = LaunchArgs.cached.tab ?? 0;
   // 校正画面 (カメラを使う) を上に重ねている間は、下の受信タブのカメラを止める。
   // IndexedStack は全子を生かし続けるため、明示的に active を切らないと
   // 背面カメラを複数の画面が奪い合ってフリーズする。

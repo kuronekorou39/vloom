@@ -192,13 +192,15 @@
               <option value="5x4">5×4 (標準)</option>
               <option value="9x8">9×8 (超高密度)</option>
               <option value="11x10">11×10 (最大)</option>
+              <option value="11x14">11×14 (縦長)</option>
+              <option value="13x12">13×12 (超密)</option>
             </select></label>
           <label>bit/セル:
             <select id="txBpc">
-              <option value="2" selected>2 (輝度4値)</option>
-              <option value="1">1 (白黒)</option>
+              <option value="1" selected>1 (白黒)</option>
+              <option value="2">2 (輝度4値)</option>
             </select></label>
-          <label>FPS: <input type="number" id="txFps" value="12" min="2" max="60" style="width:4em" /></label>
+          <label>FPS: <input type="number" id="txFps" value="20" min="2" max="60" style="width:4em" /></label>
           <button id="txStart">送信開始</button>
         </div>
         <div id="txTheory" class="muted"></div>
@@ -219,6 +221,8 @@
               <option value="7x6">7×6</option>
               <option value="9x8">9×8</option>
               <option value="11x10">11×10</option>
+              <option value="11x14">11×14</option>
+              <option value="13x12">13×12</option>
             </select></label>
         </div>
         <div class="row"><button id="rxStart">受信開始 (全画面)</button></div>

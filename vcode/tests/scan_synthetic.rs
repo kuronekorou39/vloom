@@ -355,6 +355,23 @@ fn scan_max_layout_2bpc_at_6px_per_cell() {
 }
 
 #[test]
+fn scan_tall_layout_1bpc_at_5px_per_cell() {
+    // 縦長 11x14 (220x294 セル) を白黒で 5px/セル。実機の構図がこのあたりで、
+    // 幅 220 セル x 5px = 1100px を 1200px 幅の視野に収める形になる。
+    // 幅は 11x10 と同じなので、11x10 が通る条件ならこちらも通るはず。
+    let (ok, total) = recover_at_cell_px(Layout::V4_TALL, 1, 5, 0x5A5A);
+    assert!(ok * 10 >= total * 9, "11x14/1bpc の回収が少なすぎる: {ok}/{total}");
+}
+
+#[test]
+fn scan_dense_layout_1bpc_at_5px_per_cell() {
+    // 超密 13x12 (260x254 セル) を白黒で 5px/セル。V4_TALL とブロック数は
+    // ほぼ同じだが、こちらは同じ px/セル を得るのに 1300px の幅が要る。
+    let (ok, total) = recover_at_cell_px(Layout::V5_DENSE, 1, 5, 0xA5A5);
+    assert!(ok * 10 >= total * 9, "13x12/1bpc の回収が少なすぎる: {ok}/{total}");
+}
+
+#[test]
 fn dense_layouts_degrade_below_4px_per_cell() {
     // 密度の限界を明示しておく: 4px/セル まで落とすと輝度 4 値は成立しなくなる。
     // 「受信解像度を上げないと格子は上げられない」という設計上の制約の裏付け。
