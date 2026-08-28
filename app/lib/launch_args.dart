@@ -9,14 +9,24 @@ import 'package:flutter/services.dart';
 /// 画面を辿る数秒も要らない。指定の受け口は MainActivity.kt にある。
 ///
 ///     adb shell am start -n app.vloom.vloom/.MainActivity --ei tab 1 --ei preset 4
+///     adb shell am start -n app.vloom.vloom/.MainActivity --ei tab 1 --es grid 13x16
 class LaunchArgs {
-  const LaunchArgs({this.tab, this.preset});
+  const LaunchArgs({this.tab, this.preset, this.grid, this.camLock});
 
   /// 0=送信 1=受信 2=履歴。指定がなければ null
   final int? tab;
 
   /// kPresets の添字。指定がなければ null
   final int? preset;
+
+  /// 格子の直接指定 ("11x14" 等)。プリセットに無い格子を測るためのもので、
+  /// [preset] より優先する。指定がなければ null
+  final String? grid;
+
+  /// 追従が安定したときのカメラロック: "none" / "ae" / "both"。指定がなければ null
+  /// (= 既定の ae)。ロック操作はフレーム供給を秒単位で止めることがあるので、
+  /// 効果と代償を測るために切り替えられるようにしてある。
+  final String? camLock;
 
   static const _ch = MethodChannel('app.vloom/launch');
   static LaunchArgs _cached = const LaunchArgs();
@@ -36,7 +46,14 @@ class LaunchArgs {
         return (v is int && v >= 0) ? v : null;
       }
 
-      _cached = LaunchArgs(tab: pick('tab'), preset: pick('preset'));
+      final g = m['grid'];
+      final cl = m['camlock'];
+      _cached = LaunchArgs(
+        tab: pick('tab'),
+        preset: pick('preset'),
+        grid: (g is String && g.isNotEmpty) ? g : null,
+        camLock: (cl is String && cl.isNotEmpty) ? cl : null,
+      );
     } catch (_) {
       // 指定なしで普通に起動する
     }

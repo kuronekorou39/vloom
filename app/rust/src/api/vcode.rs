@@ -281,6 +281,15 @@ fn rotate_y_plane(y: &[u8], w: usize, h: usize, stride: usize, rot: u32) -> (Vec
 /// - rotation_deg: 画像を起こす回転 (0/90/180/270)。Android は通常 sensorOrientation を渡す
 /// - guide_frac: 回転後画像の幅に対するガイド枠幅の比 (UI のガイド枠と同じ値を渡す)
 #[flutter_rust_bridge::frb(opaque)]
+/// 追従スキャンが外れたとき、フル探索に落ちる前に同じ四隅で粘るフレーム数。
+///
+/// 三脚固定では四隅は動いていない。それでも表示の切り替わりの帯 (ローリング
+/// シャッターで 1 枚の中に 2 フレームが混ざる) が下側のマーカーにかかると、
+/// その 1 枚だけコーナー照合が落ちる。ここで即フル探索 (160〜210ms) に行くと
+/// その間に 4〜5 枚落ち、実測で 500〜600ms の空白になっていた。次の 1 枚は
+/// たいてい普通に読めるので、数枚は 40〜60ms の追従を試し続けるほうが速い。
+const TRACK_RETRY_FRAMES: u32 = 4;
+
 pub struct VcodeRx {
     /// 直近成功時の (回転 deg, レイアウト, 精密化後の 4 隅)
     last: Option<(u32, vcode::Layout, [(f32, f32); 4])>,
@@ -293,12 +302,14 @@ pub struct VcodeRx {
     last_ok: Option<(u32, vcode::Layout)>,
     /// 探索するレイアウトの固定指定 (None = CANDIDATES を総当たり)
     forced: Option<vcode::Layout>,
+    /// 追従スキャンの連続失敗回数 (TRACK_RETRY_FRAMES 未満ならフル探索に落とさない)
+    track_misses: u32,
 }
 
 impl VcodeRx {
     #[flutter_rust_bridge::frb(sync)]
     pub fn new() -> VcodeRx {
-        VcodeRx { last: None, last_ok: None, forced: None }
+        VcodeRx { last: None, last_ok: None, forced: None, track_misses: 0 }
     }
 
     /// 探索するレイアウトを 1 つに固定する (grid_w = 0 で解除)。
@@ -349,11 +360,19 @@ impl VcodeRx {
             let t_dec = std::time::Instant::now();
             if let Ok(result) = scan_frame_tracked(&img, &corners, layout) {
                 let decode_us = t_dec.elapsed().as_micros() as u32;
+                self.track_misses = 0;
+                self.track_misses = 0;
                 self.last = Some((rot, layout, result.corners));
                 self.last_ok = Some((rot, layout));
                 return success(result, true, layout, rot, rw, rh, rotate_us, decode_us);
             }
-            // 追従失敗 → フル探索へフォールバック (ロック解除はフル探索も失敗した時)
+            // 追従失敗。四隅は動いていないことが多いので、すぐにはフル探索へ落とさず
+            // 同じ四隅で数枚粘る (TRACK_RETRY_FRAMES 参照)。
+            self.track_misses += 1;
+            if self.track_misses < TRACK_RETRY_FRAMES {
+                return fail("tracked miss (retrying)");
+            }
+            // 連続で外れた → フル探索へフォールバック (ロック解除はフル探索も失敗した時)
         }
 
         // フル探索: 回転 (指定値と 180 度違い) x レイアウト候補を順に試す。
@@ -391,6 +410,7 @@ impl VcodeRx {
                 };
                 if let Ok(result) = scan_frame(&img, &guide, layout) {
                     let decode_us = t_dec.elapsed().as_micros() as u32;
+                    self.track_misses = 0;
                     self.last = Some((rot, layout, result.corners));
                     self.last_ok = Some((rot, layout));
                     return success(result, false, layout, rot, rw, rh, rotate_us, decode_us);
@@ -419,6 +439,7 @@ impl VcodeRx {
                 };
                 if let Ok(result) = scan_frame(&img, &guide, layout) {
                     let decode_us = t_dec.elapsed().as_micros() as u32;
+                    self.track_misses = 0;
                     self.last = Some((rot, layout, result.corners));
                     return success(result, false, layout, rot, rw, rh, rotate_us, decode_us);
                 }
@@ -448,6 +469,7 @@ impl VcodeRx {
                     match scan_frame(&img, &guide, layout) {
                         Err(e) => errors.push(format!("rot{rot}/{}x{}:{e:?}", layout.grid_w, layout.grid_h)),
                         Ok(result) => {
+                            self.track_misses = 0;
                             self.last = Some((rot, layout, result.corners));
                             self.last_ok = Some((rot, layout));
                             let decode_us = t_dec.elapsed().as_micros() as u32;
@@ -639,6 +661,7 @@ impl VcodeRx {
             (corners[4], corners[5]),
             (corners[6], corners[7]),
         ];
+        self.track_misses = 0;
         self.last = Some((rot, layout, c));
     }
 }

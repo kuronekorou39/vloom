@@ -13,7 +13,8 @@ import io.flutter.plugin.common.MethodChannel
 ///
 ///   adb shell am start -n app.vloom.vloom/.MainActivity --ei tab 1 --ei preset 4
 ///
-/// tab: 0=送信 1=受信 2=履歴、preset: kPresets の添字。どちらも省略可 (-1 = 指定なし)。
+/// tab: 0=送信 1=受信 2=履歴、preset: kPresets の添字、grid: "11x14" のような格子。
+/// いずれも省略可。grid はプリセットにない格子を試すためのもので、preset より優先する。
 class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -24,6 +25,8 @@ class MainActivity : FlutterActivity() {
                         mapOf(
                             "tab" to intent.getIntExtra("tab", -1),
                             "preset" to intent.getIntExtra("preset", -1),
+                            "grid" to intent.getStringExtra("grid"),
+                            "camlock" to intent.getStringExtra("camlock"),
                         )
                     )
                     else -> result.notImplemented()

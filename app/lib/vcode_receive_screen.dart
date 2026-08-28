@@ -39,9 +39,14 @@ const kAutoAcquireMissFrames = 20;
 /// 自動 acquire の再試行間隔 (フレーム)。acquire は 300 回超の探索を伴うので連発させない。
 const kAutoAcquireCooldownFrames = 45;
 
-/// この回数連続で検出できたらフォーカスと露出をロックする。
-/// 連続成功中 = ピントが合っている、の裏付けを取ってからロックする。
-const kCamLockStreak = 15;
+// 追従が何枚続いたらカメラ (露出) を固定するか。
+//
+// 100 枚 (追従 20〜25 枚/秒なので約 5 秒) に置いてある。カメラのモード切替は
+// 何であれフレーム供給を 1〜5 秒止めることがある (フレームログで確認: AF+AE で
+// 最大 5.2 秒、露出だけでも 1.65 秒)。100KB 級の転送は 25 枚ほどで終わるので、
+// そこで止められると転送時間が倍になる。数 MB の転送だけが 1 回の停止と引き換えに
+// 露出の安定 (白飛び防止) を得る形にする。
+const kCamLockStreak = 100;
 
 /// この回数連続で見失ったら AF/AE ロックを解除する。モード切替はカメラの
 /// フレーム供給を止めるため、acquire (20) より長く粘って発振を防ぐ。
@@ -54,10 +59,13 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   /// 選択中のプリセット。送信側と同じものを選べば格子も解像度も揃う
   // 起動 Intent でプリセットを指定できる (計測の自動化用)。カメラの解像度を
   // 決めるので、初期化より前に確定していなければならない。
-  int _presetIndex = LaunchArgs.cached.preset ?? kDefaultPresetIndex;
+  int _presetIndex = LaunchArgs.cached.grid != null
+      ? -1 // 格子を直接指定したときはカスタム扱い
+      : (LaunchArgs.cached.preset ?? kDefaultPresetIndex);
 
   /// 探索する格子 (kGridAuto か '9x8' 等)。送信側と揃えるほど初回検出が速い
-  String _forcedGrid =
+  // 格子の直接指定があればそれを使う (プリセットに無い格子を測るため)
+  String _forcedGrid = LaunchArgs.cached.grid ??
       kPresets[LaunchArgs.cached.preset ?? kDefaultPresetIndex].grid;
 
   /// カメラ解像度。9x8 以上は 1080p では px/セル が足りない
@@ -602,10 +610,20 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   Future<void> _lockCamera(bool lock) async {
     final cam = _cam;
     if (cam == null || !cam.value.isInitialized) return;
-    debugPrint('[vcode-rx] camera ${lock ? "lock" : "unlock"} (AF/AE)');
-    try {
-      await cam.setFocusMode(lock ? FocusMode.locked : FocusMode.auto);
-    } catch (_) {}
+    // 既定は露出だけ固定する。ピント (FocusMode) の切替はカメラのフレーム供給を
+    // 0.5〜5 秒止めることがあり (フレームログで確認: lock 直後に 3 秒間 1 枚も
+    // 来なかった)、100KB の転送が 1.5 秒で終わる状況では致命的だった。露出の
+    // 固定は止まらず、白飛びを防ぐ効果だけが残る。実測 (11x14 / 20fps 各 4 本):
+    // none 平均 71 / ae 76 / both 49 KB/s。both だけ 1〜5 秒の空白が出る。
+    // 起動引数 camlock=none|ae|both で切り替えられる (計測用)。
+    final mode = LaunchArgs.cached.camLock ?? 'ae';
+    debugPrint('[vcode-rx] camera ${lock ? "lock" : "unlock"} ($mode)');
+    if (mode == 'none') return;
+    if (mode != 'ae') {
+      try {
+        await cam.setFocusMode(lock ? FocusMode.locked : FocusMode.auto);
+      } catch (_) {}
+    }
     try {
       await cam.setExposureMode(lock ? ExposureMode.locked : ExposureMode.auto);
     } catch (_) {}
@@ -1121,8 +1139,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         gradient: LinearGradient(
           begin: inner,
           end: edge,
-          colors: const [Color(0x00000000), Color(0xB3000000), Color(0xE6000000)],
-          stops: const [0.0, 0.25, 1.0],
+          colors: const [Color(0x00000000), Color(0x59000000), Color(0xA6000000)],
+          stops: const [0.0, 0.30, 1.0],
         ),
       ),
       child: SafeArea(
@@ -1135,7 +1153,10 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
             padding: _panelAtTop
                 ? const EdgeInsets.fromLTRB(8, 8, 8, 28)
                 : const EdgeInsets.fromLTRB(8, 28, 8, 8),
-            child: Column(
+            // ボタンも進捗も透かす (Opacity は当たり判定を変えないので押せる)
+            child: Opacity(
+              opacity: 0.82,
+              child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Row(
@@ -1202,6 +1223,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                   style: const TextStyle(fontSize: 12, color: Colors.white),
                 ),
               ],
+              ),
             ),
           ),
         ),

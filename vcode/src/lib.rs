@@ -30,23 +30,31 @@
 
 pub mod scan;
 
-/// 上下ストリップの高さ (セル)。内訳: 較正/ヘッダ 6 行 + セパレータ 1 行。
-pub const STRIP_H: usize = 7;
+/// コーナーマーカーの一辺 (セル)。
+///
+/// 位置合わせはまずこの 4 つを見つけることから始まるので、ここが読めないと
+/// 何も始まらない。逆にマーカーさえ大きければ、コードが小さく写っても
+/// (= セルが数 px しかなくても) 掴める。マーカーはデータを運ばないぶん
+/// セル数の純増になるが、格子を上げるほど 1 セルが小さくなる方向なので、
+/// 検出の足場は太いほうが釣り合う。
+pub const CORNER: usize = 24;
 /// コーナーマーカーと隣接セルの間に置く白セパレータの幅 (セル)。
 ///
-/// マーカーの外周 1 セルは黒なので、隣がデータやヘッダの黒セルだと境界が溶ける。
+/// マーカーの外周は黒なので、隣がデータやヘッダの黒セルだと境界が溶ける。
 /// QR のファインダが同じ理由で 1 モジュールのセパレータを持つ。マーカーの下隣は
 /// 20x20 ブロックの一部で削れないため、ストリップを 1 行増やして確保している。
-pub const SEP: usize = 1;
-/// コーナーマーカーの一辺 (セル)
-pub const CORNER: usize = 6;
+pub const SEP: usize = 4;
+/// 上下ストリップの高さ (セル)。マーカーがちょうど収まる高さ + セパレータ 1 行。
+/// 余った行はヘッダのコピー数と較正行に回るので、増えても無駄にはならない。
+pub const STRIP_H: usize = CORNER + SEP;
 /// ヘッダ先頭のマジックバイト
 pub const MAGIC: u8 = 0xB9;
 /// ヘッダのシリアライズ長 (CRC-32 込み)
 pub const HEADER_LEN: usize = 24;
 /// フォーマットバージョン
-/// (v2: コーナーに白セパレータを追加し、BR の市松を粗いパターンへ。v1 とは非互換)
-pub const VERSION: u8 = 2;
+/// (v2: コーナーに白セパレータを追加し、BR の市松を粗いパターンへ。
+///  v3: コーナーを一辺 6 -> 24 セルへ。いずれも前版とは非互換)
+pub const VERSION: u8 = 3;
 
 /// CRC-32/ISO-HDLC (init=0xFFFFFFFF, poly=0xEDB88320 反転形, xorout=0xFFFFFFFF)
 pub fn crc32(data: &[u8]) -> u32 {
@@ -279,21 +287,27 @@ pub(crate) enum Corner {
     BottomRight,
 }
 
-/// コーナーマーカーのパターン。外周 1 セルは全コーナー共通で黒 (検出用)、
-/// 内部 4x4 はコーナーごとに異なる (将来の回転判定用)。
+/// コーナーマーカーのパターン。外周は全コーナー共通で黒 (検出用)、内部は
+/// コーナーごとに異なる (向きの判定用)。
+///
+/// 各部の太さは CORNER に比例させてあるので、マーカーを大きくしても模様の
+/// 見た目の比率は変わらない。細かい模様はピンぼけ・モアレで真っ先に潰れる
+/// (実測で市松の BR だけ一致率 0.67 と突出して低かった) ため、塊の大きさを
+/// マーカーの大きさと一緒に増やすことに意味がある。
 pub(crate) fn corner_black(which: Corner, r: usize, c: usize) -> bool {
-    let border = r == 0 || r == CORNER - 1 || c == 0 || c == CORNER - 1;
-    if border {
+    let t = CORNER / 6; // 外周の太さ
+    if r < t || r >= CORNER - t || c < t || c >= CORNER - t {
         return true;
     }
     match which {
-        Corner::TopLeft => true,                                     // 塗りつぶし
-        Corner::TopRight => false,                                   // 白抜きリング
-        Corner::BottomLeft => (2..4).contains(&r) && (2..4).contains(&c), // 中央 2x2 のみ黒
-        // 下半分 2 行を黒。市松 (1 セルごとの反転) はコード内で最も空間周波数が
-        // 高く、ピンぼけ・モアレで真っ先に潰れる。実測でも BR だけ一致率 0.67 と
-        // 突出して低かったため、4x2 の塊に置き換えて判別力を保ったまま粗くした。
-        Corner::BottomRight => r >= CORNER / 2,
+        Corner::TopLeft => true,   // 塗りつぶし
+        Corner::TopRight => false, // 白抜きリング
+        Corner::BottomLeft => {
+            // 中央の四角だけ黒
+            let a = CORNER / 3;
+            (a..CORNER - a).contains(&r) && (a..CORNER - a).contains(&c)
+        }
+        Corner::BottomRight => r >= CORNER / 2, // 下半分を黒
     }
 }
 
@@ -312,14 +326,27 @@ pub(crate) fn strip_cols(w: usize) -> std::ops::Range<usize> {
     CORNER + SEP..w - CORNER - SEP
 }
 
-/// 較正パターンを書く行 (上端タイミング行 + 下ストリップ。セパレータ行は除く)
+/// ヘッダと較正に使う行数。
+///
+/// ストリップの高さはコーナーマーカーの大きさで決まるが、ヘッダと較正まで
+/// その全行を使うと、読み取りコストがマーカーの大きさに比例して増えてしまう
+/// (実測でマーカーを 4 倍にしたとき scan が 170ms -> 655ms になった)。
+/// 必要なコピー数が入るぶんだけに絞り、余った行は白のままにする。
+/// 白い行はコーナーの周りの quiet zone としても効く。
+///
+/// 9 行なのは、いちばん小さい 5x4 (幅 100 セル) でもヘッダが 2 コピー入る下限が
+/// そこだから (9 行 × (100 − 2×24 − 2×4) = 396 セル ≥ 24 byte × 8 × 2)。
+/// マーカーが幅 24 セルとセパレータ 4 セルを両側で食うので、小さい格子ほど余裕がない。
+pub(crate) const BAND_ROWS: usize = 9;
+
+/// 較正パターンを書く行 (上端タイミング行 + 下ストリップの末尾)
 pub(crate) fn calib_rows(h: usize) -> impl Iterator<Item = usize> {
-    std::iter::once(0).chain(h - STRIP_H + SEP..h)
+    std::iter::once(0).chain(h - BAND_ROWS..h)
 }
 
-/// ヘッダ領域のセルを行優先で列挙 (行 0 のタイミング行とセパレータを除く)
+/// ヘッダ領域のセルを行優先で列挙 (行 0 のタイミング行は除く)
 pub(crate) fn header_cells(w: usize) -> impl Iterator<Item = (usize, usize)> {
-    (1..STRIP_H - SEP).flat_map(move |r| strip_cols(w).map(move |c| (r, c)))
+    (1..=BAND_ROWS).flat_map(move |r| strip_cols(w).map(move |c| (r, c)))
 }
 
 /// セパレータのセル (すべて白)。コーナーとデータ/ヘッダの境界を切る。
@@ -710,14 +737,17 @@ mod tests {
     #[test]
     fn layout_v0_capacity() {
         let l = Layout::V0;
-        assert_eq!((l.width(), l.height()), (100, 94));
+        // 5x4 ブロック = 100x80 セルに、上下ストリップが付く
+        assert_eq!((l.width(), l.height()), (100, 80 + 2 * STRIP_H));
         assert_eq!(l.block_count(), 20);
         assert_eq!(l.block_bytes(1), 50);
         assert_eq!(l.block_payload_len(1), 46);
         assert_eq!(l.packet_size(1), 42);
-        // ヘッダ領域 = 5 行 * (100 - コーナー12 - セパレータ2) = 430 セル
-        // → 24byte*8=192bit が 2 コピー (+46 セル余り)
-        assert_eq!(header_cells(l.width()).count(), 430);
+        // ヘッダ領域 = (ストリップ高 - タイミング行 - セパレータ行) * 書ける列数
+        let cells = BAND_ROWS * (100 - 2 * CORNER - 2 * SEP);
+        assert_eq!(header_cells(l.width()).count(), cells);
+        // ヘッダは同じ内容を繰り返し書く。何コピー入るかが壊れにくさに直結する
+        assert!(cells >= HEADER_LEN * 8 * 2, "ヘッダが 2 コピー入らない: {cells}");
     }
 
     #[test]
@@ -756,7 +786,7 @@ mod tests {
         let header = test_header(8);
         let blocks = test_blocks(20, Layout::V0.block_payload_len(1), 0x5A);
         let bm = encode_frame(&header, &blocks, 3);
-        assert_eq!((bm.w, bm.h), (300, 282));
+        assert_eq!((bm.w, bm.h), (300, 3 * (80 + 2 * STRIP_H)));
         let decoded = decode_frame(&bm, 3).unwrap();
         assert_eq!(decoded.header, header);
         for (i, b) in decoded.blocks.iter().enumerate() {
@@ -785,9 +815,9 @@ mod tests {
         let blocks = test_blocks(20, Layout::V0.block_payload_len(1), 0x77);
         let mut bm = encode_frame(&header, &blocks, 1);
 
-        // ブロック格子 (bx,by) = (1..3, 1..3) の 4 ブロックを覆う黒塗り
-        // = セル座標 行 27..67, 列 20..60 (データ領域は STRIP_H=7 行目開始)
-        for y in 27..67 {
+        // ブロック格子 (bx,by) = (1..3, 1..3) の 4 ブロックを覆う黒塗り。
+        // データ領域は STRIP_H 行目から始まるので、そこを基準に置く。
+        for y in STRIP_H + 20..STRIP_H + 60 {
             for x in 20..60 {
                 bm.set(x, y, 0);
             }

@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 import mimetypes
 import pathlib
+import re
 
 import vloom_core
 from PySide6.QtCore import QRect, Qt
@@ -293,9 +294,14 @@ class MainWindow(QWidget):
             self.file_label.setText(f"{self.path.name} ({self.path.stat().st_size:,} B)")
         if grid:
             i = next((k for k in range(self.grid.count())
-                      if self.grid.itemText(k).startswith(grid)), None)
+                      if self.grid.itemText(k).split(" ")[0] == grid), None)
             if i is None:
-                raise SystemExit(f"未知の格子: {grid} (選択肢: {GRIDS})")
+                # リストに無い格子は選択肢に足して選ぶ。計測で格子を振るときに、
+                # 候補を先に登録しないと送れないのでは探索が広がらない。
+                if not re.fullmatch(r"\d{1,2}x\d{1,2}", grid):
+                    raise SystemExit(f"格子の形式が不正: {grid} (例: 11x14)")
+                self.grid.addItem(f"{grid} (指定)")
+                i = self.grid.count() - 1
             self.grid.setCurrentIndex(i)
         if bpc is not None:
             self.bpc.setCurrentIndex(0 if bpc == 2 else 1)

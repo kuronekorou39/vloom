@@ -103,8 +103,15 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
+    // 受信中はカメラを画面いっぱいに使う。ヘッダも下のナビも映像を削るだけなので、
+    // ヘッダは畳み、ナビは透過して上に浮かせる。校正とライセンスは他のタブから開ける。
+    final camMode = _index == 1 && _hasCamera;
     return Scaffold(
-      appBar: AppBar(
+      extendBody: true,
+      extendBodyBehindAppBar: true,
+      appBar: camMode
+          ? null
+          : AppBar(
         title: const Text('Vloom'),
         actions: [
           if (_hasCamera)
@@ -128,6 +135,9 @@ class _HomeShellState extends State<HomeShell> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),
+        backgroundColor: camMode ? const Color(0x8A000000) : null,
+        surfaceTintColor: camMode ? Colors.transparent : null,
+        elevation: camMode ? 0 : null,
         destinations: const [
           NavigationDestination(icon: Icon(Icons.grid_on), label: '送信'),
           NavigationDestination(icon: Icon(Icons.center_focus_strong), label: '受信'),

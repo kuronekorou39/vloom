@@ -540,7 +540,9 @@ fn decode_at(
             (smooth(&blk), smooth(&wht))
         };
         let (black_top, white_top) = estimate(&[0]);
-        let bot_rows: Vec<usize> = (h - STRIP_H + crate::SEP..h).collect();
+        // 較正パターンが書かれているのは下ストリップの末尾 BAND_ROWS 行だけ
+        // (残りはマーカー用の白)。ストリップ全体を読むと白が黒レベルに混ざる。
+        let bot_rows: Vec<usize> = (h - crate::BAND_ROWS..h).collect();
         let (black_bot, white_bot) = estimate(&bot_rows);
         Some((black_top, white_top, black_bot, white_bot))
     } else {

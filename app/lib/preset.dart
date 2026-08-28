@@ -111,7 +111,7 @@ const kPresets = <VcodePreset>[
   ),
   VcodePreset(
     name: '限界',
-    description: '220 セル幅。実測 60 KB/s。近距離・固定が前提',
+    description: '220 セル幅。実測 60 KB/s。縦長のほうが速い',
     grid: '11x10',
     bpc: 1,
     fps: 20,
@@ -123,7 +123,7 @@ const kPresets = <VcodePreset>[
     // px/セル (= 読み取りマージン) は 11x10 と同じままなので、余った縦を
     // 使い切るだけでブロック数を 110 -> 154 にできる。
     name: '縦長',
-    description: '幅は 11x10 のまま縦を使い切る。154 ブロック (1.4 倍)',
+    description: '幅は 11x10 のまま縦を使い切る。実測 76〜110 KB/s (最良)',
     grid: '11x14',
     bpc: 1,
     fps: 20,
@@ -133,7 +133,7 @@ const kPresets = <VcodePreset>[
     // 縦長との対照。ブロック数はほぼ同じ (156) だが、幅を広げるぶん px/セル が
     // 落ちる。「縦を使う」と「幅を詰める」のどちらが効くかを実機で比べるため。
     name: '超密',
-    description: '260 セル幅、156 ブロック。縦長との対照',
+    description: '260 セル幅。縦長との対照 (実測では縦長に劣る)',
     grid: '13x12',
     bpc: 1,
     fps: 20,
