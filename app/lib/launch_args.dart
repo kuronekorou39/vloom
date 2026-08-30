@@ -11,7 +11,14 @@ import 'package:flutter/services.dart';
 ///     adb shell am start -n app.vloom.vloom/.MainActivity --ei tab 1 --ei preset 4
 ///     adb shell am start -n app.vloom.vloom/.MainActivity --ei tab 1 --es grid 13x16
 class LaunchArgs {
-  const LaunchArgs({this.tab, this.preset, this.grid, this.camLock, this.ev});
+  const LaunchArgs(
+      {this.tab,
+      this.preset,
+      this.grid,
+      this.camLock,
+      this.ev,
+      this.aePoint,
+      this.dumpLow = 0});
 
   /// 0=送信 1=受信 2=履歴。指定がなければ null
   final int? tab;
@@ -31,6 +38,15 @@ class LaunchArgs {
   /// 露出補正 (EV)。露光時間を短くして、表示の切り替わりがカメラの 1 枚に
   /// 混ざる幅を狭める。指定がなければ null (= 受信画面の既定 -2 EV)
   final double? ev;
+
+  /// 自動露出の測光点: "center" (画角の中心 = コード) / "none" (カメラ任せ)。
+  /// 指定がなければ null (= 既定の center)。送信画面の周りが黒いと AE が全体の平均を
+  /// 上げようとして白を飽和させ、露光が長くなる (帯が太る) ので、コードで測る
+  final String? aePoint;
+
+  /// 追従中に 70% 未満しか読めなかったフレームを、この枚数まで保存する (調査用)。
+  /// 保存中は毎フレーム画像のコピーが乗るので、計測では 0 にしておく
+  final int dumpLow;
 
   static const _ch = MethodChannel('app.vloom/launch');
   static LaunchArgs _cached = const LaunchArgs();
@@ -53,8 +69,11 @@ class LaunchArgs {
       final g = m['grid'];
       final cl = m['camlock'];
       final ev = m['ev'];
+      final ap = m['aepoint'];
       _cached = LaunchArgs(
         ev: (ev is String) ? double.tryParse(ev) : null,
+        aePoint: (ap is String && ap.isNotEmpty) ? ap : null,
+        dumpLow: pick('dump') ?? 0,
         tab: pick('tab'),
         preset: pick('preset'),
         grid: (g is String && g.isNotEmpty) ? g : null,

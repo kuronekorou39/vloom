@@ -96,13 +96,23 @@ export class VcodeSender {
   info() {
     if (!this.w) return "";
     const px = this._cellPx();
-    return `${this.w}×${this.h} セル · ${px}px/セル · ${this.w * px}×${this.h * px}px`;
+    return `${this.w}×${this.h} セル · ${px}px/セル · ${this.w * px}×${this.h * px}px${this._rotated() ? " · 90°回転" : ""}`;
+  }
+
+  /** 画面とコードの縦横が食い違うとき (横向きの端末で縦長コード) は 90° 回して描く。
+   *  大きく描けるだけでなく、画面の書き換え方向 (端末の上→下) がコードに対して横になり、
+   *  縦持ちの受信カメラのローリングシャッター (上→下) と直交する。平行だと切り替えの
+   *  混ざりが画面の半分に及んだ (iPhone 12 Pro → Pixel 9a、縦持ち同士で実測)。 */
+  _rotated() {
+    const { canvas } = this;
+    return (canvas.width > canvas.height) !== (this.w > this.h);
   }
 
   _cellPx() {
     const { canvas } = this;
     const m = TX_MARGIN_CELLS * 2;
-    const max = Math.min(canvas.width / (this.w + m), canvas.height / (this.h + m));
+    const [cw, ch] = this._rotated() ? [this.h, this.w] : [this.w, this.h];
+    const max = Math.min(canvas.width / (cw + m), canvas.height / (ch + m));
     return Math.max(1, Math.floor(max * this.sizePct / 100));
   }
 
@@ -120,11 +130,20 @@ export class VcodeSender {
     ctx.fillStyle = "#fff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.imageSmoothingEnabled = false;
-    // 整数倍で中央に置く (物理画素に揃う)
+    // 整数倍で中央に置く (物理画素に揃う)。回すときは中心を整数座標にして 90° 回転
     const px = this._cellPx();
     const dw = this.w * px, dh = this.h * px;
-    const dx = ((canvas.width - dw) / 2) | 0, dy = ((canvas.height - dh) / 2) | 0;
-    ctx.drawImage(this.off, 0, 0, this.w, this.h, dx, dy, dw, dh);
+    if (this._rotated()) {
+      const cx = (canvas.width / 2) | 0, cy = (canvas.height / 2) | 0;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(Math.PI / 2);
+      ctx.drawImage(this.off, 0, 0, this.w, this.h, -((dw / 2) | 0), -((dh / 2) | 0), dw, dh);
+      ctx.restore();
+    } else {
+      const dx = ((canvas.width - dw) / 2) | 0, dy = ((canvas.height - dh) / 2) | 0;
+      ctx.drawImage(this.off, 0, 0, this.w, this.h, dx, dy, dw, dh);
+    }
   }
 
   /** requestAnimationFrame 駆動。経過時間から出すべきフレーム番号を決めるので、

@@ -28,6 +28,8 @@ class MainActivity : FlutterActivity() {
                             "grid" to intent.getStringExtra("grid"),
                             "camlock" to intent.getStringExtra("camlock"),
                             "ev" to intent.getStringExtra("ev"),
+                            "aepoint" to intent.getStringExtra("aepoint"),
+                            "dump" to intent.getIntExtra("dump", -1),
                         )
                     )
                     else -> result.notImplemented()

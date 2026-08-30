@@ -100,6 +100,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   /// 追従できる/できないの差を PC で直接比べるために、両方が要る。
   bool _needOkDump = true;
   bool _needNgDump = true;
+  int _lowDumps = 0;
 
   bool _busy = false;
   bool _active = false;
@@ -269,6 +270,19 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
             debugPrint('[vcode-rx] exposure offset failed: $e');
           }
         }
+        // AE/AF の測光点を画角の中心 (ガイド枠 = コード) に置く。送信画面の周りが黒いと
+        // AE が画面全体の平均を目標まで上げようとして、コードの白が飽和したまま露光が
+        // 伸びる (iPhone 送信で -2.5 EV でも切り替えの帯が画角の 1/4 あった)。
+        // 起動 Intent の aepoint=none で外せる (比較用)
+        if ((LaunchArgs.cached.aePoint ?? 'center') != 'none') {
+          try {
+            await cam.setExposurePoint(const Offset(0.5, 0.5));
+            await cam.setFocusPoint(const Offset(0.5, 0.5));
+            debugPrint('[vcode-rx] ae/af point -> center');
+          } catch (e) {
+            debugPrint('[vcode-rx] ae/af point failed: $e');
+          }
+        }
         _rx?.dispose();
         _rx = await ScanWorker.spawn();
         _applyForcedGrid();
@@ -342,7 +356,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       // 成功例・失敗例を 1 枚ずつ確保するまでは定期的にダンプを要求する。
       // どちらが返ってくるかはスキャンしてみないと分からないので、結果を見て振り分ける。
       final wantDump =
-          (_needOkDump || _needNgDump) && _framesSeen > 0 && _framesSeen % 20 == 0;
+          ((_needOkDump || _needNgDump) && _framesSeen > 0 && _framesSeen % 20 == 0) ||
+              _lowDumps < LaunchArgs.cached.dumpLow;
       final rx = _rx;
       if (rx == null) return;
       // 位置検出 (acquire): 画面全体を sweep して実際の 4 隅を取得し、ポップアップで確認 →
@@ -406,7 +421,13 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       sw.stop();
       if (!_active || _payload != null) return;
       if (report.debugGray != null) {
-        if (report.detected && _needOkDump) {
+        if (report.detected &&
+            report.blocksTotal > 0 &&
+            report.blocksOk * 100 < report.blocksTotal * 70 &&
+            _lowDumps < LaunchArgs.cached.dumpLow) {
+          _lowDumps++;
+          _saveDump(report, 'low$_lowDumps');
+        } else if (report.detected && _needOkDump) {
           _needOkDump = false;
           _saveDump(report, 'ok');
         } else if (!report.detected && _needNgDump) {

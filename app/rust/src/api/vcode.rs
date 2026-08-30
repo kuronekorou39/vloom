@@ -431,7 +431,14 @@ impl VcodeRx {
                 self.track_misses = 0;
                 self.last = Some((rot, layout, result.corners));
                 self.last_ok = Some((rot, layout));
-                return success(result, true, layout, rot, rw, rh, rotate_us, decode_us);
+                let mut report = success(result, true, layout, rot, rw, rh, rotate_us, decode_us);
+                if debug_dump {
+                    // 追従中の画像も PC 解析用に返す (読めないブロックの原因調査)
+                    report.debug_gray = Some(gray);
+                    report.debug_w = rw as u32;
+                    report.debug_h = rh as u32;
+                }
+                return report;
             }
             // 追従失敗。四隅は動いていないことが多いので、すぐにはフル探索へ落とさず
             // 同じ四隅で数枚粘る (TRACK_RETRY_FRAMES 参照)。

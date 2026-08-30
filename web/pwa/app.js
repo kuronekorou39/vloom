@@ -67,16 +67,24 @@ const sender = new VcodeSender({
   onStatus: (s) => { $("txStatus").textContent = s; },
 });
 
-// 表示領域は画面全体から下部バーの高さを引いたもの。バーはステージの padding で避けるので
-// コードに重ならず、バーを隠しても (高さは覚えておくので) 大きさは変わらない
-let txBarH = 0;
+// 表示領域は画面全体。下部バーは重ねて出し、送信中は操作が止まって 4 秒で隠す
+// (コードをタップで再表示)。バーの出入りでコードの大きさは変わらない
 function fitTxCanvas() {
-  const bar = $("txBar");
-  if (!bar.classList.contains("hidden")) txBarH = bar.offsetHeight || txBarH;
-  $("txStage").style.paddingBottom = `${txBarH}px`;
-  sender.fit(window.innerWidth, window.innerHeight - txBarH);
+  sender.fit(window.innerWidth, window.innerHeight);
 }
 window.addEventListener("resize", fitTxCanvas);
+
+let txBarTimer = null;
+function showTxBar(autoHide = true) {
+  $("txBar").classList.remove("hidden");
+  clearTimeout(txBarTimer);
+  if (autoHide) txBarTimer = setTimeout(() => $("txBar").classList.add("hidden"), 4000);
+}
+$("txBar").addEventListener("pointerdown", () => showTxBar());
+$("txBar").addEventListener("input", () => showTxBar());
+$("txCanvas").addEventListener("click", () => {
+  if ($("txBar").classList.contains("hidden")) showTxBar(); else $("txBar").classList.add("hidden");
+});
 
 // 大きさ / 静止。大きさは収まる最大に対する % で、1 セルは常に整数個の物理画素
 $("txSize").addEventListener("input", () => {
@@ -84,8 +92,6 @@ $("txSize").addEventListener("input", () => {
   $("txSizeVal").textContent = `${$("txSize").value}%`;
 });
 $("txHold").addEventListener("change", () => sender.setHold($("txHold").checked));
-// コードを叩くとバーの表示/非表示 (カメラ側の映像から UI を消したいとき)
-$("txCanvas").addEventListener("click", () => $("txBar").classList.toggle("hidden"));
 setInterval(() => { if (sender.running) $("txGeom").textContent = sender.info(); }, 500);
 
 // 送信の輝度/モアレ調整。キャンバスへの CSS フィルタで効かせる。
@@ -150,7 +156,8 @@ $("txStart").addEventListener("click", async () => {
   const fps = Math.max(2, Math.min(60, parseInt($("txFps").value) || 12));
   $("txInfo").textContent = "";
   $("txStage").style.display = "flex";
-  fitTxCanvas();  // バーの高さを測るので表示してから
+  fitTxCanvas();
+  showTxBar();
   try {
     await sender.start(source, grid, bpc, fps);
   } catch (e) {
