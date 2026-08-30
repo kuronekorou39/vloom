@@ -67,13 +67,26 @@ const sender = new VcodeSender({
   onStatus: (s) => { $("txStatus").textContent = s; },
 });
 
+// 表示領域は画面全体から下部バーの高さを引いたもの。バーはステージの padding で避けるので
+// コードに重ならず、バーを隠しても (高さは覚えておくので) 大きさは変わらない
+let txBarH = 0;
 function fitTxCanvas() {
-  // 画面に収まる最大の正方形で表示 (下部バーの分を少し引く)
-  const size = Math.min(window.innerWidth, window.innerHeight - 56) - 8;
-  $("txCanvas").style.width = `${size}px`;
-  $("txCanvas").style.height = `${size}px`;
+  const bar = $("txBar");
+  if (!bar.classList.contains("hidden")) txBarH = bar.offsetHeight || txBarH;
+  $("txStage").style.paddingBottom = `${txBarH}px`;
+  sender.fit(window.innerWidth, window.innerHeight - txBarH);
 }
 window.addEventListener("resize", fitTxCanvas);
+
+// 大きさ / 静止。大きさは収まる最大に対する % で、1 セルは常に整数個の物理画素
+$("txSize").addEventListener("input", () => {
+  sender.setSizePct(parseInt($("txSize").value) || 100);
+  $("txSizeVal").textContent = `${$("txSize").value}%`;
+});
+$("txHold").addEventListener("change", () => sender.setHold($("txHold").checked));
+// コードを叩くとバーの表示/非表示 (カメラ側の映像から UI を消したいとき)
+$("txCanvas").addEventListener("click", () => $("txBar").classList.toggle("hidden"));
+setInterval(() => { if (sender.running) $("txGeom").textContent = sender.info(); }, 500);
 
 // 送信の輝度/モアレ調整。キャンバスへの CSS フィルタで効かせる。
 // 輝度=白レベルを下げて受信側の白飛びを抑える。
@@ -136,8 +149,8 @@ $("txStart").addEventListener("click", async () => {
   const bpc = parseInt($("txBpc").value) || 2;
   const fps = Math.max(2, Math.min(60, parseInt($("txFps").value) || 12));
   $("txInfo").textContent = "";
-  fitTxCanvas();
   $("txStage").style.display = "flex";
+  fitTxCanvas();  // バーの高さを測るので表示してから
   try {
     await sender.start(source, grid, bpc, fps);
   } catch (e) {

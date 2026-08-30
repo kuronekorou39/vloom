@@ -23,6 +23,10 @@ export const packetSizeFor = (bpc) => (bpc === 2 ? 92 : 42);
 /** 1 フレームは 2 リフレッシュ周期表示する必要があるため、60Hz 画面での fps 上限 */
 export const REFRESH_SAFE_FPS = 30;
 
+// 送信ステージの余白 (セル)。マーカーの外側に白が要る (受信の環/余白の対比検査)。
+// 画面の外は黒い縁なので、画面いっぱいには描かない
+const TX_MARGIN_CELLS = 6;
+
 export class VcodeSender {
   constructor({ canvas, onStatus }) {
     this.canvas = canvas;
@@ -31,6 +35,16 @@ export class VcodeSender {
     this.off = document.createElement("canvas");
     this.running = false;
     this.seq = 0;
+    // 表示の大きさ (収まる最大に対する %) と静止 (同じフレームを出し続ける)
+    this.sizePct = 100;
+    this.hold = false;
+    this.shownIdx = -1;
+    this.dirty = false;
+    this.cssW = 0; this.cssH = 0;
+    this.wakeLock = null;
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && this.running) this._acquireWakeLock();
+    });
   }
 
   async start(fileOrBytes, gridStr, bpc, fps) {
@@ -48,9 +62,48 @@ export class VcodeSender {
     this.frameCount = tx.frameCount();
     this.off.width = this.w;
     this.off.height = this.h;
+    this.fps = fps;
+    this.payloadLen = payload.length;
+    this.t0 = undefined;
+    this.shownIdx = -1;
+    this.dirty = true;
     this.running = true;
     const mySeq = ++this.seq;
-    this._loop(mySeq, fps, payload.length);
+    this.fit(this.cssW, this.cssH);
+    await this._acquireWakeLock();
+    requestAnimationFrame((t) => this._tick(mySeq, t));
+  }
+
+  /** 表示領域 (CSS px) を与えて、キャンバスの裏バッファを端末の物理画素に合わせる。
+   *  1 セルを整数個の物理画素で描く。以前は 1080x1080 固定の裏バッファを CSS で拡縮
+   *  していて、セルの境界が画素にまたがってぼけていた (スマホは DPR 3 なので特に)。 */
+  fit(cssW, cssH) {
+    this.cssW = cssW; this.cssH = cssH;
+    if (!cssW || !cssH) return;
+    const { canvas } = this;
+    const dpr = window.devicePixelRatio || 1;
+    const W = Math.round(cssW * dpr), H = Math.round(cssH * dpr);
+    if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
+    canvas.style.width = `${cssW}px`;
+    canvas.style.height = `${cssH}px`;
+    this.dirty = true;
+  }
+
+  setSizePct(pct) { this.sizePct = pct; this.dirty = true; }
+  setHold(on) { this.hold = on; this.dirty = true; }
+
+  /** 現在の描画情報 (診断表示用): 1 セルの物理画素数と画面上の大きさ */
+  info() {
+    if (!this.w) return "";
+    const px = this._cellPx();
+    return `${this.w}×${this.h} セル · ${px}px/セル · ${this.w * px}×${this.h * px}px`;
+  }
+
+  _cellPx() {
+    const { canvas } = this;
+    const m = TX_MARGIN_CELLS * 2;
+    const max = Math.min(canvas.width / (this.w + m), canvas.height / (this.h + m));
+    return Math.max(1, Math.floor(max * this.sizePct / 100));
   }
 
   _drawFrame(i) {
@@ -67,29 +120,49 @@ export class VcodeSender {
     ctx.fillStyle = "#fff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.imageSmoothingEnabled = false;
-    // アスペクト維持で中央にフィット
-    const scale = Math.min(canvas.width / this.w, canvas.height / this.h);
-    const dw = Math.floor(this.w * scale), dh = Math.floor(this.h * scale);
+    // 整数倍で中央に置く (物理画素に揃う)
+    const px = this._cellPx();
+    const dw = this.w * px, dh = this.h * px;
     const dx = ((canvas.width - dw) / 2) | 0, dy = ((canvas.height - dh) / 2) | 0;
     ctx.drawImage(this.off, 0, 0, this.w, this.h, dx, dy, dw, dh);
   }
 
-  async _loop(mySeq, fps, payloadLen) {
-    const interval = 1000 / fps;
-    let idx = 0, pass = 0;
-    while (this.running && mySeq === this.seq) {
-      const t0 = performance.now();
-      this._drawFrame(idx % this.frameCount);
-      idx++;
-      if (idx % this.frameCount === 0) pass++;
-      if (mySeq !== this.seq) break;
-      this.onStatus(`vcode 送信中 · ${payloadLen}B · frame ${idx} · ${pass + 1} 巡目`);
-      const dt = performance.now() - t0;
-      if (dt < interval) await new Promise((r) => setTimeout(r, interval - dt));
+  /** requestAnimationFrame 駆動。経過時間から出すべきフレーム番号を決めるので、
+   *  setTimeout の遅れが積み上がらず、切り替えが画面の書き換え (vsync) に揃う。
+   *  60Hz で 20fps なら 3 回の書き換えごとに 1 フレーム。 */
+  _tick(mySeq, now) {
+    if (!this.running || mySeq !== this.seq) return;
+    if (this.t0 === undefined) this.t0 = now;
+    const interval = 1000 / this.fps;
+    // rAF の時刻は切り替え時刻よりわずかに早く来ることがあるので 1/4 間隔だけ前倒しで判定
+    const want = this.hold && this.shownIdx >= 0
+      ? this.shownIdx
+      : Math.floor((now - this.t0) / interval + 0.25);
+    if (want !== this.shownIdx || this.dirty) {
+      this._drawFrame(want % this.frameCount);
+      this.shownIdx = want;
+      this.dirty = false;
+      const pass = Math.floor(want / this.frameCount) + 1;
+      this.onStatus(`${this.hold ? "静止" : "送信中"} · ${this.payloadLen}B · frame ${want % this.frameCount + 1}/${this.frameCount} · ${pass} 巡目`);
     }
+    requestAnimationFrame((t) => this._tick(mySeq, t));
   }
 
-  stop() { this.seq++; this.running = false; }
+  // 画面の自動消灯を止める (iOS Safari 16.4+ / Android Chrome)。失敗しても送信は続ける
+  async _acquireWakeLock() {
+    try {
+      if (navigator.wakeLock && !this.wakeLock) {
+        this.wakeLock = await navigator.wakeLock.request("screen");
+        this.wakeLock.addEventListener("release", () => { this.wakeLock = null; });
+      }
+    } catch (_) { /* 非対応・省電力モードなど */ }
+  }
+
+  stop() {
+    this.seq++;
+    this.running = false;
+    if (this.wakeLock) { this.wakeLock.release().catch(() => {}); this.wakeLock = null; }
+  }
 }
 
 export class VcodeReceiver {

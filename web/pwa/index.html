@@ -75,11 +75,16 @@
     input[type="file"]::file-selector-button:hover { background: var(--hover); }
     /* 送信ステージ: コードを白背景で大きく表示 */
     #txStage { display: none; position: fixed; inset: 0; background: #fff; z-index: 50;
-      flex-direction: column; align-items: center; justify-content: center; }
-    #txCanvas { image-rendering: pixelated; background: #fff; }
-    #txBar { position: fixed; left: 0; right: 0; bottom: 0; background: rgba(20,22,28,0.92);
-      color: var(--text); padding: 0.5em 1em; display: flex; gap: 1em; align-items: center; }
-    #txBar .grow { flex: 1; font-size: 0.9em; }
+      flex-direction: column; align-items: center; justify-content: center;
+      box-sizing: border-box; }  /* padding-bottom は下部バーの高さ (app.js が測って入れる) */
+    #txCanvas { image-rendering: pixelated; background: #fff; touch-action: manipulation; }
+    #txBar { position: fixed; left: 0; right: 0; bottom: 0; box-sizing: border-box;
+      background: rgba(20,22,28,0.92); color: var(--text); padding: 0.4em 0.8em;
+      display: flex; gap: 0.4em 0.8em; align-items: center; flex-wrap: wrap; }
+    #txBar.hidden { display: none; }
+    #txBar .grow { flex: 1; font-size: 0.8em; min-width: 8em; }
+    #txBar .txctl { font-size: 0.8em; white-space: nowrap; }
+    #txBar input[type="range"] { width: 5em; vertical-align: middle; }
     /* 受信: カメラ映像。開始前後で高さが変わらないよう 4:3 の枠を確保し、映像は
        中身を歪めず枠内に収める (縦横比が違うカメラは上下に黒帯)。開始前は「停止中」。 */
     #calRxWrap { position: relative; background: #000;
@@ -280,9 +285,11 @@
   <div id="txStage">
     <canvas id="txCanvas" width="1080" height="1080"></canvas>
     <div id="txBar">
+      <label class="txctl">大きさ <input type="range" id="txSize" min="30" max="100" value="100" /> <span id="txSizeVal">100%</span></label>
+      <label class="txctl"><input type="checkbox" id="txHold" /> 静止</label>
       <label class="txctl">輝度 <input type="range" id="txBright" min="30" max="100" value="100" /></label>
       <label class="txctl">モアレ <input type="range" id="txBlur" min="0" max="3" step="0.5" value="0" /></label>
-      <div class="grow" id="txStatus"></div>
+      <div class="grow"><span id="txStatus"></span> <span id="txGeom" class="muted"></span></div>
       <button id="txStop" class="secondary">停止</button>
     </div>
   </div>
