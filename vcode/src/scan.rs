@@ -659,13 +659,14 @@ fn decode_at(
     // (受信の 1 枚あたり処理時間で最大の項)。以前は「直前に当たったカーブを先に試す」
     // ヒントをブロック間で共有していたが、並列化のために線形カーブ固定で始める
     // 順にした。2 値 (bpc=1) はカーブ補正が無関係なので何も変わらない。
-    let decode_block = |bi: usize| -> Option<Vec<u8>> {
+    // ブロック 1 つを、与えたオフセット候補の順に試して、最初に CRC が通った (ペイロード, オフセット) を返す
+    let decode_block_with = |bi: usize, cands: &[(f32, f32)]| -> Option<(Vec<u8>, (f32, f32))> {
         let (or, oc) = layout.block_origin(bi);
         let gamma_order: &[usize] = if bpc == 1 { &[0] } else { &[0, 1, 2] };
         for (k, &gi) in gamma_order.iter().enumerate() {
             let gamma = GAMMAS[gi];
             // 先頭 (線形) 以外のカーブは中央寄りの 5 オフセットだけ試す (コスト抑制)
-            let offs_slice: &[(f32, f32)] = if k == 0 { &offs } else { &offs[..5] };
+            let offs_slice: &[(f32, f32)] = if k == 0 { cands } else { &cands[..cands.len().min(5)] };
             for &(dx, dy) in offs_slice.iter() {
                 let mut bits = Vec::with_capacity(layout.block * layout.block * bpc as usize);
                 for i in 0..layout.block * layout.block {
@@ -681,21 +682,119 @@ fn decode_at(
                 let bytes = bits_to_bytes(&bits);
                 let (payload, crc) = bytes.split_at(layout.block_payload_len(bpc));
                 if crate::crc32(payload) == u32::from_be_bytes([crc[0], crc[1], crc[2], crc[3]]) {
-                    return Some(payload.to_vec());
+                    return Some((payload.to_vec(), (dx, dy)));
                 }
             }
         }
         None
     };
+    let decode_block = |bi: usize| decode_block_with(bi, &offs);
     #[cfg(feature = "profile")]
     let td1 = std::time::Instant::now();
     #[cfg(feature = "parallel")]
-    let blocks: Vec<Option<Vec<u8>>> = {
+    let mut found: Vec<Option<(Vec<u8>, (f32, f32))>> = {
         use rayon::prelude::*;
         (0..layout.block_count()).into_par_iter().map(decode_block).collect()
     };
     #[cfg(not(feature = "parallel"))]
-    let blocks: Vec<Option<Vec<u8>>> = (0..layout.block_count()).map(decode_block).collect();
+    let mut found: Vec<Option<(Vec<u8>, (f32, f32))>> =
+        (0..layout.block_count()).map(decode_block).collect();
+
+    // 通らなかったブロックを、通った近傍のオフセットから外挿して救う。
+    // コードが画角の 9 割を占めると、レンズの歪曲と 4 隅の当てはめ誤差で周辺のブロックが
+    // 中心から外へ向かって線形に ±1.5 セルずれる (実機ダンプの誤差の場)。場は滑らかなので、
+    // 中心から外へ、通った隣の値の平面当てはめで予測し、その周り ±0.5 セルだけ試す。
+    // 歪曲のモデルを持たなくてよく、4 隅の誤差にも同じ仕組みで効く。何も救えないパスで打ち切る
+    let gw = layout.grid_w;
+    for _pass in 0..6 {
+        let todo: Vec<usize> = (0..found.len()).filter(|&bi| found[bi].is_none()).collect();
+        if todo.is_empty() {
+            break;
+        }
+        let predict = |bi: usize| -> Option<(f32, f32)> {
+            let (bx, by) = ((bi % gw) as f32, (bi / gw) as f32);
+            // チェビシェフ距離 2 以内の通ったブロック
+            let mut pts: Vec<(f32, f32, f32, f32)> = Vec::new();
+            for j in 0..found.len() {
+                if let Some((_, (dx, dy))) = &found[j] {
+                    let (jx, jy) = ((j % gw) as f32, (j / gw) as f32);
+                    if (jx - bx).abs() <= 2.0 && (jy - by).abs() <= 2.0 {
+                        pts.push((jx - bx, jy - by, *dx, *dy));
+                    }
+                }
+            }
+            if pts.is_empty() {
+                return None;
+            }
+            // 平面 v = a + b·x + c·y の最小二乗 (点が少なければ平均)
+            let n = pts.len() as f32;
+            let fit = |sel: fn(&(f32, f32, f32, f32)) -> f32| -> f32 {
+                if pts.len() < 4 {
+                    return pts.iter().map(sel).sum::<f32>() / n;
+                }
+                let (mut sx, mut sy, mut sxx, mut syy, mut sxy, mut sv, mut sxv, mut syv) =
+                    (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
+                for p in &pts {
+                    let v = sel(p);
+                    sx += p.0; sy += p.1; sxx += p.0 * p.0; syy += p.1 * p.1; sxy += p.0 * p.1;
+                    sv += v; sxv += p.0 * v; syv += p.1 * v;
+                }
+                // 正規方程式 [n sx sy; sx sxx sxy; sy sxy syy] [a b c] = [sv sxv syv]
+                let m = [n, sx, sy, sx, sxx, sxy, sy, sxy, syy];
+                let det = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6])
+                    + m[2] * (m[3] * m[7] - m[4] * m[6]);
+                if det.abs() < 1e-3 {
+                    return sv / n;
+                }
+                // a (x=0, y=0 での値) だけ要る: クラメル
+                let ma = [sv, sx, sy, sxv, sxx, sxy, syv, sxy, syy];
+                let deta = ma[0] * (ma[4] * ma[8] - ma[5] * ma[7])
+                    - ma[1] * (ma[3] * ma[8] - ma[5] * ma[6])
+                    + ma[2] * (ma[3] * ma[7] - ma[4] * ma[6]);
+                deta / det
+            };
+            let q = |v: f32| (v * 4.0).round() / 4.0;
+            Some((q(fit(|p| p.2)), q(fit(|p| p.3))))
+        };
+        let plan: Vec<(usize, Vec<(f32, f32)>)> = todo
+            .iter()
+            .filter_map(|&bi| {
+                let (px, py) = predict(bi)?;
+                if px == 0.0 && py == 0.0 {
+                    return None; // 1 パス目で試した範囲と同じ
+                }
+                let mut cands: Vec<(f32, f32)> = Vec::with_capacity(25);
+                for &ddy in STEPS.iter() {
+                    for &ddx in STEPS.iter() {
+                        cands.push((px + ddx, py + ddy));
+                    }
+                }
+                Some((bi, cands))
+            })
+            .collect();
+        if plan.is_empty() {
+            break;
+        }
+        #[cfg(feature = "parallel")]
+        let results: Vec<(usize, Option<(Vec<u8>, (f32, f32))>)> = {
+            use rayon::prelude::*;
+            plan.par_iter().map(|(bi, c)| (*bi, decode_block_with(*bi, c))).collect()
+        };
+        #[cfg(not(feature = "parallel"))]
+        let results: Vec<(usize, Option<(Vec<u8>, (f32, f32))>)> =
+            plan.iter().map(|(bi, c)| (*bi, decode_block_with(*bi, c))).collect();
+        let mut gained = 0;
+        for (bi, r) in results {
+            if r.is_some() {
+                found[bi] = r;
+                gained += 1;
+            }
+        }
+        if gained == 0 {
+            break;
+        }
+    }
+    let blocks: Vec<Option<Vec<u8>>> = found.into_iter().map(|f| f.map(|(p, _)| p)).collect();
     #[cfg(feature = "profile")]
     eprintln!(
         "[profile] decode_at: corners+header {:.2} ms (header 区間分け含む) / blocks {:.2} ms",
@@ -714,6 +813,43 @@ fn decode_at(
         ],
         homography: hmat,
     })
+}
+
+/// 調査用: ブロックごとに、CRC が通る最小のサブセルオフセット (dx, dy) を ±1.5 セルの範囲で探す。
+/// 4 隅の射影変換に対して各ブロックが実際にどれだけずれているか (誤差の場) を見るためのもの。
+/// 半径方向に大きくなればレンズの歪曲、一方向なら 4 隅の位置誤差、といった切り分けに使う。
+/// 1bit 専用。戻りはブロック順で、通らなければ None。
+pub fn block_offset_field(
+    img: &GrayImage,
+    hmat: &Homography,
+    layout: Layout,
+) -> Vec<Option<(f32, f32)>> {
+    let thr = threshold_for(img, hmat, layout) as f32;
+    let sample = |r: usize, c: usize, dx: f32, dy: f32| -> bool {
+        let (x, y) = hmat.map(c as f32 + 0.5 + dx, r as f32 + 0.5 + dy);
+        img.bilinear(x, y) < thr
+    };
+    // 中心から近い順
+    let mut offs: Vec<(f32, f32)> = Vec::new();
+    for iy in -6..=6 {
+        for ix in -6..=6 {
+            offs.push((ix as f32 * 0.25, iy as f32 * 0.25));
+        }
+    }
+    offs.sort_by(|a, b| (a.0 * a.0 + a.1 * a.1).partial_cmp(&(b.0 * b.0 + b.1 * b.1)).unwrap());
+    (0..layout.block_count())
+        .map(|bi| {
+            let (or, oc) = layout.block_origin(bi);
+            offs.iter().copied().find(|&(dx, dy)| {
+                let bits: Vec<bool> = (0..layout.block * layout.block)
+                    .map(|i| sample(or + i / layout.block, oc + i % layout.block, dx, dy))
+                    .collect();
+                let bytes = bits_to_bytes(&bits);
+                let (payload, crc) = bytes.split_at(layout.block_payload_len(1));
+                crate::crc32(payload) == u32::from_be_bytes([crc[0], crc[1], crc[2], crc[3]])
+            })
+        })
+        .collect()
 }
 
 /// 画像内から「コードらしい市松テクスチャ」の外接矩形を推定する。
