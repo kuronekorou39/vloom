@@ -723,7 +723,8 @@ fn decode_at(
                     }
                 }
             }
-            if pts.is_empty() {
+            // 通った隣が 2 つ未満なら予測が当てにならない (混ざった帯の奥) ので試さない
+            if pts.len() < 2 {
                 return None;
             }
             // 平面 v = a + b·x + c·y の最小二乗 (点が少なければ平均)
@@ -763,9 +764,11 @@ fn decode_at(
                 if px == 0.0 && py == 0.0 {
                     return None; // 1 パス目で試した範囲と同じ
                 }
-                let mut cands: Vec<(f32, f32)> = Vec::with_capacity(25);
-                for &ddy in STEPS.iter() {
-                    for &ddx in STEPS.iter() {
+                // 予測の周り 3x3 (±0.25) だけ。平面当てはめの誤差はその程度で、
+                // 5x5 にすると混ざった帯に接するブロックの無駄打ちで 1 枚 30ms 以上増えた
+                let mut cands: Vec<(f32, f32)> = Vec::with_capacity(9);
+                for &ddy in &STEPS[..3] {
+                    for &ddx in &STEPS[..3] {
                         cands.push((px + ddx, py + ddy));
                     }
                 }
@@ -790,7 +793,8 @@ fn decode_at(
                 gained += 1;
             }
         }
-        if gained == 0 {
+        // 1 つしか救えないパスは、その先もほぼ無駄 (帯の縁)
+        if gained < 2 {
             break;
         }
     }
