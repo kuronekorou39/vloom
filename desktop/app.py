@@ -35,7 +35,7 @@ from .sender import SenderWindow
 # 受信側の総当たり候補に入っている格子だけを既定で出す。11×10 は候補外なので
 # 受信側で格子を明示指定しない限り検出されない (選べるようにはしておく)。
 GRIDS = ["7x6 (高密度)", "5x4 (標準)", "9x8 (超高密度)",
-         "11x10 (最大)", "11x14 (縦長)", "13x12 (超密)"]
+         "11x10 (最大)", "11x14 (縦長)", "13x18 (超密)"]
 AUTO_DETECT_GRIDS = {(5, 4), (7, 6), (9, 8)}
 
 # ソースパケットに対するリペアパケットの比率。PWA の REPAIR_RATE と同値。
@@ -63,6 +63,8 @@ class MainWindow(QWidget):
         # 一度開いた送信ウィンドウの位置とサイズを覚えておく。三脚でカメラを固定して
         # 条件を振るとき、送信のたびに位置が既定値へ戻ると毎回構図を取り直すことになる。
         self.stage_geometry: QRect | None = None
+        # 起動直後から静止させるか (--hold)。構図合わせのときに使う
+        self.hold_at_start = False
 
         self.file_label = QLabel("未選択")
         self.file_label.setWordWrap(True)
@@ -250,7 +252,8 @@ class MainWindow(QWidget):
         tx = vloom_core.VcodeTx(source, extra_repair, gw, gh, bpc)
 
         self.stage = SenderWindow(tx, fps, len(data), name, self.margin.value(),
-                                  self.zoom.value(), self.dx.value(), self.dy.value())
+                                  self.zoom.value(), self.dx.value(), self.dy.value(),
+                                  hold=self.hold_at_start)
         self.stage.closed.connect(self._on_stage_closed)
         self.stage.setGeometry(self.stage_geometry or self._stage_rect())
         self.stage.start()
@@ -286,7 +289,7 @@ class MainWindow(QWidget):
                        bpc: int | None = None, fps: int | None = None,
                        repair: int | None = None, margin: int | None = None,
                        zoom: float | None = None, dx: float | None = None,
-                       dy: float | None = None,
+                       dy: float | None = None, hold: bool = False,
                        geometry: tuple[int, int, int, int] | None = None) -> None:
         """コマンドラインから条件を流し込む。指定のないものは UI の値のまま。"""
         if file:
@@ -317,6 +320,7 @@ class MainWindow(QWidget):
             self.dx.setValue(dx)
         if dy is not None:
             self.dy.setValue(dy)
+        self.hold_at_start = hold
         if geometry is not None:
             self.stage_geometry = QRect(*geometry)
         self._update_theory()

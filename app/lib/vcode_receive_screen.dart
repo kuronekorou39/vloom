@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:isolate';
+import 'dart:math' as math;
 import 'dart:io';
 
 import 'package:camera/camera.dart';
@@ -12,6 +14,7 @@ import 'history_screen.dart' show shareReceived, saveReceivedToFile;
 import 'history_store.dart';
 import 'preset.dart';
 import 'launch_args.dart';
+import 'scan_worker.dart';
 import 'src/rust/api/fountain.dart';
 import 'src/rust/api/vcode.dart';
 import 'test_payload.dart';
@@ -41,12 +44,18 @@ const kAutoAcquireCooldownFrames = 45;
 
 // 追従が何枚続いたらカメラ (露出) を固定するか。
 //
-// 100 枚 (追従 20〜25 枚/秒なので約 5 秒) に置いてある。カメラのモード切替は
-// 何であれフレーム供給を 1〜5 秒止めることがある (フレームログで確認: AF+AE で
-// 最大 5.2 秒、露出だけでも 1.65 秒)。100KB 級の転送は 25 枚ほどで終わるので、
-// そこで止められると転送時間が倍になる。数 MB の転送だけが 1 回の停止と引き換えに
-// 露出の安定 (白飛び防止) を得る形にする。
-const kCamLockStreak = 100;
+// カメラのモード切替は何であれフレーム供給を 1〜5 秒止めることがある (フレーム
+// ログで確認: AF+AE で最大 5.2 秒、露出だけでも 1.65 秒)。300 枚 (約 15 秒) に
+// 置いてあるのは、1MB の転送 (120 枚前後) の途中で発動させないため。数十秒以上の
+// 転送だけが 1 回の停止と引き換えに露出の安定 (白飛び防止) を得る形にする。
+const kCamLockStreak = 300;
+
+// 既定の露出補正 (EV)。理由は _initCameraInner の適用箇所を参照。
+// -2 は最初の三脚位置では最良だったが、据え直した位置では白が 70 まで沈んで
+// ヘッダが読めなくなった (0 EV なら 157)。カメラの自動露出が何を見るかで
+// 絶対的な白の明るさが変わるので、固定値は控えめに -1 にしておく。
+// 本来は白の実測 (輝度の最大値) を見て補正を追従させるべき。
+const kDefaultExposureOffsetEv = -1.0;
 
 /// この回数連続で見失ったら AF/AE ロックを解除する。モード切替はカメラの
 /// フレーム供給を止めるため、acquire (20) より長く粘って発振を防ぐ。
@@ -107,8 +116,13 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   bool _seeded = false; // acquire 結果で受信位置を確定済み (中央ガイド枠に頼らず追従)
   List<double>? _detCorners; // acquire で検出した 4 隅 (回転後画像座標, 8 値) — ハイライト表示用
   int _detImgW = 0, _detImgH = 0, _detRot = 0; // 検出時の回転後画像寸法と回転 (表示座標への変換用)
+  int _detCellsW = 0, _detCellsH = 0; // 検出したコードのセル数 (充填率・px/セル の計算用)
   Timer? _watchdog; // プレビューが灰色 (フレーム途絶) になったら作り直す
-  VcodeRx? _rx;
+  // スキャンは別 isolate (ScanWorker) で回す。理由は scan_worker.dart を参照
+  ScanWorker? _rx;
+  // ワーカーが処理中に届いたフレーム。捨てずに 1 枚だけ持ち、処理が終わり次第すぐ回す
+  // (受け取りと処理を重ねてカメラの供給速度まで処理するため)
+  CameraImage? _pendingImg;
 
   FountainDecoder? _dec;
   int? _packetSize; // 最初の回収パケットから推定 (シリアライズ長 - 4)
@@ -133,6 +147,9 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   final Set<int> _seenEsi = {};
   int _integrityFails = 0; // エンドツーエンド CRC 不一致で受信をやり直した回数
   int _lastScanMs = 0;
+  // 処理時間の内訳 (30 枚ごとに平均してログに出す)
+  int _tTotal = 0, _tScan = 0, _tDec = 0, _tFrames = 0;
+  int _tMissMs = 0, _tMissN = 0; // 検出できなかったフレームの scan 時間と枚数
   // スキャン内訳の累計 (Y プレーン回転コピー / 探索・デコード)。
   // カメラのフレーム間隔に追従できないとき、どちらが効いているかの切り分けに使う。
   int _rotateUsSum = 0;
@@ -147,6 +164,11 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   /// 押しやすい側が変わり、コードが画面のどちら寄りに写るかで隠したくない
   /// 場所も変わるため、その場で入れ替えられるようにしている。
   bool _panelAtTop = false;
+
+  /// 操作パネルを開いているか。既定は畳む: カバレッジ格子や設定まで出すと映像の
+  /// 下 1/4 を隠し、コードの下側の四隅が目視できなくなる (構図合わせの読み上げを
+  /// 作った意味がない)。畳んだ状態はボタン 1 行 + 細い進捗 + 統計 1 行だけ。
+  bool _panelExpanded = false;
 
   @override
   void initState() {
@@ -219,8 +241,11 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           // 9x8 (180) / 11x10 (220) は 6px/セル に 1080/1320px 要るので 2160p 以上が要る。
           _preset,
           enableAudio: false,
-          // 60fps 要求 (対応外の端末では無視される。実配信レートは統計で確認)
-          fps: 60,
+          // 30fps を要求する。以前は 60 を要求していて、UI isolate が空くと実際に
+          // 約 40fps 届いたが、処理できるのは毎秒 25 枚前後で、捨てるフレームの
+          // 受け取り (1 枚 20ms 前後) だけで UI isolate の 8 割を使い、ワーカーの
+          // スキャンまで遅くしていた (30 → 40ms)。供給を処理速度に合わせる。
+          fps: 30,
           imageFormatGroup: ImageFormatGroup.yuv420,
         );
         await cam.initialize();
@@ -228,7 +253,24 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           await cam.dispose();
           return;
         }
-        _rx = VcodeRx();
+        // 露出補正。既定は -1 EV (kDefaultExposureOffsetEv)。露光が短いほど、表示の切り替わりがローリング
+        // シャッターの 1 枚に混ざる帯が狭くなる。実測 (11x14 / 20fps、BenQ 白 221/255):
+        // 0 EV 平均 75 (57〜97) / -1 EV 81 (60〜102) / -2 EV 86 (78〜96) / -3 EV は
+        // 4 本中 1 本が 5.4 KB/s に落ちた (暗すぎて余裕がない)。効果の本体は平均より
+        // ばらつきが縮むこと。起動 Intent の ev で上書きできる (計測用)。
+        final ev = LaunchArgs.cached.ev ?? kDefaultExposureOffsetEv;
+        {
+          try {
+            // 戻り値は EV ではなく補正インデックス (camerax は 1/6 EV 刻みなので
+            // -1 EV → -6)。混同しやすいのでログに単位を書く
+            final index = await cam.setExposureOffset(ev);
+            debugPrint('[vcode-rx] exposure offset ${ev}EV -> index $index');
+          } catch (e) {
+            debugPrint('[vcode-rx] exposure offset failed: $e');
+          }
+        }
+        _rx?.dispose();
+        _rx = await ScanWorker.spawn();
         _applyForcedGrid();
         _lastPreviewSize = cam.value.previewSize;
         _camStarted = DateTime.now();
@@ -269,7 +311,11 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   Future<void> _onFrame(CameraImage img) async {
     _camCallbacks++;
     _lastCallbackAt = DateTime.now();
-    if (_busy || !_active || _payload != null) return;
+    if (!_active || _payload != null) return;
+    if (_busy) {
+      _pendingImg = img; // 最新の 1 枚だけ持つ (古いものは捨てる)
+      return;
+    }
     _busy = true;
     try {
       final sw = Stopwatch()..start();
@@ -305,7 +351,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         _acquireRequested = false;
         final wasAuto = _acquireIsAuto;
         final rep = await rx.acquire(
-          y: y.bytes,
+          y: TransferableTypedData.fromList([y.bytes]),
           width: img.width,
           height: img.height,
           stride: y.bytesPerRow,
@@ -323,6 +369,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
             _detImgW = rep.imgW;
             _detImgH = rep.imgH;
             _detRot = rep.rot;
+            _detCellsW = rep.cellsW;
+            _detCellsH = rep.cellsH;
           }
         });
         if (_acquireIsAuto) {
@@ -344,8 +392,10 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         await _showAcquireDialog(rep, rx);
         return;
       }
+      // 同期版 (実験): 非同期だと完了通知が UI の描画待ちに掛かり、Rust の 31ms に対して
+      // 往復 55ms になっていた。プレビューはネイティブのテクスチャなので止まらない。
       final report = await rx.scan(
-        y: y.bytes,
+        y: TransferableTypedData.fromList([y.bytes]),
         width: img.width,
         height: img.height,
         stride: y.bytesPerRow,
@@ -368,6 +418,11 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _framesSeen++;
       _lastScanMs = sw.elapsedMilliseconds;
       _scanMsSum += _lastScanMs;
+      _tScan += _lastScanMs;
+      if (!report.detected) {
+        _tMissMs += _lastScanMs;
+        _tMissN++;
+      }
       _rotateUsSum += report.rotateUs;
       _decodeUsSum += report.decodeUs;
       _scanCount++;
@@ -382,6 +437,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           _packetSize = report.packets.first.length - 4;
         }
         var done = false;
+        final swDec = Stopwatch()..start();
         for (final p in report.packets) {
           _packetsAdded++;
           if (p.length >= 4) {
@@ -395,10 +451,26 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
             break;
           }
         }
+        _tDec += swDec.elapsedMilliseconds;
         debugPrint('[vcode-rx] seq=${report.frameSeq} '
             'blocks=${report.blocksOk}/${report.blocksTotal} '
             'pkts=$_packetsAdded scan=${_lastScanMs}ms '
             'tracked=${report.tracked} done=$done');
+        // 半分程度しか取れないフレームは、どの行が落ちたかを出す。散らばって
+        // いれば露出やピント、片側や帯なら位置合わせのずれ、と切り分けられる。
+        if (report.blocksTotal > 0 &&
+            report.blocksOk * 100 < report.blocksTotal * 60 &&
+            report.blockOk.isNotEmpty) {
+          final gw = report.cellsW ~/ 20;
+          final rows = <String>[];
+          for (var i = 0; gw > 0 && i + gw <= report.blockOk.length; i += gw) {
+            rows.add(report.blockOk
+                .sublist(i, i + gw)
+                .map((b) => b ? '#' : '.')
+                .join());
+          }
+          debugPrint('[vcode-rx] blockmap ${rows.join("|")}');
+        }
         if (done) {
           // エンドツーエンド CRC-32 検証。不一致 = ゴミパケットが RaptorQ を
           // 汚染して復元結果が破損 → デコーダを捨てて受信をやり直す
@@ -429,6 +501,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           _detImgW = report.imgW;
           _detImgH = report.imgH;
           _detRot = report.rot;
+          _detCellsW = report.cellsW;
+          _detCellsH = report.cellsH;
         }
       } else {
         // 中央ガイド枠での探索が「連続して」失敗するなら、広域 sweep に切り替えて
@@ -467,8 +541,32 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
             'camFps=${_camFps.toStringAsFixed(1)}');
       }
       if (mounted && _framesSeen % 5 == 0) setState(() {});
+      // 1 枚あたりの処理時間の内訳 (30 枚ごとの平均)。受信の処理速度が天井になった
+      // とき、Rust のスキャンか、FRB の Y 面コピーか、デコーダ投入か、を切り分ける
+      _tTotal += sw.elapsedMilliseconds;
+      _tFrames++;
+      if (_tFrames >= 30) {
+        debugPrint('[vcode-rx] timing avg/frame: total=${(_tTotal / _tFrames).toStringAsFixed(1)}ms '
+            'scan(frb)=${(_tScan / _tFrames).toStringAsFixed(1)}ms '
+            'decoder=${(_tDec / _tFrames).toStringAsFixed(1)}ms '
+            'miss=$_tMissN/$_tFrames (${_tMissN == 0 ? 0 : (_tMissMs / _tMissN).toStringAsFixed(0)}ms each) '
+            'rust(rot+dec)=${((_rotateUsSum + _decodeUsSum) / 1000 / (_scanCount == 0 ? 1 : _scanCount)).toStringAsFixed(1)}ms');
+        _tTotal = 0;
+        _tScan = 0;
+        _tDec = 0;
+        _tFrames = 0;
+        _tMissMs = 0;
+        _tMissN = 0;
+      }
     } finally {
       _busy = false;
+      final next = _pendingImg;
+      _pendingImg = null;
+      if (next != null && _active && _payload == null) {
+        // 待たせていたフレームをすぐ処理する (await しない: この関数の呼び出し元は
+        // カメラのストリームで、戻りを待たれていない)
+        unawaited(_onFrame(next));
+      }
     }
   }
 
@@ -659,7 +757,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _lastError = null;
     });
     // スキャナの追従状態も捨てる (古い位置に引きずられないように)
-    _rx = VcodeRx();
+    _rx?.reset();
     _applyForcedGrid();
     if (_camLocked) {
       _camLocked = false;
@@ -754,7 +852,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   }
 
   /// acquire 結果を中央ポップアップで確認。確定なら seed して受信継続、やり直しなら再取得。
-  Future<void> _showAcquireDialog(VcodeAcquireReport rep, VcodeRx rx) async {
+  Future<void> _showAcquireDialog(VcodeAcquireReport rep, ScanWorker rx) async {
     if (!mounted) return;
     if (!rep.detected) {
       await showDialog<void>(
@@ -808,6 +906,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
 
   @override
   void dispose() {
+    _rx?.dispose();
+    _rx = null;
     _watchdog?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _stopCamera();
@@ -974,7 +1074,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     final (String label, Color color, IconData icon) = switch (this) {
       _ when _acquireRequested || _acquiring => ('位置を検出中…', Colors.amber, Icons.travel_explore),
       _ when _framesDetected > 0 && _missStreak == 0 =>
-        (_camLocked ? '追従中 (AF固定)' : _seeded ? '追従中 (位置固定)' : '追従中', Colors.cyanAccent, Icons.center_focus_strong),
+        (_camLocked ? '追従中 (露出固定)' : _seeded ? '追従中 (位置固定)' : '追従中', Colors.cyanAccent, Icons.center_focus_strong),
       _ when _autoAcquire => ('位置を探しています…', Colors.orangeAccent, Icons.search),
       _ => ('枠にコードを合わせてください', Colors.orangeAccent, Icons.crop_free),
     };
@@ -1073,6 +1173,10 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           color: Colors.black,
           child: VcodeCameraView(
             cam,
+            guideAspect: _guideAspect(),
+            // 操作パネルの反対側へ寄せて、パネルが映像 (とくにコードの下側の四隅) に
+            // 重ならないようにする
+            alignment: _panelAtTop ? const Alignment(0, 0.3) : const Alignment(0, -0.3),
             // 検出領域のハイライト (シアン)。緑のガイド枠と区別できる色。
             // カメラ画像の矩形に重ねて描く = 画像座標との対応がそのまま保たれる。
             overlay: _detCorners == null
@@ -1101,6 +1205,18 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
             child: Center(child: _statusBadge()),
           ),
         ),
+        // 構図合わせの読み上げ。バッジと同じ側 (操作パネルの反対側) に出す
+        Positioned(
+          top: _panelAtTop ? null : 62,
+          bottom: _panelAtTop ? 62 : null,
+          left: 12,
+          right: 12,
+          child: SafeArea(
+            top: !_panelAtTop,
+            bottom: _panelAtTop,
+            child: _alignPanel(),
+          ),
+        ),
         if (_acquiring)
           Container(
             color: Colors.black54,
@@ -1124,6 +1240,78 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           child: _controlPanel(total),
         ),
       ],
+    );
+  }
+
+  /// ガイド枠の縦横比。選択中の格子のセル数から求める (自動のときは既定格子)。
+  double _guideAspect() {
+    final g = _forcedGrid == kGridAuto ? kPresets[kDefaultPresetIndex].grid : _forcedGrid;
+    final p = g.split('x');
+    final c = vcodeLayoutCells(gridW: int.parse(p[0]), gridH: int.parse(p[1]));
+    return c[0] == 0 ? 0.92 : c[1] / c[0];
+  }
+
+  /// 構図合わせ用の読み上げ。検出した四隅から、カメラ画像に対する充填率と四辺の
+  /// 余白、px/セル を出す。三脚やウィンドウをどちらへどれだけ動かせばよいかを
+  /// 数字で判断できるようにする (緑の枠は目安にしかならないため)。
+  Widget _alignPanel() {
+    final c = _detCorners;
+    if (c == null || c.length < 8 || _detImgW == 0 || _detImgH == 0) {
+      return const SizedBox.shrink();
+    }
+    final delta =
+        ((_cam?.description.sensorOrientation ?? 90) - _detRot + 360) % 360;
+    var minX = 1.0, maxX = 0.0, minY = 1.0, maxY = 0.0;
+    for (var i = 0; i < 4; i++) {
+      final p = previewNorm(c[i * 2], c[i * 2 + 1], _detImgW, _detImgH, delta);
+      minX = math.min(minX, p.dx);
+      maxX = math.max(maxX, p.dx);
+      minY = math.min(minY, p.dy);
+      maxY = math.max(maxY, p.dy);
+    }
+    final fillW = (maxX - minX) * 100, fillH = (maxY - minY) * 100;
+    final top = minY * 100, bottom = (1 - maxY) * 100;
+    final left = minX * 100, right = (1 - maxX) * 100;
+    // px/セル は回転後画像座標での辺の長さをセル数で割る (カメラ画像の実寸)。
+    // 縦横で違えば小さいほう = 読み取りが厳しいほうを出す
+    final topLen = math.sqrt(math.pow(c[2] - c[0], 2) + math.pow(c[3] - c[1], 2));
+    final leftLen = math.sqrt(math.pow(c[6] - c[0], 2) + math.pow(c[7] - c[1], 2));
+    final pxW = _detCellsW > 0 ? topLen / _detCellsW : 0.0;
+    final pxH = _detCellsH > 0 ? leftLen / _detCellsH : 0.0;
+    final pxPerCell = math.min(pxW, pxH);
+    // 余白が 2% を切った辺は、少しの揺れで四隅マーカーが画角から出る
+    final tight = <String>[
+      if (top < 2) '上',
+      if (bottom < 2) '下',
+      if (left < 2) '左',
+      if (right < 2) '右',
+    ];
+    // いちばん余っている辺を示す。そちらへ寄せる/大きくする余地がある
+    final slack = {'上': top, '下': bottom, '左': left, '右': right}.entries
+        .reduce((a, b) => a.value >= b.value ? a : b);
+    final style = TextStyle(
+      color: tight.isEmpty ? Colors.white : Colors.redAccent,
+      fontSize: 13,
+      fontFeatures: const [FontFeature.tabularFigures()],
+      height: 1.35,
+    );
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color(0x99000000),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(
+          '充填 幅 ${fillW.toStringAsFixed(0)}% · 高 ${fillH.toStringAsFixed(0)}%'
+          '   ${pxPerCell.toStringAsFixed(1)} px/セル\n'
+          '余白 上 ${top.toStringAsFixed(0)}%  下 ${bottom.toStringAsFixed(0)}%  '
+          '左 ${left.toStringAsFixed(0)}%  右 ${right.toStringAsFixed(0)}%'
+          '${tight.isNotEmpty ? "\nはみ出し注意: ${tight.join("/")}" : "   (${slack.key}に余裕)"}',
+          style: style,
+        ),
+      ),
     );
   }
 
@@ -1166,7 +1354,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                         onPressed: _acquiring ? null : () => _startAcquire(),
                         icon: Icon(
                             _seeded ? Icons.refresh : Icons.center_focus_strong),
-                        label: Text(_seeded ? '位置を再検出' : '今すぐ位置を検出'),
+                        label: Text(_seeded ? '位置を再検出' : '位置を検出'),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -1176,6 +1364,12 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                       onPressed: _restartReceive,
                       icon: const Icon(Icons.restart_alt),
                       label: const Text('リセット'),
+                    ),
+                    IconButton(
+                      tooltip: _panelExpanded ? '詳細を畳む' : '詳細を開く (カバレッジ・設定)',
+                      color: Colors.white,
+                      icon: Icon(_panelExpanded ? Icons.expand_more : Icons.expand_less),
+                      onPressed: () => setState(() => _panelExpanded = !_panelExpanded),
                     ),
                     IconButton(
                       tooltip: _panelAtTop ? '操作パネルを下へ' : '操作パネルを上へ',
@@ -1189,9 +1383,19 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                   ],
                 ),
                 const SizedBox(height: 6),
+                // 畳んでいる間は進捗を細いバーだけで示す (格子は映像の下 1/4 を隠す)
+                if (total != null && !_panelExpanded)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: LinearProgressIndicator(
+                      value: (_seenEsi.length / total).clamp(0.0, 1.0),
+                      minHeight: 6,
+                      backgroundColor: const Color(0x55FFFFFF),
+                    ),
+                  ),
                 // 受信データのカバレッジ格子: ESI ごとのマスを、受信済み=緑(source)/水色(repair)、
                 // 未受信=灰で塗る。埋まらない穴が「取れていないフレームのデータ」= 未完了の原因。
-                if (total != null) ...[
+                if (total != null && _panelExpanded) ...[
                   _coverageGrid(total),
                   const SizedBox(height: 4),
                 ],
@@ -1211,7 +1415,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                           color: Theme.of(context).colorScheme.error),
                     ),
                   ),
-                _measureSettings(),
+                if (_panelExpanded) _measureSettings(),
                 Text(
                   '検出 $_framesDetected/$_framesSeen · '
                   // distinct (重複除く) が必要数 K に届くと復元される。投入は重複込みの累計。
@@ -1298,6 +1502,37 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
 /// acquire で検出した 4 隅 (回転後画像座標) を、プレビュー表示座標へ写してハイライトする。
 /// 回転差 delta = (sensorOrientation - 検出時 rot) を吸収してからプレビュー矩形に一様スケールする。
 /// VcodeCameraView の overlay として、カメラ画像の矩形そのものに重ねて描く。
+/// 回転後画像座標 (imgW×imgH) の点を、プレビュー表示の正規化座標 (0..1) へ写す。
+/// delta = (sensorOrientation - 検出時 rot + 360) % 360。プレビューは sensorOrientation
+/// 空間で表示されるので、検出時の回転との差分だけ回す。検出枠の描画と構図合わせの
+/// 読み上げで同じ変換を使う。
+Offset previewNorm(double x, double y, int imgW, int imgH, int delta) {
+  double ix, iy;
+  int pw, ph;
+  if (delta == 90) {
+    ix = imgH - 1 - y;
+    iy = x;
+    pw = imgH;
+    ph = imgW;
+  } else if (delta == 180) {
+    ix = imgW - 1 - x;
+    iy = imgH - 1 - y;
+    pw = imgW;
+    ph = imgH;
+  } else if (delta == 270) {
+    ix = y;
+    iy = imgW - 1 - x;
+    pw = imgH;
+    ph = imgW;
+  } else {
+    ix = x;
+    iy = y;
+    pw = imgW;
+    ph = imgH;
+  }
+  return Offset(ix / pw, iy / ph);
+}
+
 class _DetectedQuadPainter extends CustomPainter {
   _DetectedQuadPainter({
     required this.corners,
@@ -1315,33 +1550,10 @@ class _DetectedQuadPainter extends CustomPainter {
   final int delta;
 
   Offset _map(double x, double y, Size size) {
-    // 1) 回転後画像空間 (imgW×imgH) → プレビュー画像空間 (delta 回転)
-    double ix, iy;
-    int pwImg, phImg;
-    if (delta == 90) {
-      ix = imgH - 1 - y;
-      iy = x;
-      pwImg = imgH;
-      phImg = imgW;
-    } else if (delta == 180) {
-      ix = imgW - 1 - x;
-      iy = imgH - 1 - y;
-      pwImg = imgW;
-      phImg = imgH;
-    } else if (delta == 270) {
-      ix = y;
-      iy = imgW - 1 - x;
-      pwImg = imgH;
-      phImg = imgW;
-    } else {
-      ix = x;
-      iy = y;
-      pwImg = imgW;
-      phImg = imgH;
-    }
-    // 2) プレビュー画像空間 → ウィジェット座標。この CustomPaint はカメラ画像の
-    //    矩形そのものに重ねてあるので、比率で伸ばすだけでよい。
-    return Offset(ix / pwImg * size.width, iy / phImg * size.height);
+    // この CustomPaint はカメラ画像の矩形そのものに重ねてあるので、
+    // 正規化座標を比率で伸ばすだけでよい
+    final n = previewNorm(x, y, imgW, imgH, delta);
+    return Offset(n.dx * size.width, n.dy * size.height);
   }
 
   @override

@@ -7,6 +7,7 @@
 
 use vloom_fountain as fountain;
 use vloom_vcode as vcode;
+use vloom_vcode::markers::locate_markers;
 use vloom_vcode::scan::{locate_code, scan_frame, scan_frame_tracked, scan_frame_wide, GrayImage, Quad};
 
 /// 送信側ハンドル。payload を vcode フレーム列に変換する。
@@ -141,6 +142,11 @@ pub struct VcodeScanReport {
     /// corners の座標系 (回転後画像の寸法と、その回転)
     pub img_w: u32,
     pub img_h: u32,
+    /// コードのセル数 (幅, 高さ)。UI が充填率や px/セル を出すのに使う
+    pub cells_w: u32,
+    pub cells_h: u32,
+    /// ブロックごとの回収可否 (行優先)。半分しか取れない回の落ち方を見るために出す
+    pub block_ok: Vec<bool>,
     pub rot: u32,
     /// スキャン内訳 (マイクロ秒)。実機がカメラのフレーム間隔に追従できないとき、
     /// Y プレーンの回転コピーと探索・デコードのどちらが効いているかを切り分ける。
@@ -150,6 +156,21 @@ pub struct VcodeScanReport {
     pub debug_gray: Option<Vec<u8>>,
     pub debug_w: u32,
     pub debug_h: u32,
+}
+
+/// 画角に収まる最大の枠 (contain) を基準に、frac 倍した初期ガイドの寸法を返す。
+///
+/// 以前は「幅 × frac」で決めて高さを縦横比から出していたが、縦長の格子 (11x14 等) を
+/// 画角いっぱいに写すと高さが先に頭打ちになり、幅基準の枠は高さが 50px 以上ずれて
+/// 粗探索の許容 (±48px) を超えて掴めなかった。実機で「四隅が綺麗に写っているのに
+/// CornerMismatch」になった原因。幅と高さの両方が収まる枠を基準にすれば、
+/// 横長でも縦長でも同じ frac が同じ「大きさの度合い」を意味する。
+fn contain_guide(frac: f32, rw: usize, rh: usize, layout: vcode::Layout) -> (f32, f32) {
+    let aspect = layout.height() as f32 / layout.width() as f32;
+    let (w, h) = (rw as f32, rh as f32);
+    let fit_w = w.min(h / aspect); // 幅・高さの両方が画角に収まる最大の幅
+    let gw = fit_w * frac;
+    (gw, gw * aspect)
 }
 
 fn fail(reason: &str) -> VcodeScanReport {
@@ -165,6 +186,9 @@ fn fail(reason: &str) -> VcodeScanReport {
         corners: vec![],
         img_w: 0,
         img_h: 0,
+        cells_w: 0,
+        cells_h: 0,
+        block_ok: vec![],
         rot: 0,
         rotate_us: 0,
         decode_us: 0,
@@ -187,6 +211,7 @@ fn success(
     let c = result.corners;
     let corners = vec![c[0].0, c[0].1, c[1].0, c[1].1, c[2].0, c[2].1, c[3].0, c[3].1];
     let frame = result.frame;
+    let block_ok: Vec<bool> = frame.blocks.iter().map(|b| b.is_some()).collect();
     // ブロックペイロードはゼロパディングされていることがあるため、
     // OTI のシンボルサイズから実パケット長 (4 + symbol_size) に切り出す
     let pkt_len = 4 + fountain::oti_symbol_size(&frame.header.oti) as usize;
@@ -211,6 +236,9 @@ fn success(
         corners,
         img_w: img_w as u32,
         img_h: img_h as u32,
+        cells_w: layout.width() as u32,
+        cells_h: layout.height() as u32,
+        block_ok,
         rot,
         rotate_us,
         decode_us,
@@ -235,6 +263,11 @@ pub struct VcodeAcquireReport {
     /// 回転後画像の寸法 (UI が corners を表示座標へ写すのに使う)
     pub img_w: u32,
     pub img_h: u32,
+    /// コードのセル数 (幅, 高さ)。UI が充填率や px/セル を出すのに使う
+    pub cells_w: u32,
+    pub cells_h: u32,
+    /// ブロックごとの回収可否 (行優先)。半分しか取れない回の落ち方を見るために出す
+    pub block_ok: Vec<bool>,
 }
 
 fn fail_acquire() -> VcodeAcquireReport {
@@ -248,6 +281,9 @@ fn fail_acquire() -> VcodeAcquireReport {
         corners: vec![],
         img_w: 0,
         img_h: 0,
+        cells_w: 0,
+        cells_h: 0,
+        block_ok: vec![],
     }
 }
 
@@ -290,6 +326,16 @@ fn rotate_y_plane(y: &[u8], w: usize, h: usize, stride: usize, rot: u32) -> (Vec
 /// たいてい普通に読めるので、数枚は 40〜60ms の追従を試し続けるほうが速い。
 const TRACK_RETRY_FRAMES: u32 = 4;
 
+/// 格子 (ブロック数) からコード全体のセル数 [幅, 高さ] を返す。
+/// ガイド枠の縦横比を選択中の格子に合わせるのに使う。上下ストリップの高さは
+/// Rust 側の定数で決まるので、Dart に写さずここで計算する。
+#[flutter_rust_bridge::frb(sync)]
+pub fn vcode_layout_cells(grid_w: u8, grid_h: u8) -> Vec<u32> {
+    let l = vcode::Layout::from_grid(grid_w.max(1) as usize, grid_h.max(1) as usize);
+    vec![l.width() as u32, l.height() as u32]
+}
+
+#[flutter_rust_bridge::frb(opaque)]
 pub struct VcodeRx {
     /// 直近成功時の (回転 deg, レイアウト, 精密化後の 4 隅)
     last: Option<(u32, vcode::Layout, [(f32, f32); 4])>,
@@ -332,10 +378,31 @@ impl VcodeRx {
         }
     }
 
+    /// scan の同期版 (アプリの受信はこちらを使う)。実測で FRB の非同期呼び出しは
+    /// Rust の処理 (約 31ms) に対して往復 55ms かかっており、完了通知が UI isolate の
+    /// 描画の空きを待つぶんが乗っていた。同期にすると往復 32〜37ms、Rust 側も
+    /// 18〜22ms に縮み (ワーカースレッドとの取り合いが消える)、1MB が 95 → 110 KB/s。
+    /// UI isolate は処理中ブロックするが、カメラプレビューはネイティブのテクスチャ
+    /// なので止まらない。
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn scan_sync(
+        &mut self,
+        y: Vec<u8>,
+        width: u32,
+        height: u32,
+        stride: u32,
+        rotation_deg: u32,
+        guide_frac: f64,
+        debug_dump: bool,
+    ) -> VcodeScanReport {
+        self.scan(y, width, height, stride, rotation_deg, guide_frac, debug_dump)
+    }
+
     /// カメラの Y プレーンから vcode をスキャンする。
     /// トラッキング成功時は report.tracked = true。
-    /// 注: sync にしない。非同期 (Rust ワーカースレッド実行) にすることで
-    /// UI isolate をブロックせず、カメラプレビューのカクつきを防ぐ。
+    /// 注: アプリは同期版 scan_sync を使う。非同期だと完了通知が UI isolate の
+    /// 描画の空きを待ち、Rust の処理 31ms に対して往復 55ms になっていた (実測)。
+    /// 同期にしても、プレビューはネイティブのテクスチャなので止まらない。
     pub fn scan(
         &mut self,
         y: Vec<u8>,
@@ -385,10 +452,35 @@ impl VcodeRx {
         // 「探索している間に 10 フレーム進み、位置がずれてまた探索」の悪循環になっていた。
         // 大きく外れた向き・大きさは自動 acquire (4 回転 × 多位置 × 3 スケール) が拾うので、
         // ここは「ほぼ正しい構図」だけを見ればよい。
-        let base = guide_frac.clamp(0.4, 0.98);
-        let fracs = [base, (base * 0.8).max(0.4)];
+        // 画角に収まる最大枠 (contain) に対する比。UI のガイド枠 (guide_frac) は
+        // 目安であって、実際に写る大きさは「いっぱい」から「小さめ」まで幅がある。
+        // 大きい順に試すのは、大きく写せているほど 1 セルあたりの画素が多く、
+        // 掴めれば最も速い構図だから。
+        let _ = guide_frac;
+        let fracs = [0.85f32, 0.95, 0.72, 0.58];
         let cands = self.candidates();
         let mut errors = Vec::new();
+
+        // マーカー直接検出: 前フレームにも縮尺の仮定にも依存しない (数 ms)。
+        // 追従が切れた直後や初回はまずこれで掴む。テクスチャ推定は縦長のコードを
+        // 画角いっぱいに写したときに大きく外す (実機で幅 910 を 1024×960 と推定) が、
+        // 24 セルのマーカーは縮小画像でもはっきりした黒い四角なので取り違えにくい。
+        if let Some((rot, layout)) = self.last_ok.or(self.forced.map(|l| (rotation_deg % 360, l))) {
+            let t_rot = std::time::Instant::now();
+            let (gray, rw, rh) = rotate_y_plane(&y, w, h, stride, rot);
+            let rotate_us = t_rot.elapsed().as_micros() as u32;
+            let img = GrayImage { w: rw, h: rh, data: &gray };
+            let t_dec = std::time::Instant::now();
+            if let Some(q) = locate_markers(&img) {
+                if let Ok(result) = scan_frame(&img, &q, layout) {
+                    let decode_us = t_dec.elapsed().as_micros() as u32;
+                    self.track_misses = 0;
+                    self.last = Some((rot, layout, result.corners));
+                    self.last_ok = Some((rot, layout));
+                    return success(result, false, layout, rot, rw, rh, rotate_us, decode_us);
+                }
+            }
+        }
 
         // テクスチャからコードの位置と大きさを推定し、その 1 点を最初に試す。
         // 固定スケールのガイド枠は「画面いっぱいに大きく写した」「中心から外れた」構図を
@@ -428,9 +520,7 @@ impl VcodeRx {
             let (cx, cy) = (rw as f32 / 2.0, rh as f32 / 2.0);
             let t_dec = std::time::Instant::now();
             for &frac in &fracs {
-                let gw = (frac * rw as f64) as f32;
-                let gh = (gw * layout.height() as f32 / layout.width() as f32)
-                    .min(rh as f32 * 0.95);
+                let (gw, gh) = contain_guide(frac, rw, rh, layout);
                 let guide = Quad {
                     tl: (cx - gw / 2.0, cy - gh / 2.0),
                     tr: (cx + gw / 2.0, cy - gh / 2.0),
@@ -457,8 +547,7 @@ impl VcodeRx {
             for &layout in &cands {
                 for &frac in &fracs {
                     // ガイド枠: 中央配置、幅 = frac * 画像幅、アスペクトはレイアウト準拠
-                    let gw = (frac * rw as f64) as f32;
-                    let gh = (gw * layout.height() as f32 / layout.width() as f32).min(rh as f32 * 0.95);
+                    let (gw, gh) = contain_guide(frac, rw, rh, layout);
                     let guide = Quad {
                         tl: (cx - gw / 2.0, cy - gh / 2.0),
                         tr: (cx + gw / 2.0, cy - gh / 2.0),
@@ -527,7 +616,9 @@ impl VcodeRx {
             &[rotation_deg % 360, (rotation_deg + 180) % 360]
         };
         // ガイド枠の大きさ (画像幅比) と中心位置 (画像比) を振る。小さめスケールで隅寄りも拾う。
-        let scales = [0.7f64, 0.5, 0.38];
+        // contain 枠に対する比。0.9 は「画角いっぱいに写した」構図で、これが無いと
+        // 大きく写すほど掴めなくなる (実機で発生)。
+        let scales = [0.9f64, 0.7, 0.5, 0.38];
         let centers = [0.5f32, 0.32, 0.68];
         // 面内の傾き (deg)。ガイド枠は水平前提なので、コードが 10〜15° を超えて傾くと
         // コーナーが粗探索の捕捉範囲 (±96px) から外れて掴めない。手持ちでは傾きが
@@ -554,7 +645,30 @@ impl VcodeRx {
         for &rot in rots {
             let (gray, rw, rh) = rotate_y_plane(&y, w, h, stride, rot);
             let img = GrayImage { w: rw, h: rh, data: &gray };
-            // まずテクスチャ推定の 1 点から (スケール総当たりの穴を避ける本命経路)
+            // まずマーカー直接検出 (数 ms)。見つかれば候補レイアウトを順に当てる
+            if let Some(q) = locate_markers(&img) {
+                for &layout in &cands {
+                    if let Ok(result) = scan_frame(&img, &q, layout) {
+                        let ok = result.frame.blocks.iter().filter(|b| b.is_some()).count();
+                        let c = result.corners;
+                        return VcodeAcquireReport {
+                            detected: true,
+                            rot,
+                            grid_w: layout.grid_w as u8,
+                            grid_h: layout.grid_h as u8,
+                            blocks_ok: ok as u32,
+                            blocks_total: layout.block_count() as u32,
+                            corners: vec![c[0].0, c[0].1, c[1].0, c[1].1, c[2].0, c[2].1, c[3].0, c[3].1],
+                            img_w: rw as u32,
+                            img_h: rh as u32,
+                            cells_w: layout.width() as u32,
+                            cells_h: layout.height() as u32,
+                            block_ok: result.frame.blocks.iter().map(|b| b.is_some()).collect(),
+                        };
+                    }
+                }
+            }
+            // 次にテクスチャ推定の 1 点から (スケール総当たりの穴を避ける経路)
             if let Some((cx, cy, bw, _bh)) = locate_code(&img, 0.94) {
                 for &layout in &cands {
                     let aspect = layout.height() as f32 / layout.width() as f32;
@@ -586,6 +700,9 @@ impl VcodeRx {
                                 ],
                                 img_w: rw as u32,
                                 img_h: rh as u32,
+                                cells_w: layout.width() as u32,
+                                cells_h: layout.height() as u32,
+                                block_ok: result.frame.blocks.iter().map(|b| b.is_some()).collect(),
                             };
                         }
                     }
@@ -595,10 +712,8 @@ impl VcodeRx {
                 continue; // 自動起動は locate のみ。外したら次の機会に任せる
             }
             for &layout in &cands {
-                let aspect = layout.height() as f32 / layout.width() as f32;
                 for &s in &scales {
-                    let gw = (s * rw as f64) as f32;
-                    let gh = (gw * aspect).min(rh as f32 * 0.95);
+                    let (gw, gh) = contain_guide(s as f32, rw, rh, layout);
                     for &cxf in &centers {
                         for &cyf in &centers {
                             let cx = (cxf * rw as f32).clamp(gw / 2.0, rw as f32 - gw / 2.0);
@@ -634,6 +749,9 @@ impl VcodeRx {
                                     ],
                                     img_w: rw as u32,
                                     img_h: rh as u32,
+                                    cells_w: layout.width() as u32,
+                                    cells_h: layout.height() as u32,
+                                    block_ok: result.frame.blocks.iter().map(|b| b.is_some()).collect(),
                                 };
                             }
                             }

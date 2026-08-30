@@ -295,7 +295,7 @@ fn refine_homography(
     }
 
     // 微調整: 全既知セル (コーナー + 擬似ランダム較正) で座標降下
-    descend(img, corners, layout, thr, &[2.0, 1.0, 0.5])
+    descend(img, corners, layout, thr, &[2.0, 1.0, 0.5], 1)
 }
 
 /// 4 隅を指定ステップ列の座標降下で微調整する (全既知セルの一致数を最大化)。
@@ -306,10 +306,20 @@ fn descend(
     layout: Layout,
     thr: u8,
     steps: &[f32],
+    subsample: usize,
 ) -> Option<Homography> {
     let (wc, hc) = (layout.width() as f32, layout.height() as f32);
     let src = [(0.0, 0.0), (wc, 0.0), (wc, hc), (0.0, hc)];
-    let fine = known_cells(layout);
+    // 採点に使う既知セルを 1/subsample に間引く。マーカーを 24 セルにしたときに
+    // 既知セルが約 3,300 まで増え、2 段 × 2 周 × 4 隅 × 25 候補 = 400 回の採点で
+    // 1 フレーム 130 万サンプルになって、追従スキャンの 9 割がここになっていた
+    // (PC で 20ms、実機で 50ms 超)。追従 (四隅がほぼ合っている) では 1/4 で十分だが、
+    // 粗探索からの精密化は間引くと収束が甘くなりヘッダを落とすので、そこは全部使う。
+    // (r + 2c) % n の斜めの間引きなら、1 列だけのセパレータも n 行に 1 つは残る。
+    let fine: Vec<(usize, usize, bool)> = known_cells(layout)
+        .into_iter()
+        .filter(|&(r, c, _)| subsample <= 1 || (r + 2 * c) % subsample == 0)
+        .collect();
 
     let score = |quad: &[(f32, f32); 4]| -> Option<(Homography, usize)> {
         let hm = Homography::from_quad(&src, quad)?;
@@ -332,6 +342,13 @@ fn descend(
                 for dy in -2i32..=2 {
                     for dx in -2i32..=2 {
                         if dx == 0 && dy == 0 {
+                            continue;
+                        }
+                        // 追従 (subsample > 1) では斜めの候補を省いて十字だけ試す
+                        // (25 → 9 候補)。フレーム間の動きは小さく、2 周の降下で斜めにも
+                        // 届く。1 枚 32〜37ms がカメラ間隔 34ms をわずかに超えて 2 枚に
+                        // 1 枚しか処理できていなかったので、ここを削って 34ms を切る。
+                        if subsample > 1 && dx != 0 && dy != 0 {
                             continue;
                         }
                         let mut cand = *corners;
@@ -430,12 +447,26 @@ pub fn scan_frame_tracked(
         &corners,
     )
     .ok_or(FrameError::CornerMismatch)?;
+    #[cfg(feature = "profile")]
+    let t0 = std::time::Instant::now();
     let thr0 = threshold_for(img, &hmat0, layout);
+    #[cfg(feature = "profile")]
+    let t1 = std::time::Instant::now();
     // 60fps 処理予算 (16ms) に収めるため探索ステップは 2 段に抑える。
     // 高フレームレートではフレーム間変位が数 px なのでこれで十分追従できる。
-    let hmat = descend(img, &mut corners, layout, thr0, &[2.0, 0.5])
+    let hmat = descend(img, &mut corners, layout, thr0, &[2.0, 0.5], 4)
         .ok_or(FrameError::CornerMismatch)?;
-    decode_at(img, hmat, layout)
+    #[cfg(feature = "profile")]
+    let t2 = std::time::Instant::now();
+    let r = decode_at(img, hmat, layout);
+    #[cfg(feature = "profile")]
+    eprintln!(
+        "[profile] tracked: threshold {:.2} ms / descend {:.2} ms / decode_at {:.2} ms",
+        (t1 - t0).as_secs_f64() * 1e3,
+        (t2 - t1).as_secs_f64() * 1e3,
+        t2.elapsed().as_secs_f64() * 1e3
+    );
+    r
 }
 
 /// 確定したホモグラフィでフレームをデコードする (コーナー照合 + ヘッダ + ブロック部分回収)
@@ -479,16 +510,56 @@ fn decode_at(
         .flat_map(|&dy| STEPS.iter().map(move |&dx| (dx, dy)))
         .collect();
 
-    // ヘッダ: 各オフセット x 各コピーで最初に CRC が通ったものを採用
+    // ヘッダ: 1 コピーはほぼ 1 行ぶん (幅いっぱいの 192 セル) なので、帯全体を 1 つの
+    // オフセットで読むと、レンズの歪みが効く画像の縁 (コードの上端を画角の端まで
+    // 詰めたとき) で行の中央だけ縦にずれ、どのオフセットでも通らなくなる (実機で
+    // 「四隅は合うのに HeaderNotFound」)。そこで帯を横に区間分けし、区間ごとの
+    // オフセットを行 0 のタイミング行 (既知の白黒パターン) への一致で決めてから読む。
+    // それで通らなければ従来どおり全体を 1 つのオフセットで総当たりする。
     let hdr_cells: Vec<(usize, usize)> = crate::header_cells(w).collect();
     let copy_bits = crate::HEADER_LEN * 8;
-    let header = offs
-        .iter()
-        .find_map(|&(dx, dy)| {
-            let bits: Vec<bool> = hdr_cells.iter().map(|&(r, c)| sample(r, c, dx, dy)).collect();
-            (0..bits.len() / copy_bits).find_map(|k| {
-                let bytes = bits_to_bytes(&bits[k * copy_bits..(k + 1) * copy_bits]);
-                crate::FrameHeader::deserialize(&bytes)
+    let try_copies = |bits: &[bool]| -> Option<crate::FrameHeader> {
+        (0..bits.len() / copy_bits).find_map(|k| {
+            let bytes = bits_to_bytes(&bits[k * copy_bits..(k + 1) * copy_bits]);
+            crate::FrameHeader::deserialize(&bytes)
+        })
+    };
+    let segmented = {
+        const SEG: usize = 6;
+        let cols = crate::strip_cols(w);
+        let (c0, span) = (cols.start, cols.end - cols.start);
+        let seg_of = |c: usize| ((c - c0) * SEG / span).min(SEG - 1);
+        // 区間ごとに、タイミング行の一致数が最大のオフセットを選ぶ
+        // 縁の歪みは半セルを超えることがあるので、区間の探索は縦に ±1 セルまで広げる
+        const DYS: [f32; 9] = [0.0, 0.25, -0.25, 0.5, -0.5, 0.75, -0.75, 1.0, -1.0];
+        let seg_cands: Vec<(f32, f32)> = DYS
+            .iter()
+            .flat_map(|&dy| STEPS.iter().map(move |&dx| (dx, dy)))
+            .collect();
+        let mut seg_off = [(0.0f32, 0.0f32); SEG];
+        for (sidx, so) in seg_off.iter_mut().enumerate() {
+            let cells: Vec<usize> = cols.clone().filter(|&c| seg_of(c) == sidx).collect();
+            let score = |&(dx, dy): &(f32, f32)| {
+                cells.iter().filter(|&&c| sample(0, c, dx, dy) == crate::calib_black(0, c)).count()
+            };
+            *so = *seg_cands.iter().max_by_key(|o| score(o)).unwrap();
+        }
+        let bits: Vec<bool> = hdr_cells
+            .iter()
+            .map(|&(r, c)| {
+                let (dx, dy) = seg_off[seg_of(c)];
+                sample(r, c, dx, dy)
+            })
+            .collect();
+        try_copies(&bits)
+    };
+    #[cfg(feature = "profile")]
+    let td0 = std::time::Instant::now();
+    let header = segmented
+        .or_else(|| {
+            offs.iter().find_map(|&(dx, dy)| {
+                let bits: Vec<bool> = hdr_cells.iter().map(|&(r, c)| sample(r, c, dx, dy)).collect();
+                try_copies(&bits)
             })
         })
         .ok_or(FrameError::HeaderNotFound)?;
@@ -580,25 +651,17 @@ fn decode_at(
     const GAMMAS: [f32; 3] = [1.0, 0.4545, 2.2];
 
     // ブロック: オフセット × 補正カーブのリトライ付きで CRC が通ったものだけ回収。
-    // 正しいカーブはフレーム内で共通のことが多いので、直前に当たったものを先に試す。
-    let mut gamma_hint = 0usize;
-    let mut blocks = Vec::with_capacity(layout.block_count());
-    for bi in 0..layout.block_count() {
+    // ブロック同士は独立なので、feature "parallel" ではコア数ぶん並列に復号する
+    // (受信の 1 枚あたり処理時間で最大の項)。以前は「直前に当たったカーブを先に試す」
+    // ヒントをブロック間で共有していたが、並列化のために線形カーブ固定で始める
+    // 順にした。2 値 (bpc=1) はカーブ補正が無関係なので何も変わらない。
+    let decode_block = |bi: usize| -> Option<Vec<u8>> {
         let (or, oc) = layout.block_origin(bi);
-        let mut found = None;
-        let gamma_order: Vec<usize> = if bpc == 1 {
-            vec![0] // 2 値はしきい値 1 本なのでカーブ補正は無意味
-        } else {
-            let mut v = vec![gamma_hint];
-            v.extend((0..GAMMAS.len()).filter(|&g| g != gamma_hint));
-            v
-        };
-        'search: for &gi in &gamma_order {
+        let gamma_order: &[usize] = if bpc == 1 { &[0] } else { &[0, 1, 2] };
+        for (k, &gi) in gamma_order.iter().enumerate() {
             let gamma = GAMMAS[gi];
-            // ヒント外のカーブは中央寄りの 5 オフセットだけ試す (コスト抑制)。
-            // 正しいカーブは 1 ブロック当たればヒントに昇格し、以降は全オフセットで試される。
-            let offs_slice: &[(f32, f32)] =
-                if gi == gamma_hint { &offs } else { &offs[..5] };
+            // 先頭 (線形) 以外のカーブは中央寄りの 5 オフセットだけ試す (コスト抑制)
+            let offs_slice: &[(f32, f32)] = if k == 0 { &offs } else { &offs[..5] };
             for &(dx, dy) in offs_slice.iter() {
                 let mut bits = Vec::with_capacity(layout.block * layout.block * bpc as usize);
                 for i in 0..layout.block * layout.block {
@@ -614,14 +677,27 @@ fn decode_at(
                 let bytes = bits_to_bytes(&bits);
                 let (payload, crc) = bytes.split_at(layout.block_payload_len(bpc));
                 if crate::crc32(payload) == u32::from_be_bytes([crc[0], crc[1], crc[2], crc[3]]) {
-                    gamma_hint = gi;
-                    found = Some(payload.to_vec());
-                    break 'search;
+                    return Some(payload.to_vec());
                 }
             }
         }
-        blocks.push(found);
-    }
+        None
+    };
+    #[cfg(feature = "profile")]
+    let td1 = std::time::Instant::now();
+    #[cfg(feature = "parallel")]
+    let blocks: Vec<Option<Vec<u8>>> = {
+        use rayon::prelude::*;
+        (0..layout.block_count()).into_par_iter().map(decode_block).collect()
+    };
+    #[cfg(not(feature = "parallel"))]
+    let blocks: Vec<Option<Vec<u8>>> = (0..layout.block_count()).map(decode_block).collect();
+    #[cfg(feature = "profile")]
+    eprintln!(
+        "[profile] decode_at: corners+header {:.2} ms (header 区間分け含む) / blocks {:.2} ms",
+        (td1 - td0).as_secs_f64() * 1e3,
+        td1.elapsed().as_secs_f64() * 1e3
+    );
 
     let (wc, hc) = (w as f32, h as f32);
     Ok(ScanResult {

@@ -409,7 +409,7 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
                     ButtonSegment(value: '9x8', label: Text('9x8')),
                     ButtonSegment(value: '11x10', label: Text('11x10')),
                     ButtonSegment(value: '11x14', label: Text('11x14')),
-                    ButtonSegment(value: '13x12', label: Text('13x12')),
+                    ButtonSegment(value: '13x18', label: Text('13x18')),
                   ],
                   selected: {_grid},
                   showSelectedIcon: false,

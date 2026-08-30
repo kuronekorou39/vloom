@@ -48,6 +48,8 @@ def main() -> int:
     p.add_argument("--dy", type=float, help="窓の中心からの縦ずれ (-0.5〜0.5)")
     p.add_argument("--geometry", type=_geometry,
                    help="送信ウィンドウの位置とサイズ X,Y,幅,高 (省略時は前回位置)")
+    p.add_argument("--hold", action="store_true",
+                   help="静止 (調整用): フレームを進めず 1 枚を出し続ける。送信中は H で切替")
     p.add_argument("--start", action="store_true", help="起動と同時に送信を始める")
     args = p.parse_args()
 
@@ -56,7 +58,7 @@ def main() -> int:
     win = MainWindow()
     win.apply_settings(file=args.file, grid=args.grid, bpc=args.bpc,
                        fps=args.fps, repair=args.repair, margin=args.margin,
-                       zoom=args.zoom, dx=args.dx, dy=args.dy,
+                       zoom=args.zoom, dx=args.dx, dy=args.dy, hold=args.hold,
                        geometry=args.geometry)
     win.show()
     if args.start:

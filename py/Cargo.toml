@@ -14,7 +14,7 @@ crate-type = ["cdylib"]
 # 分けなくて済む)。extension-module は maturin 側で feature として有効化する。
 pyo3 = { version = "0.24", features = ["abi3-py310"] }
 vloom-fountain = { path = "../fountain" }
-vloom-vcode = { path = "../vcode" }
+vloom-vcode = { path = "../vcode", features = ["parallel"] }
 
 # ワークスペース直下の [profile.release] は wasm 向けに opt-level = "z" なので、
 # ここは独立して速度優先にする (このクレートはワークスペース外)。

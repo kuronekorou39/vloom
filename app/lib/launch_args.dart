@@ -11,7 +11,7 @@ import 'package:flutter/services.dart';
 ///     adb shell am start -n app.vloom.vloom/.MainActivity --ei tab 1 --ei preset 4
 ///     adb shell am start -n app.vloom.vloom/.MainActivity --ei tab 1 --es grid 13x16
 class LaunchArgs {
-  const LaunchArgs({this.tab, this.preset, this.grid, this.camLock});
+  const LaunchArgs({this.tab, this.preset, this.grid, this.camLock, this.ev});
 
   /// 0=送信 1=受信 2=履歴。指定がなければ null
   final int? tab;
@@ -27,6 +27,10 @@ class LaunchArgs {
   /// (= 既定の ae)。ロック操作はフレーム供給を秒単位で止めることがあるので、
   /// 効果と代償を測るために切り替えられるようにしてある。
   final String? camLock;
+
+  /// 露出補正 (EV)。露光時間を短くして、表示の切り替わりがカメラの 1 枚に
+  /// 混ざる幅を狭める。指定がなければ null (= 受信画面の既定 -2 EV)
+  final double? ev;
 
   static const _ch = MethodChannel('app.vloom/launch');
   static LaunchArgs _cached = const LaunchArgs();
@@ -48,7 +52,9 @@ class LaunchArgs {
 
       final g = m['grid'];
       final cl = m['camlock'];
+      final ev = m['ev'];
       _cached = LaunchArgs(
+        ev: (ev is String) ? double.tryParse(ev) : null,
         tab: pick('tab'),
         preset: pick('preset'),
         grid: (g is String && g.isNotEmpty) ? g : null,

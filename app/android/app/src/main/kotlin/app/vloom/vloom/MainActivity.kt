@@ -27,6 +27,7 @@ class MainActivity : FlutterActivity() {
                             "preset" to intent.getIntExtra("preset", -1),
                             "grid" to intent.getStringExtra("grid"),
                             "camlock" to intent.getStringExtra("camlock"),
+                            "ev" to intent.getStringExtra("ev"),
                         )
                     )
                     else -> result.notImplemented()

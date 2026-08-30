@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `candidates`, `fail_acquire`, `fail`, `rotate_y_plane`, `success`
+// These functions are ignored because they are not marked as `pub`: `candidates`, `contain_guide`, `fail_acquire`, `fail`, `rotate_y_plane`, `success`
 
 /// Fountain 復元結果のエンドツーエンド CRC-32 を検証して剥がす。
 /// None = ブロック CRC をすり抜けたゴミパケットで復元結果が破損している
@@ -29,6 +29,14 @@ Uint8List vcodeWrapFile({
 /// 復元済みペイロードから元のファイル名/MIME/中身を取り出す。ヘッダが無ければ None。
 VcodeFile? vcodeUnwrapFile({required List<int> buf}) =>
     RustLib.instance.api.crateApiVcodeVcodeUnwrapFile(buf: buf);
+
+/// 格子 (ブロック数) からコード全体のセル数 [幅, 高さ] を返す。
+/// ガイド枠の縦横比を選択中の格子に合わせるのに使う。上下ストリップの高さは
+/// Rust 側の定数で決まるので、Dart に写さずここで計算する。
+Uint32List vcodeLayoutCells({required int gridW, required int gridH}) => RustLib
+    .instance
+    .api
+    .crateApiVcodeVcodeLayoutCells(gridW: gridW, gridH: gridH);
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<VcodeRx>>
 abstract class VcodeRx implements RustOpaqueInterface {
@@ -55,6 +63,20 @@ abstract class VcodeRx implements RustOpaqueInterface {
   /// 注: sync にしない。非同期 (Rust ワーカースレッド実行) にすることで
   /// UI isolate をブロックせず、カメラプレビューのカクつきを防ぐ。
   Future<VcodeScanReport> scan({
+    required List<int> y,
+    required int width,
+    required int height,
+    required int stride,
+    required int rotationDeg,
+    required double guideFrac,
+    required bool debugDump,
+  });
+
+  /// scan の同期版。実測で FRB の非同期呼び出しは Rust の処理 (約 31ms) に対して
+  /// 往復 55ms かかっており、完了通知が UI isolate の描画の空きを待つぶんが乗っていた。
+  /// 同期にすると UI isolate が処理中ブロックするが、カメラプレビューはネイティブの
+  /// テクスチャなので止まらない。効果は実機で測って決める。
+  VcodeScanReport scanSync({
     required List<int> y,
     required int width,
     required int height,
@@ -127,6 +149,13 @@ class VcodeAcquireReport {
   final int imgW;
   final int imgH;
 
+  /// コードのセル数 (幅, 高さ)。UI が充填率や px/セル を出すのに使う
+  final int cellsW;
+  final int cellsH;
+
+  /// ブロックごとの回収可否 (行優先)。半分しか取れない回の落ち方を見るために出す
+  final List<bool> blockOk;
+
   const VcodeAcquireReport({
     required this.detected,
     required this.rot,
@@ -137,6 +166,9 @@ class VcodeAcquireReport {
     required this.corners,
     required this.imgW,
     required this.imgH,
+    required this.cellsW,
+    required this.cellsH,
+    required this.blockOk,
   });
 
   @override
@@ -149,7 +181,10 @@ class VcodeAcquireReport {
       blocksTotal.hashCode ^
       corners.hashCode ^
       imgW.hashCode ^
-      imgH.hashCode;
+      imgH.hashCode ^
+      cellsW.hashCode ^
+      cellsH.hashCode ^
+      blockOk.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -164,7 +199,10 @@ class VcodeAcquireReport {
           blocksTotal == other.blocksTotal &&
           corners == other.corners &&
           imgW == other.imgW &&
-          imgH == other.imgH;
+          imgH == other.imgH &&
+          cellsW == other.cellsW &&
+          cellsH == other.cellsH &&
+          blockOk == other.blockOk;
 }
 
 /// unwrap_file の Flutter 向けミラー。ヘッダが無ければ None (旧形式=従来処理へフォールバック)。
@@ -237,6 +275,13 @@ class VcodeScanReport {
   /// corners の座標系 (回転後画像の寸法と、その回転)
   final int imgW;
   final int imgH;
+
+  /// コードのセル数 (幅, 高さ)。UI が充填率や px/セル を出すのに使う
+  final int cellsW;
+  final int cellsH;
+
+  /// ブロックごとの回収可否 (行優先)。半分しか取れない回の落ち方を見るために出す
+  final List<bool> blockOk;
   final int rot;
 
   /// スキャン内訳 (マイクロ秒)。実機がカメラのフレーム間隔に追従できないとき、
@@ -261,6 +306,9 @@ class VcodeScanReport {
     required this.corners,
     required this.imgW,
     required this.imgH,
+    required this.cellsW,
+    required this.cellsH,
+    required this.blockOk,
     required this.rot,
     required this.rotateUs,
     required this.decodeUs,
@@ -282,6 +330,9 @@ class VcodeScanReport {
       corners.hashCode ^
       imgW.hashCode ^
       imgH.hashCode ^
+      cellsW.hashCode ^
+      cellsH.hashCode ^
+      blockOk.hashCode ^
       rot.hashCode ^
       rotateUs.hashCode ^
       decodeUs.hashCode ^
@@ -305,6 +356,9 @@ class VcodeScanReport {
           corners == other.corners &&
           imgW == other.imgW &&
           imgH == other.imgH &&
+          cellsW == other.cellsW &&
+          cellsH == other.cellsH &&
+          blockOk == other.blockOk &&
           rot == other.rot &&
           rotateUs == other.rotateUs &&
           decodeUs == other.decodeUs &&

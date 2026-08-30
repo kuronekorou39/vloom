@@ -23,9 +23,18 @@ const double kVcodeGuideFrac = 0.8;
 /// 「画像座標に対応させたい描画」はここに渡すこと。表示領域全体に重ねると
 /// 上下の余白ぶんだけ画像とずれる。
 class VcodeCameraView extends StatelessWidget {
-  const VcodeCameraView(this.controller, {super.key, this.overlay});
+  const VcodeCameraView(this.controller,
+      {super.key, this.overlay, this.guideAspect = 0.92, this.alignment = Alignment.center});
   final CameraController controller;
   final Widget? overlay;
+
+  /// 表示領域の中でカメラ画像を置く位置。縦長の画面では画像の上下に黒い余りが
+  /// できるので、操作パネルがある側を空けるように寄せる (映像を隠さないため)。
+  final Alignment alignment;
+
+  /// ガイド枠の縦横比 (高さ / 幅)。選択中の格子に合わせて渡す。
+  /// 既定の 0.92 は正方形に近い格子 (7x6 等) の形。
+  final double guideAspect;
 
   @override
   Widget build(BuildContext context) {
@@ -34,7 +43,8 @@ class VcodeCameraView extends StatelessWidget {
       // 幅 w のとき高さ w*aspectRatio (歪みなし)。表示領域に収まる最大の w を取る。
       final ar = controller.value.aspectRatio;
       final w = math.min(c.maxWidth, c.maxHeight / ar);
-      return Center(
+      return Align(
+        alignment: alignment,
         child: SizedBox(
           width: w,
           height: w * ar,
@@ -42,8 +52,8 @@ class VcodeCameraView extends StatelessWidget {
             fit: StackFit.expand,
             children: [
               CameraPreview(controller),
-              // vcode の枠 (guideFrac 準拠, 縦横比 0.92 = ブロック格子形状)
-              const ScanGuideOverlay(widthFrac: kVcodeGuideFrac, aspect: 0.92),
+              // vcode の枠 (guideFrac 準拠、縦横比は選択中の格子に合わせる)
+              ScanGuideOverlay(widthFrac: kVcodeGuideFrac, aspect: guideAspect),
               ?overlay,
             ],
           ),

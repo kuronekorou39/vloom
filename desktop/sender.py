@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QSlider,
     QVBoxLayout,
     QWidget,
@@ -50,6 +51,9 @@ class FrameView(QWidget):
         self._zoom = zoom
         self._dx = dx
         self._dy = dy
+        # 下端に取っておく余白 (px)。操作バーを重ねる領域で、コードが隠れないように
+        # 描画領域から常に除外する (バーの表示/非表示でコードの大きさは変えない)
+        self._bottom_inset = 0
         # コードの四辺に確保する白の余白 (セル数)。QR の quiet zone に相当する。
         # コードが窓いっぱいだと外縁がウィンドウ枠や背景と隣接し、コーナー
         # マーカーの外周 (黒) がどこで終わるか読み取りにくくなる。
@@ -75,6 +79,10 @@ class FrameView(QWidget):
     def placement(self) -> tuple[float, float, float]:
         return self._zoom, self._dx, self._dy
 
+    def set_bottom_inset(self, px: int) -> None:
+        self._bottom_inset = max(0, px)
+        self.update()
+
     def set_frame(self, data: bytes, w: int, h: int, table: list[int]) -> None:
         self._buffer = data
         img = QImage(data, w, h, w, QImage.Format.Format_Indexed8)
@@ -98,10 +106,11 @@ class FrameView(QWidget):
         # 余白ぶんセル数が増えたものとして縮尺を決めると、四辺に正確に
         # margin セル分の白が残る (縮尺に関わらず「何セル分」で効く)
         m = self._margin
-        fit = min(self.width() / (iw + 2 * m), self.height() / (ih + 2 * m))
+        avail_h = max(1, self.height() - self._bottom_inset)
+        fit = min(self.width() / (iw + 2 * m), avail_h / (ih + 2 * m))
         dw, dh = int(iw * fit * self._zoom), int(ih * fit * self._zoom)
         cx = self.width() * (0.5 + self._dx)
-        cy = self.height() * (0.5 + self._dy)
+        cy = avail_h * (0.5 + self._dy)
         target = QRect(int(cx - dw / 2), int(cy - dh / 2), dw, dh)
         p.drawImage(target, self._image)
 
@@ -118,9 +127,12 @@ class SenderWindow(QWidget):
 
     def __init__(self, tx, fps: int, payload_len: int, label: str,
                  margin_cells: int = 0, zoom: float = 1.0,
-                 dx: float = 0.0, dy: float = 0.0) -> None:
+                 dx: float = 0.0, dy: float = 0.0, hold: bool = False) -> None:
         super().__init__()
         self.tx = tx
+        # 静止 (調整用): フレームを進めず 1 枚を出し続ける。構図合わせの間に
+        # 受信が完走して画面が変わったり、切り替わりでちらついたりしないように。
+        self.hold = hold
         self.payload_len = payload_len
         self.frame_count = tx.frame_count
         self.interval = 1.0 / max(1, fps)
@@ -130,6 +142,10 @@ class SenderWindow(QWidget):
         self.view = FrameView(margin_cells, zoom, dx, dy)
         self.status = QLabel("")
         self.status.setStyleSheet("color:#e6e9ef; font-size:12px;")
+        # 状態表示の長さでウィンドウの最小幅が決まってしまい、--geometry で指定した
+        # 幅より広がることがあった (780 を指定して 1293 になった)。縦長ウィンドウを
+        # 作れないと縦長のコードを大きく出せないので、この文字列は幅を要求しない。
+        self.status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
 
         self.bright = QSlider(Qt.Orientation.Horizontal)
         self.bright.setRange(30, 100)
@@ -141,12 +157,17 @@ class SenderWindow(QWidget):
         self.smooth.setStyleSheet("color:#e6e9ef;")
         self.smooth.toggled.connect(self.view.set_smooth)
 
+        self.hold_box = QCheckBox("静止 (調整用)")
+        self.hold_box.setStyleSheet("color:#e6e9ef;")
+        self.hold_box.setChecked(hold)
+        self.hold_box.toggled.connect(self._set_hold)
+
         stop = QPushButton("停止 (Esc)")
         stop.clicked.connect(self.close)
 
         bar = QHBoxLayout()
         bar.setContentsMargins(12, 6, 12, 6)
-        for w in (QLabel("輝度"), self.bright, self.smooth):
+        for w in (QLabel("輝度"), self.bright, self.smooth, self.hold_box):
             if isinstance(w, QLabel):
                 w.setStyleSheet("color:#e6e9ef; font-size:12px;")
             bar.addWidget(w)
@@ -161,13 +182,18 @@ class SenderWindow(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
         root.addWidget(self.view, 1)
-        root.addWidget(self.bar_widget)
+        # 操作バーはレイアウトに入れず、映像の上に重ねる。レイアウトに入れると
+        # 表示/非表示でビューの高さが変わり、コードの大きさが数 px 変わってしまう。
+        # カメラの構図はコードの大きさに合わせてあるので、バーの出入りで動いてはいけない。
+        self.bar_widget.setParent(self)
+        self.bar_widget.raise_()
+        self.view.set_bottom_inset(self.bar_widget.sizeHint().height())
 
         QShortcut(QKeySequence(Qt.Key.Key_Escape), self, self.close)
 
         # 操作バーは濃色なので、コードのすぐ下にあると外縁が暗い帯と隣接して
-        # quiet zone の意味が薄れる。触っていない間は畳んで、白い面を最大化する
-        # (畳むとレイアウトが領域を返すので、コードもその分大きく描ける)。
+        # quiet zone の意味が薄れる。触っていない間は畳む (映像の上に重ねているので
+        # 畳んでもコードの大きさは変わらない)。
         self.setMouseTracking(True)
         self.view.setMouseTracking(True)
         self._bar_timer = QTimer(self)
@@ -199,8 +225,14 @@ class SenderWindow(QWidget):
         self._show_bar()
         super().mouseMoveEvent(event)
 
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt の命名)
+        # バーは常にウィンドウ下端に全幅で重ねる
+        h = self.bar_widget.sizeHint().height()
+        self.bar_widget.setGeometry(0, self.height() - h, self.width(), h)
+        super().resizeEvent(event)
+
     def keyPressEvent(self, event) -> None:  # noqa: N802 (Qt の命名)
-        """矢印でコードを動かし、+/- で拡縮する (Shift で粗く、0 で戻す)。
+        """矢印でコードを動かし、+/- で拡縮する (Shift で粗く、0 で戻す、H で静止)。
 
         受信側を三脚に据えたまま構図を追い込めるようにする。窓ごと動かすと
         背景のデスクトップまで変わって検出の条件が動くので、白い面の中で
@@ -226,6 +258,8 @@ class SenderWindow(QWidget):
                 self.view.set_placement(zoom=z - zstep)
             case Qt.Key.Key_0:
                 self.view.set_placement(zoom=1.0, dx=0.0, dy=0.0)
+            case Qt.Key.Key_H:
+                self.hold_box.setChecked(not self.hold)
             case _:
                 super().keyPressEvent(event)
                 return
@@ -239,6 +273,10 @@ class SenderWindow(QWidget):
         self.activateWindow()
         self._deadline = time.perf_counter()
         self._tick()
+
+    def _set_hold(self, on: bool) -> None:
+        self.hold = on
+        self._show_bar()
 
     def _rebuild_table(self) -> None:
         # 輝度 = 白レベルを下げる。受信側の白飛び (露出オーバー) を抑えるための調整。
@@ -285,11 +323,13 @@ class SenderWindow(QWidget):
             f"frame {self.index + 1}/{self.frame_count} · {self.pass_no} 巡目 · "
             f"{elapsed:.0f} 秒経過 (1 巡 {loop_sec:.1f} 秒) · "
             f"配置 --zoom {z:.2f} --dx {dx:+.3f} --dy {dy:+.3f}"
+            + ("  [静止中]" if self.hold else "")
         )
-        self.index += 1
-        if self.index >= self.frame_count:
-            self.index = 0
-            self.pass_no += 1
+        if not self.hold:
+            self.index += 1
+            if self.index >= self.frame_count:
+                self.index = 0
+                self.pass_no += 1
 
         # デッドラインを積み上げてドリフトを消す。描画が遅れて過去になった場合だけ
         # 基準を取り直す (取り戻そうとして連続発火し、表示が 1 リフレッシュを割るのを防ぐ)。

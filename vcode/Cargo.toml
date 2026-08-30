@@ -17,3 +17,15 @@ png = "0.17"
 [[bench]]
 name = "scan_speed"
 harness = false
+
+[features]
+default = []
+# ブロックの復号を rayon で並列化する。受信の 1 枚あたり処理時間は Rust の復号が
+# 40〜45ms (13x18、冷間) で最大の項なので、コア数ぶん縮められる。wasm はスレッドを
+# 使えないので既定は off にし、Android / Python 側だけが有効にする。
+parallel = ["dep:rayon"]
+# 追従スキャンの段階ごとの時間を stderr に出す (調査用)
+profile = []
+
+[dependencies]
+rayon = { version = "1.10", optional = true }
