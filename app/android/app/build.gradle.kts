@@ -76,3 +76,12 @@ android {
 flutter {
     source = "../.."
 }
+
+// 受信の露光時間を Camera2 で直接指定するために CameraX を app からも参照する
+// (camera_android_camerax の implementation 依存は app の compile classpath に載らない)。
+// バージョンはプラグイン (camera_android_camerax 0.7.1) と同じ
+dependencies {
+    implementation("androidx.camera:camera-core:1.5.3")
+    implementation("androidx.camera:camera-camera2:1.5.3")
+    implementation("com.google.guava:guava:33.4.0-android")  // CameraX の ListenableFuture
+}

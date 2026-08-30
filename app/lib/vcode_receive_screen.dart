@@ -4,6 +4,9 @@ import 'dart:math' as math;
 import 'dart:io';
 
 import 'package:camera/camera.dart';
+import 'package:camera_android_camerax/camera_android_camerax.dart';
+import 'package:camera_android_camerax/src/camerax_library.g.dart' show PigeonInstanceManager;
+import 'package:camera_platform_interface/camera_platform_interface.dart' show CameraPlatform;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -281,6 +284,24 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
             debugPrint('[vcode-rx] ae/af point -> center');
           } catch (e) {
             debugPrint('[vcode-rx] ae/af point failed: $e');
+          }
+        }
+        // 露光時間の直接指定 (Intent exp=µs [iso=n])。MainActivity.setManualExposure を参照
+        final expUs = LaunchArgs.cached.exposureUs;
+        if (expUs != null && expUs > 0) {
+          final iso = LaunchArgs.cached.iso ??
+              (860000 / expUs).round().clamp(50, 6400);
+          try {
+            final platform = CameraPlatform.instance;
+            if (platform is! AndroidCameraCameraX) {
+              throw StateError('camerax platform unavailable');
+            }
+            final id = PigeonInstanceManager.instance.getIdentifier(platform.cameraControl);
+            await const MethodChannel('app.vloom/launch').invokeMethod(
+                'setExposure', {'control': id, 'us': expUs, 'iso': iso});
+            debugPrint('[vcode-rx] manual exposure ${expUs}us iso $iso');
+          } catch (e) {
+            debugPrint('[vcode-rx] manual exposure failed: $e');
           }
         }
         _rx?.dispose();

@@ -49,6 +49,8 @@ dependencies:
   flutter_file_dialog: ^3.0.2
   # 復元したファイルを既定アプリで開く (動画・PDF・Office など内蔵表示できない形式用)
   open_filex: ^4.7.0
+  camera_android_camerax: ^0.6.30
+  camera_platform_interface: ^2.13.1
 
 dev_dependencies:
   flutter_test:

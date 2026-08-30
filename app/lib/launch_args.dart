@@ -18,7 +18,9 @@ class LaunchArgs {
       this.camLock,
       this.ev,
       this.aePoint,
-      this.dumpLow = 0});
+      this.dumpLow = 0,
+      this.exposureUs,
+      this.iso});
 
   /// 0=送信 1=受信 2=履歴。指定がなければ null
   final int? tab;
@@ -48,6 +50,12 @@ class LaunchArgs {
   /// 保存中は毎フレーム画像のコピーが乗るので、計測では 0 にしておく
   final int dumpLow;
 
+  /// 露光時間 (µs) とゲイン (ISO) の直接指定 (Camera2、AE を切る)。指定がなければ null
+  /// (= プラグインの AE のまま)。iso だけ省略すると 10ms/ISO 86 (Pixel 9a の AE が選ぶ値)
+  /// と同じ明るさになるように露光時間から決める
+  final int? exposureUs;
+  final int? iso;
+
   static const _ch = MethodChannel('app.vloom/launch');
   static LaunchArgs _cached = const LaunchArgs();
 
@@ -74,6 +82,8 @@ class LaunchArgs {
         ev: (ev is String) ? double.tryParse(ev) : null,
         aePoint: (ap is String && ap.isNotEmpty) ? ap : null,
         dumpLow: pick('dump') ?? 0,
+        exposureUs: pick('exp'),
+        iso: pick('iso'),
         tab: pick('tab'),
         preset: pick('preset'),
         grid: (g is String && g.isNotEmpty) ? g : null,
