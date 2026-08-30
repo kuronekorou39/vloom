@@ -181,11 +181,13 @@ fn scan_wide_recovers_from_far_guide_offset() {
     let canvas = synth_camera_image(&frame_px, cw, ch, &dst, 0xBEAD);
     let img = GrayImage { w: cw, h: ch, data: &canvas };
     // 各隅を真値から ~78px (±48 超, ±96 内) ずらす
+    // ずらし量は ±48 超 ±96 内。70 だとヘッダのビット模様 (VERSION バイト) 次第で
+    // 通ったり通らなかったりするぎりぎりの条件だったので 60 にしてある
     let guide = Quad {
-        tl: (dst[0].0 - 70.0, dst[0].1 + 70.0),
-        tr: (dst[1].0 + 70.0, dst[1].1 - 70.0),
-        br: (dst[2].0 + 70.0, dst[2].1 + 70.0),
-        bl: (dst[3].0 - 70.0, dst[3].1 - 70.0),
+        tl: (dst[0].0 - 60.0, dst[0].1 + 60.0),
+        tr: (dst[1].0 + 60.0, dst[1].1 - 60.0),
+        br: (dst[2].0 + 60.0, dst[2].1 + 60.0),
+        bl: (dst[3].0 - 60.0, dst[3].1 - 60.0),
     };
     // マーカーを 24 セルにしてからは、この程度のずれなら通常受信 (±48) でも掴める
     // ようになった (マーカーが大きいほど粗探索の足場が太い)。ここで確かめたいのは

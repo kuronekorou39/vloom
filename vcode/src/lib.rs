@@ -54,8 +54,10 @@ pub const MAGIC: u8 = 0xB9;
 pub const HEADER_LEN: usize = 24;
 /// フォーマットバージョン
 /// (v2: コーナーに白セパレータを追加し、BR の市松を粗いパターンへ。
-///  v3: コーナーを一辺 6 -> 24 セルへ。いずれも前版とは非互換)
-pub const VERSION: u8 = 3;
+///  v3: コーナーを一辺 6 -> 24 セルへ。
+///  v4: ヘッダを 2×2 セルの太いビットで書く (幅が足りない格子は 1 セル)。
+///  いずれも前版とは非互換)
+pub const VERSION: u8 = 4;
 
 /// CRC-32/ISO-HDLC (init=0xFFFFFFFF, poly=0xEDB88320 反転形, xorout=0xFFFFFFFF)
 pub fn crc32(data: &[u8]) -> u32 {
@@ -345,9 +347,37 @@ pub(crate) fn calib_rows(h: usize) -> impl Iterator<Item = usize> {
     std::iter::once(0).chain(h - BAND_ROWS..h)
 }
 
-/// ヘッダ領域のセルを行優先で列挙 (行 0 のタイミング行は除く)
+/// ヘッダに使える行数 (行 1 から)。上ストリップのうち、行 0 のタイミング行と
+/// 末尾のセパレータ行を除いた、マーカーの高さと同じ範囲。
+pub(crate) const HEADER_ROWS: usize = CORNER - 1;
+
+/// ヘッダ 1 ビットあたりのセルの一辺 (1 または 2)。
+///
+/// ヘッダは画像の最上端に来るため、レンズ周辺のボケで 1 セルのビットが読めなくなる
+/// ことがある (実機: コードの上端を画角の 2.5% まで詰めると四隅は合うのに
+/// HeaderNotFound)。24 バイトしかないので 2×2 セルの太いビットで書けばボケに強く、
+/// 中心を 1 点サンプルすれば縁から 1 セル離れる。幅の狭い格子で 2 コピー入らない
+/// ときだけ 1 セルに落とす (5x4 = 幅 100 セルがそれ)。
+pub(crate) fn header_cell_size(w: usize) -> usize {
+    let copy_bits = HEADER_LEN * 8;
+    let span = strip_cols(w).len();
+    if (HEADER_ROWS / 2) * (span / 2) >= 2 * copy_bits {
+        2
+    } else {
+        1
+    }
+}
+
+/// ヘッダのビット位置 (各ビットの左上セル) を行優先で列挙。
+/// ビットの一辺は header_cell_size(w)。端数の行・列は使わない。
 pub(crate) fn header_cells(w: usize) -> impl Iterator<Item = (usize, usize)> {
-    (1..=BAND_ROWS).flat_map(move |r| strip_cols(w).map(move |c| (r, c)))
+    let s = header_cell_size(w);
+    // 1 セルのビットのままの格子 (5x4) は v3 と同じ 9 行 (BAND_ROWS) に留める。
+    // 23 行に広げると広域探索の合成テストがヘッダで落ちた (原因未特定)。
+    let rows = if s == 1 { BAND_ROWS } else { HEADER_ROWS };
+    let cols = strip_cols(w);
+    let (c0, span) = (cols.start, cols.len());
+    (0..rows / s).flat_map(move |i| (0..span / s).map(move |j| (1 + i * s, c0 + j * s)))
 }
 
 /// セパレータのセル (すべて白)。コーナーとデータ/ヘッダの境界を切る。
@@ -437,19 +467,25 @@ pub fn encode_frame(header: &FrameHeader, blocks: &[Vec<u8>], scale: usize) -> B
         bm.fill_cell(scale, 0, c, calib_black(0, c));
     }
 
-    // ヘッダ: 領域に入るだけコピーを繰り返す (100 セル幅なら行 1..6 に丁度 2 コピー)
+    // ヘッダ: 領域に入るだけコピーを繰り返す。1 ビットは header_cell_size(w) 角
     let hdr_bits: Vec<bool> = byte_bits(&header.serialize()).collect();
     let cells: Vec<(usize, usize)> = header_cells(w).collect();
+    let hs = header_cell_size(w);
     for (i, &(r, c)) in cells.iter().enumerate() {
         let bit = hdr_bits[i % hdr_bits.len()];
         // 端数領域に中途半端なコピーは書かない (白のまま)
         if i < (cells.len() / hdr_bits.len()) * hdr_bits.len() {
-            bm.fill_cell(scale, r, c, bit);
+            for dr in 0..hs {
+                for dc in 0..hs {
+                    bm.fill_cell(scale, r + dr, c + dc, bit);
+                }
+            }
         }
     }
 
-    // 下ストリップ: 擬似ランダム較正パターン (セパレータ行は白のまま)
-    for r in h - STRIP_H + SEP..h {
+    // 下ストリップ: 末尾 BAND_ROWS 行に擬似ランダム較正パターン。デコーダが使うのは
+    // calib_rows() の範囲だけなので、それ以外の行 (マーカーの高さぶん) は白のまま
+    for r in h - BAND_ROWS..h {
         for c in strip_cols(w) {
             bm.fill_cell(scale, r, c, calib_black(r, c));
         }
@@ -529,8 +565,17 @@ pub(crate) fn decode_from_sampler(
         return Err(FrameError::CornerMismatch);
     }
 
-    // ヘッダ: 各コピーを順に試し、最初に CRC が通ったものを採用
-    let hdr_cell_bits: Vec<bool> = header_cells(w).map(|(r, c)| black(r, c)).collect();
+    // ヘッダ: 各コピーを順に試し、最初に CRC が通ったものを採用。
+    // 太いビット (s×s セル) は多数決 (同数は黒)
+    let hs = header_cell_size(w);
+    let hdr_cell_bits: Vec<bool> = header_cells(w)
+        .map(|(r, c)| {
+            let n = (0..hs).flat_map(|dr| (0..hs).map(move |dc| (dr, dc)))
+                .filter(|&(dr, dc)| black(r + dr, c + dc))
+                .count();
+            n * 2 >= hs * hs
+        })
+        .collect();
     let copy_bits = HEADER_LEN * 8;
     let header = (0..hdr_cell_bits.len() / copy_bits)
         .find_map(|k| {
@@ -744,11 +789,17 @@ mod tests {
         assert_eq!(l.block_bytes(1), 50);
         assert_eq!(l.block_payload_len(1), 46);
         assert_eq!(l.packet_size(1), 42);
-        // ヘッダ領域 = (ストリップ高 - タイミング行 - セパレータ行) * 書ける列数
+        // 5x4 (幅 100) は太いビットだと 2 コピー入らないので 1 セルのまま
+        // (v3 と同じ 9 行 × 44 列 = 396 ビット = 2 コピー)
+        assert_eq!(header_cell_size(l.width()), 1);
         let cells = BAND_ROWS * (100 - 2 * CORNER - 2 * SEP);
         assert_eq!(header_cells(l.width()).count(), cells);
-        // ヘッダは同じ内容を繰り返し書く。何コピー入るかが壊れにくさに直結する
         assert!(cells >= HEADER_LEN * 8 * 2, "ヘッダが 2 コピー入らない: {cells}");
+        // 7x6 以上は太いビット。7x6 (幅 140): 11 行 × 42 列 = 462 ビット = 2 コピー
+        assert_eq!(header_cell_size(Layout::V1_DENSE.width()), 2);
+        assert_eq!(header_cells(Layout::V1_DENSE.width()).count(), 11 * 42);
+        assert_eq!(header_cell_size(Layout::V4_TALL.width()), 2);
+        assert_eq!(header_cell_size(Layout::from_grid(13, 18).width()), 2);
     }
 
     #[test]

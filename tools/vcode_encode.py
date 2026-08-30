@@ -35,13 +35,15 @@ import zlib
 # vcode フレームフォーマット (docs/vcode_format.md / vcode/src/lib.rs と 1:1)
 # ======================================================================
 
-STRIP_H = 7      # 上下ストリップの高さ (セル)。較正/ヘッダ 6 行 + セパレータ 1 行
-SEP = 1          # コーナーマーカーと隣接セルの間に置く白セパレータの幅 (セル)
-CORNER = 6       # コーナーマーカーの一辺 (セル)
+CORNER = 24      # コーナーマーカーの一辺 (セル)。v3 で 6 -> 24
+SEP = 4          # コーナーマーカーと隣接セルの間に置く白セパレータの幅 (セル)
+STRIP_H = CORNER + SEP  # 上下ストリップの高さ (セル)。マーカー + セパレータ 1 行ぶん
+BAND_ROWS = 9    # 下ストリップの較正行数 (と、1 セルのままのヘッダの行数)
+HEADER_ROWS = CORNER - 1  # 太いビットのヘッダに使える行数 (行 1 から)
 BLOCK = 20       # データブロックの一辺 (セル)
 MAGIC = 0xB9     # ヘッダ先頭のマジックバイト
 HEADER_LEN = 24  # ヘッダのシリアライズ長 (CRC-32 込み)
-VERSION = 2      # フォーマットバージョン (v1 とは非互換)
+VERSION = 4      # フォーマットバージョン (v4: ヘッダを 2x2 セルの太いビットで書く)
 
 LEVEL_GRAY = (0, 85, 170, 255)  # bpc=2 の輝度 4 値。レベル 0 = 黒
 BLACK, WHITE = 0, 255
@@ -50,6 +52,12 @@ BLACK, WHITE = 0, 255
 def frame_size(grid_w: int, grid_h: int) -> tuple[int, int]:
     """フレームのセル数 (幅, 高さ)。"""
     return grid_w * BLOCK, grid_h * BLOCK + 2 * STRIP_H
+
+
+def header_cell_size(w: int) -> int:
+    """ヘッダ 1 ビットあたりのセルの一辺 (vcode::header_cell_size と同じ規則)。"""
+    span = w - 2 * (CORNER + SEP)
+    return 2 if (HEADER_ROWS // 2) * (span // 2) >= 2 * HEADER_LEN * 8 else 1
 
 
 def block_bytes(bpc: int) -> int:
@@ -97,18 +105,19 @@ def wrap_payload(data: bytes) -> bytes:
 
 
 def corner_black(which: str, r: int, c: int) -> bool:
-    """外周 1 セルは全コーナー共通で黒。内部 4x4 で回転・鏡像を判定する。"""
-    if r == 0 or r == CORNER - 1 or c == 0 or c == CORNER - 1:
+    """外周 (CORNER/6 セル) は全コーナー共通で黒。内部の模様で 4 種を見分ける。
+    各部の太さは CORNER に比例させてあり、マーカーを大きくしても比率は変わらない。"""
+    t = CORNER // 6
+    if r < t or r >= CORNER - t or c < t or c >= CORNER - t:
         return True
     if which == "TL":
         return True                              # 塗りつぶし
     if which == "TR":
         return False                             # 白抜きリング
     if which == "BL":
-        return 2 <= r < 4 and 2 <= c < 4         # 中央 2x2 のみ黒
-    # BR: 内部の下半分 2 行を黒。市松 (1 セルごとの反転) はコード内で最も空間周波数が
-    # 高く、ピンぼけ・モアレで真っ先に潰れるため v2 で塊に置き換えた。
-    return r >= CORNER // 2
+        a = CORNER // 3
+        return a <= r < CORNER - a and a <= c < CORNER - a   # 中央の四角だけ黒
+    return r >= CORNER // 2                      # BR: 下半分を黒
 
 
 def calib_black(r: int, c: int) -> bool:
@@ -167,9 +176,9 @@ def frame_template(grid_w: int, grid_h: int) -> bytearray:
             for c in range(CORNER):
                 cells[row + ocol + c] = BLACK if corner_black(which, r, c) else WHITE
 
-    # 行 0: 上端タイミング行。下ストリップ: 較正パターン (水平スケール誤差の拘束)。
-    # セパレータ (ストリップ内側の 1 行と、コーナー隣接列) は誰も塗らないので白のまま残る。
-    for r in [0] + list(range(h - STRIP_H + SEP, h)):
+    # 行 0: 上端タイミング行。下ストリップ末尾 BAND_ROWS 行: 較正パターン。
+    # それ以外のストリップ行とセパレータは誰も塗らないので白のまま残る。
+    for r in [0] + list(range(h - BAND_ROWS, h)):
         row = r * w
         for c in range(CORNER + SEP, w - CORNER - SEP):
             cells[row + c] = BLACK if calib_black(r, c) else WHITE
@@ -182,14 +191,18 @@ def encode_frame(template: bytearray, header: bytes, blocks: list[bytes],
     w, _ = frame_size(grid_w, grid_h)
     cells = bytearray(template)
 
-    # ヘッダ: 行 1..STRIP_H-SEP のコーナー/セパレータ間に入るだけコピーを繰り返す
-    # (端数は白のまま)
+    # ヘッダ: 1 ビットを hs×hs セルで書き、入るだけコピーを繰り返す (端数は白のまま)。
+    # hs は 2 コピー入るなら 2 (ボケに強い)、幅が足りない格子 (5x4) は 1 で行数も v3 と同じ 9。
     hdr = b"".join(_CELLS_1BPC[b] for b in header)
-    span = w - 2 * (CORNER + SEP)
-    total = (STRIP_H - SEP - 1) * span
+    hs = header_cell_size(w)
+    rows = HEADER_ROWS if hs == 2 else BAND_ROWS
+    span = (w - 2 * (CORNER + SEP)) // hs
+    total = (rows // hs) * span
     for i in range(total // _HEADER_BITS * _HEADER_BITS):
-        r, c = 1 + i // span, CORNER + SEP + i % span
-        cells[r * w + c] = hdr[i % _HEADER_BITS]
+        r, c = 1 + (i // span) * hs, CORNER + SEP + (i % span) * hs
+        for dr in range(hs):
+            for dc in range(hs):
+                cells[(r + dr) * w + c + dc] = hdr[i % _HEADER_BITS]
 
     # データブロック: ペイロード + CRC-32 を行優先で敷き詰める
     table = _CELLS_1BPC if bpc == 1 else _CELLS_2BPC

@@ -517,6 +517,9 @@ fn decode_at(
     // オフセットを行 0 のタイミング行 (既知の白黒パターン) への一致で決めてから読む。
     // それで通らなければ従来どおり全体を 1 つのオフセットで総当たりする。
     let hdr_cells: Vec<(usize, usize)> = crate::header_cells(w).collect();
+    // 太いビット (s×s セル) はその中心を 1 点サンプルする。s=2 なら左上セルの
+    // 中心から +0.5 セル。縁から 1 セル離れるのでボケに強い
+    let hoff = (crate::header_cell_size(w) as f32 - 1.0) / 2.0;
     let copy_bits = crate::HEADER_LEN * 8;
     let try_copies = |bits: &[bool]| -> Option<crate::FrameHeader> {
         (0..bits.len() / copy_bits).find_map(|k| {
@@ -548,7 +551,7 @@ fn decode_at(
             .iter()
             .map(|&(r, c)| {
                 let (dx, dy) = seg_off[seg_of(c)];
-                sample(r, c, dx, dy)
+                sample(r, c, dx + hoff, dy + hoff)
             })
             .collect();
         try_copies(&bits)
@@ -558,7 +561,8 @@ fn decode_at(
     let header = segmented
         .or_else(|| {
             offs.iter().find_map(|&(dx, dy)| {
-                let bits: Vec<bool> = hdr_cells.iter().map(|&(r, c)| sample(r, c, dx, dy)).collect();
+                let bits: Vec<bool> =
+                    hdr_cells.iter().map(|&(r, c)| sample(r, c, dx + hoff, dy + hoff)).collect();
                 try_copies(&bits)
             })
         })
