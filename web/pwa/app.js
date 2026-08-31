@@ -37,9 +37,6 @@ function showPane(which) {
   if (which !== "cal") calibration.stop(); // 校正タブを離れたらカメラ/表示を止める
 }
 for (const k of Object.keys(TABS)) $(TABS[k]).addEventListener("click", () => showPane(k));
-// 初期表示は送信ペイン。QR 経路の削除でペイン構成を作り直したとき、初期の active 付与が
-// 抜けていた (タブを押すまで本文が空)。SW キャッシュの旧ページが被さって長らく気づけなかった
-showPane("send");
 
 // ---- 校正 ----
 const calibration = setupCalibration({
@@ -280,6 +277,10 @@ rxExpoRange.addEventListener("input", () => {
 });
 
 // ---- 起動 ----
+// 初期表示は送信ペイン。QR 経路の削除でペイン構成を作り直したとき、初期の active 付与が
+// 抜けていた (タブを押すまで本文が空)。showPane は calibration を参照するので、定義より
+// 後のここで呼ぶ (先頭で呼ぶと TDZ の ReferenceError で後続の配線が全部死ぬ)
+showPane("send");
 (async () => {
   try {
     await init();
