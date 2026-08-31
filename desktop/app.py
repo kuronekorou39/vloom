@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import mimetypes
+from datetime import datetime
 import pathlib
 import re
 
@@ -193,7 +194,10 @@ class MainWindow(QWidget):
         text = self.text.toPlainText()
         if not text:
             return None
-        name = self.name_override.text().strip() or "message.txt"
+        # 毎回 message.txt だと受信側で同名ファイルが積み重なるので、送信時刻を付ける
+        # (PWA / Android アプリと同じ挙動)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        name = self.name_override.text().strip() or f"message_{stamp}.txt"
         return text.encode("utf-8"), name, "text/plain;charset=utf-8"
 
     # ---- 表示 ----
