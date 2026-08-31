@@ -125,6 +125,11 @@ for (const id of ["txGrid", "txBpc", "txFps"]) {
   $(id).addEventListener("change", updateTheory);
   $(id).addEventListener("input", updateTheory);
 }
+// 既定 fps: スマホ (タッチ端末) は 30 (OLED は切り替わりが速く 60Hz の 2 書き換えごとが最速)。
+// PC モニタは LCD が多く、残像で 30fps は逆に遅いので 20 のまま
+if (navigator.maxTouchPoints > 0 && Math.min(screen.width, screen.height) < 900) {
+  $("txFps").value = 30;
+}
 updateTheory();
 
 $("txStart").addEventListener("click", async () => {

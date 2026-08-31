@@ -37,7 +37,7 @@ from .sender import SenderWindow
 # 受信側で格子を明示指定しない限り検出されない (選べるようにはしておく)。
 GRIDS = ["7x6 (高密度)", "5x4 (標準)", "9x8 (超高密度)",
          "11x10 (最大)", "11x14 (縦長)", "13x18 (超密)"]
-AUTO_DETECT_GRIDS = {(5, 4), (7, 6), (9, 8)}
+AUTO_DETECT_GRIDS = {(13, 18), (11, 14), (7, 6), (5, 4)}  # 受信の自動判別候補 (vcode CANDIDATES)
 
 # ソースパケットに対するリペアパケットの比率。PWA の REPAIR_RATE と同値。
 REPAIR_RATE = 0.5
@@ -89,6 +89,7 @@ class MainWindow(QWidget):
         self.bpc.addItems(["2 (輝度4値)", "1 (白黒)"])
         self.fps = QSpinBox()
         self.fps.setRange(2, 60)
+        self.grid.setCurrentText("13x18 (超密)")  # 既定は縦長・超密 (実測最速)
         self.fps.setValue(DEFAULT_FPS)
         self.repair = QSpinBox()
         # 捕捉率が低いほど高いリペア率が効くので、振り幅を広く取っておく

@@ -137,10 +137,11 @@ const kPresets = <VcodePreset>[
     // 頭打ちだったため 15fps のほうが安定していた。
     // 13x20 (3.0 px/セル) は満点率がほぼ 0 になり、密度の床はここ。
     name: '超密',
-    description: '260×416 セル、234 ブロック。1MB 定常 131〜147 KB/s (最速)',
+    description: '260×416 セル、234 ブロック。OLED 送信 30fps で 1MB 200 KB/s。'
+        'LCD 画面から送るなら 縦長 (20fps) を',
     grid: '13x18',
     bpc: 1,
-    fps: 20,
+    fps: 30,
     preset: ResolutionPreset.max,
   ),
   VcodePreset(
@@ -153,5 +154,6 @@ const kPresets = <VcodePreset>[
   ),
 ];
 
-/// 既定は「標準」(実測実績のある 7×6 / 1bit)
-const kDefaultPresetIndex = 1;
+/// 既定は「超密」(縦長 13×18 / 1bit)。スマホ縦持ちの視野を使い切る現行の最速構成。
+/// 送受信とも既定で揃うので、双方がそのまま起動すれば掴める
+const kDefaultPresetIndex = 5;

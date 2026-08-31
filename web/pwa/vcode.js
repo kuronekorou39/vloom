@@ -224,6 +224,7 @@ export class VcodeReceiver {
   /** 探索する格子を切り替える ("auto" で候補総当たり)。受信中でも即反映する。 */
   setGrid(grid) {
     this.grid = grid;
+    this._positionGuide();
     if (!this.rx) return;
     if (grid === "auto") {
       this.rx.setLayout(0, 0);
@@ -269,9 +270,12 @@ export class VcodeReceiver {
     // 見える中央正方形の表示上の一辺は min(表示幅, 表示高) になり、表示領域の中央に来る。
     const cw = this.video.clientWidth, ch = this.video.clientHeight;
     if (!cw || !ch) return;
-    const ASPECT = 132 / 140; // 高さ/幅 (V1_DENSE 相当。V0=92/100 とほぼ同じ)
-    const side = Math.min(cw, ch);
-    const bw = side * VCODE_GUIDE_FRAC, bh = bw * ASPECT;
+    // 選択中の格子の縦横比で、表示領域に収まる最大枠 × GUIDE_FRAC (自動時は既定の 13x18)
+    const g = this.grid === "auto" ? "13x18" : this.grid;
+    const [gw2, gh2] = g.split("x").map(Number);
+    const cellsW = gw2 * 20, cellsH = gh2 * 20 + 56; // 上下ストリップ 28 セル × 2
+    const fit = Math.min(cw / cellsW, ch / cellsH) * VCODE_GUIDE_FRAC;
+    const bw = cellsW * fit, bh = cellsH * fit;
     const s = this.guideEl.style;
     s.width = `${bw}px`; s.height = `${bh}px`;
     s.left = `${(cw - bw) / 2}px`; s.top = `${(ch - bh) / 2}px`;
@@ -299,31 +303,26 @@ export class VcodeReceiver {
     this._positionGuide();
     const vw = this.video.videoWidth, vh = this.video.videoHeight;
     if (!vw || !vh) return;
-    // cover 表示で画面に見えている中央正方形だけを走査する (表示外に切れている部分は使わない)。
-    // これによりガイド枠 = 走査範囲が一致し、かつ拡大表示のぶん px/セルが上がって検出に有利。
-    const cw = this.video.clientWidth, ch = this.video.clientHeight;
-    let crop = Math.min(vw, vh);
-    if (cw && ch) {
-      const scale = Math.max(cw / vw, ch / vh); // object-fit: cover
-      crop = Math.min(crop, Math.floor(Math.min(cw, ch) / scale));
-    }
-    const target = Math.min(SCAN_MAX, crop);
-    const cx = (vw - crop) >> 1, cy = (vh - crop) >> 1;
-    this.cap.width = target; this.cap.height = target;
+    // フレーム全体を走査する (長辺を SCAN_MAX まで縮小)。以前は中央の正方形だけを
+    // 切り出していて、縦長のコードが枠に収まらず検出できなかった。マーカー直接検出が
+    // 入ったので、コードが画面のどこにどの大きさで写っていても掴める
+    const scale = Math.min(1, SCAN_MAX / Math.max(vw, vh));
+    const tw = Math.round(vw * scale), th = Math.round(vh * scale);
+    this.cap.width = tw; this.cap.height = th;
     const ctx = this.cap.getContext("2d", { willReadFrequently: true });
-    ctx.drawImage(this.video, cx, cy, crop, crop, 0, 0, target, target);
-    const rgba = ctx.getImageData(0, 0, target, target).data;
+    ctx.drawImage(this.video, 0, 0, vw, vh, 0, 0, tw, th);
+    const rgba = ctx.getImageData(0, 0, tw, th).data;
     // RGBA → 輝度 Y
-    const gray = new Uint8Array(target * target);
+    const gray = new Uint8Array(tw * th);
     for (let p = 0, q = 0; p < gray.length; p++, q += 4) {
       gray[p] = (rgba[q] * 77 + rgba[q + 1] * 150 + rgba[q + 2] * 29) >> 8;
     }
     this.frames++;
     this.stats.tick(gray);
-    this._diag(crop, target);
+    this._diag(Math.max(vw, vh), Math.max(tw, th));
     let report;
     try {
-      report = this.rx.scan(gray, target, target, target, 0, VCODE_GUIDE_FRAC);
+      report = this.rx.scan(gray, tw, th, tw, 0, VCODE_GUIDE_FRAC);
     } catch (_) { return; }
     this._setGuideLocked(report.detected);
     if (report.detected) {

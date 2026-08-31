@@ -107,6 +107,7 @@ impl FountainDecoder {
 // app/rust/src/api/vcode.rs (frb 版) と同一ロジックを wasm-bindgen で公開する。
 // =============================================================
 use vloom_vcode as vcode;
+use vloom_vcode::markers::locate_markers;
 use vloom_vcode::scan::{scan_frame, scan_frame_tracked, GrayImage, Quad};
 
 #[wasm_bindgen]
@@ -363,12 +364,6 @@ impl VcodeRx {
             }
         }
 
-        // ガイド枠 (中央・正方形クロップの guide_frac 幅) を初期値にコードを探す。
-        // 実機は手持ちでコードの写る大きさが一定しないため、UI が示す基準枠 (guide_frac) を
-        // 中心に一回り小さい/大きいスケールも試す。基準スケールを先頭に置き、よくある構図で
-        // 早期に確定させる。ロック後は self.last 経由のトラッキングに移り多スケール探索は走らない。
-        let base = guide_frac.clamp(0.4, 0.98);
-        let fracs = [base, (base * 0.78).max(0.4), (base * 1.15).min(0.98)];
         let cands: Vec<vcode::Layout> = match self.forced {
             Some(l) => vec![l],
             None => vcode::Layout::CANDIDATES.to_vec(),
@@ -376,12 +371,28 @@ impl VcodeRx {
         for rot in [rotation_deg % 360, (rotation_deg + 180) % 360] {
             let (gray, rw, rh) = vcode_rotate(y, w, h, stride, rot);
             let img = GrayImage { w: rw, h: rh, data: &gray };
-            let cx = rw as f32 / 2.0;
-            let cy = rh as f32 / 2.0;
+
+            // 1) コーナーマーカーの直接検出 (アプリと同じ経路)。ガイド枠にも縮尺の仮定にも
+            //    依存せず、縦長のコードが画面のどこにどの大きさで写っていても掴める
+            if let Some(q) = locate_markers(&img) {
+                for &layout in &cands {
+                    if let Ok(result) = scan_frame(&img, &q, layout) {
+                        self.last = Some((rot, layout, result.corners));
+                        return vcode_success(result, layout);
+                    }
+                }
+            }
+
+            // 2) フォールバック: 画角に収まる最大枠 (contain) × 縮尺違いをガイドに探す。
+            //    以前は「中央の正方形 × 幅基準」で、縦長の格子は枠に収まらず検出できなかった
+            let base = guide_frac.clamp(0.4, 0.98) as f32;
+            let (cx, cy) = (rw as f32 / 2.0, rh as f32 / 2.0);
             for &layout in &cands {
-                for &frac in &fracs {
-                    let gw = (frac * rw as f64) as f32;
-                    let gh = (gw * layout.height() as f32 / layout.width() as f32).min(rh as f32 * 0.95);
+                let (lw, lh) = (layout.width() as f32, layout.height() as f32);
+                let fit = (rw as f32 / lw).min(rh as f32 / lh);
+                for frac in [base, (base * 0.78).max(0.4), (base * 1.15).min(0.98)] {
+                    let s = fit * frac;
+                    let (gw, gh) = (lw * s, lh * s);
                     let guide = Quad {
                         tl: (cx - gw / 2.0, cy - gh / 2.0),
                         tr: (cx + gw / 2.0, cy - gh / 2.0),

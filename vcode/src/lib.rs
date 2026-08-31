@@ -115,6 +115,9 @@ impl Layout {
     /// 「縦を使う」と「幅を詰める」のどちらが効くかを比べるための対照。
     pub const V5_DENSE: Layout = Layout { block: Self::BLOCK, grid_w: 13, grid_h: 12 };
 
+    /// 現行の既定 (縦長・超密)。スマホ縦持ちの視野 3:4 を使い切る
+    pub const V6_XDENSE: Layout = Layout { block: Self::BLOCK, grid_w: 13, grid_h: 18 };
+
     /// 受信側がヘッダ確定前に試すレイアウト候補。実運用で当たりやすい順に並べる
     /// (総当たりは初回検出のみで、ロック後はトラッキングに移る)。
     ///
@@ -122,7 +125,9 @@ impl Layout {
     /// scan_frame) ため、当たる見込みの薄いものは入れない。V3_MAX は 6px/セル に
     /// 1320px を要し 4K 受信が前提なので候補から外し、set_layout での明示指定時のみ使う。
     /// V4_TALL / V5_DENSE も同じ理由で候補に入れない (プリセット選択で forced に入る)。
-    pub const CANDIDATES: [Layout; 3] = [Layout::V1_DENSE, Layout::V0, Layout::V2_ULTRA];
+    /// 格子の自動判別で試す候補 (よく使う順)。多いほど初回検出が遅くなるので絞る
+    pub const CANDIDATES: [Layout; 4] =
+        [Layout::V6_XDENSE, Layout::V4_TALL, Layout::V1_DENSE, Layout::V0];
 
     /// 格子指定からレイアウトを作る (block は共通で BLOCK)
     pub fn from_grid(grid_w: usize, grid_h: usize) -> Layout {
