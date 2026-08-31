@@ -11,6 +11,7 @@ import 'vcode_send_screen.dart';
 import 'vcode_receive_screen.dart';
 import 'calibration_screen.dart';
 import 'launch_args.dart';
+import 'rx_prefs.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -21,6 +22,7 @@ Future<void> main() async {
   // 計測の自動化用。カメラを作る前にプリセットを確定させたいので、
   // 画面が組み上がる前にここで読んでおく (以降は同期で参照できる)。
   await LaunchArgs.load();
+  await RxPrefs.load(); // 最後に選んだ受信プリセット (格子) の復元
   await RustLib.init();
   await HistoryStore.instance.init();
   _registerNativeLicenses();

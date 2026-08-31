@@ -16,6 +16,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'history_screen.dart' show shareReceived, saveReceivedToFile;
 import 'history_store.dart';
 import 'preset.dart';
+import 'rx_prefs.dart';
 import 'launch_args.dart';
 import 'scan_worker.dart';
 import 'src/rust/api/fountain.dart';
@@ -64,6 +65,12 @@ const kDefaultExposureOffsetEv = -1.0;
 /// フレーム供給を止めるため、acquire (20) より長く粘って発振を防ぐ。
 const kCamUnlockMissFrames = 60;
 
+/// 前回選んだプリセット (範囲外になっていたら捨てる)
+int? get _persistedPresetIndex {
+  final i = RxPrefs.presetIndex;
+  return (i != null && i >= 0 && i < kPresets.length) ? i : null;
+}
+
 class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     with WidgetsBindingObserver {
   CameraController? _cam;
@@ -73,16 +80,17 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   // 決めるので、初期化より前に確定していなければならない。
   int _presetIndex = LaunchArgs.cached.grid != null
       ? -1 // 格子を直接指定したときはカスタム扱い
-      : (LaunchArgs.cached.preset ?? kDefaultPresetIndex);
+      : (LaunchArgs.cached.preset ?? _persistedPresetIndex ?? kDefaultPresetIndex);
 
   /// 探索する格子 (kGridAuto か '9x8' 等)。送信側と揃えるほど初回検出が速い
   // 格子の直接指定があればそれを使う (プリセットに無い格子を測るため)
   String _forcedGrid = LaunchArgs.cached.grid ??
-      kPresets[LaunchArgs.cached.preset ?? kDefaultPresetIndex].grid;
+      kPresets[LaunchArgs.cached.preset ?? _persistedPresetIndex ?? kDefaultPresetIndex].grid;
 
   /// カメラ解像度。9x8 以上は 1080p では px/セル が足りない
-  ResolutionPreset _preset =
-      kPresets[LaunchArgs.cached.preset ?? kDefaultPresetIndex].preset;
+  ResolutionPreset _preset = kPresets[
+          LaunchArgs.cached.preset ?? _persistedPresetIndex ?? kDefaultPresetIndex]
+      .preset;
 
   /// 実際に得られたプレビュー寸法 (完了後もカメラ停止後に残すので統計に出せる)
   Size? _lastPreviewSize;
@@ -818,6 +826,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _presetIndex = i;
       _forcedGrid = kPresets[i].grid;
     });
+    RxPrefs.savePreset(i); // 次回の手起動でも同じ格子で立ち上がる
     _applyForcedGrid();
     _changePreset(kPresets[i].preset);
   }
@@ -1138,6 +1147,74 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     );
   }
 
+  /// いま探している格子のチップ。タップでプリセット選択シートを開く。
+  Widget _gridChip() {
+    final label = _presetIndex >= 0
+        ? '${kPresets[_presetIndex].grid} ${kPresets[_presetIndex].name}'
+        : _forcedGrid == kGridAuto
+            ? '格子: 自動'
+            : _forcedGrid;
+    return InkWell(
+      onTap: _showGridPicker,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.55),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white70, width: 1.2),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.grid_on, size: 14, color: Colors.white70),
+            const SizedBox(width: 5),
+            Text(label,
+                style: const TextStyle(
+                    color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+            const Icon(Icons.arrow_drop_down, size: 18, color: Colors.white70),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showGridPicker() {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text('格子 — 送信側と同じものを選ぶ',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
+            ),
+            for (var i = 0; i < kPresets.length; i++)
+              ListTile(
+                dense: true,
+                leading: Icon(
+                  _presetIndex == i
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_off,
+                  color: _presetIndex == i ? Theme.of(ctx).colorScheme.primary : null,
+                ),
+                title: Text('${kPresets[i].grid}  ${kPresets[i].name}'),
+                subtitle: Text(kPresets[i].description,
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _selectPreset(i);
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// 計測用の設定 (常用しないので折りたたむ)。カメラ解像度は px/セル の上限を、
   /// 格子固定は初回検出/acquire の速さを決める。
   Widget _measureSettings() {
@@ -1244,7 +1321,17 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           child: SafeArea(
             top: !_panelAtTop,
             bottom: _panelAtTop,
-            child: Center(child: _statusBadge()),
+            // 状態バッジと格子チップ。格子は送信側と合っていないと永遠に掴めないので、
+            // 折りたたみパネルの中ではなく常に見せて、その場で切り替えられるようにする
+            child: Center(
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                alignment: WrapAlignment.center,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [_statusBadge(), _gridChip()],
+              ),
+            ),
           ),
         ),
         // 構図合わせの読み上げ。バッジと同じ側 (操作パネルの反対側) に出す
