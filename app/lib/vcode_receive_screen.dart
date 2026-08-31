@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert' show utf8;
 import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:io';
@@ -44,6 +45,11 @@ const kGridAuto = 'auto';
 /// 連続してこのフレーム数だけ検出できなければ、広域 sweep (acquire) に切り替える。
 /// 短すぎると単発のフレーム落ちで重い処理が走り、長すぎると待たされる。
 const kAutoAcquireMissFrames = 20;
+
+/// 状態バッジを「追従中」のまま保つ猶予 (連続ミス数)。追従は数フレームの取り逃しで
+/// 頻繁に途切れるが、そのたびに表示が「探しています」へ戻ると使う人が不安になる。
+/// 内部状態はそのまま、表示だけ粘る。
+const kBadgeHoldMissFrames = 30;
 
 /// 自動 acquire の再試行間隔 (フレーム)。acquire は 300 回超の探索を伴うので連発させない。
 const kAutoAcquireCooldownFrames = 45;
@@ -139,6 +145,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   int _autoAcquireCount = 0; // 自動 acquire の実行回数 (統計・UI 表示用)
   int _missStreak = 0; // 連続して検出できなかったフレーム数
   int _detectStreak = 0; // 連続して検出できたフレーム数 (AF/AE ロックの判断に使う)
+  bool _restoring = false; // 全パケット到達後の復元・検証中 (画面が固まって見えないように出す)
   bool _camLocked = false; // フォーカス・露出をロック済みか
   bool _seeded = false; // acquire 結果で受信位置を確定済み (中央ガイド枠に頼らず追従)
   List<double>? _detCorners; // acquire で検出した 4 隅 (回転後画像座標, 8 値) — ハイライト表示用
@@ -551,10 +558,18 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           debugPrint('[vcode-rx] blockmap ${rows.join("|")}');
         }
         if (done) {
+          // 復元 (CRC 検証 + 履歴保存) は UI を数百 ms 塞ぐことがある。固まって
+          // 見えないよう先に表示を切り替え、1 フレーム描かせてから進める
+          setState(() {
+            _restoring = true;
+            _status = '復元中…';
+          });
+          await Future<void>.delayed(Duration.zero);
           // エンドツーエンド CRC-32 検証。不一致 = ゴミパケットが RaptorQ を
           // 汚染して復元結果が破損 → デコーダを捨てて受信をやり直す
           final payload = vcodeUnwrapPayload(payload: _dec!.payload()!);
           if (payload == null) {
+            setState(() => _restoring = false);
             _integrityFails++;
             debugPrint(
               '[vcode-rx] 整合性エラー: 復元結果が破損 '
@@ -753,6 +768,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     setState(() {
       _payload = payload;
       _elapsed = elapsed;
+      _restoring = false;
       _status = '受信完了';
     });
     final ms = elapsed.inMilliseconds;
@@ -1234,6 +1250,72 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     );
   }
 
+  /// 構図の誘導 (人向けの一言)。数字の読み上げ (_alignPanel) と違い、どう動けば
+  /// いいかだけを短く出す。問題がなければ null (何も出さない)
+  String? _guideHint() {
+    final c = _detCorners;
+    if (c == null || c.length < 8 || _detImgW == 0 || _detImgH == 0) {
+      return null;
+    }
+    final delta =
+        ((_cam?.description.sensorOrientation ?? 90) - _detRot + 360) % 360;
+    var minX = 1.0, maxX = 0.0, minY = 1.0, maxY = 0.0;
+    for (var i = 0; i < 4; i++) {
+      final p = previewNorm(c[i * 2], c[i * 2 + 1], _detImgW, _detImgH, delta);
+      minX = math.min(minX, p.dx);
+      maxX = math.max(maxX, p.dx);
+      minY = math.min(minY, p.dy);
+      maxY = math.max(maxY, p.dy);
+    }
+    // はみ出しかけ → まず離れる (寄せの指示より優先)
+    if (minX < 0.02 || maxX > 0.98 || minY < 0.02 || maxY > 0.98) {
+      return '少し離してください';
+    }
+    final topLen = math.sqrt(
+      math.pow(c[2] - c[0], 2) + math.pow(c[3] - c[1], 2),
+    );
+    final leftLen = math.sqrt(
+      math.pow(c[6] - c[0], 2) + math.pow(c[7] - c[1], 2),
+    );
+    final pxW = _detCellsW > 0 ? topLen / _detCellsW : 0.0;
+    final pxH = _detCellsH > 0 ? leftLen / _detCellsH : 0.0;
+    final px = math.min(pxW, pxH);
+    if (px > 0 && px < 2.2) return 'もう少し近づけてください';
+    final cx = (minX + maxX) / 2 - 0.5, cy = (minY + maxY) / 2 - 0.5;
+    if (cx.abs() > 0.16 || cy.abs() > 0.16) {
+      final dirs = <String>[
+        if (cx < -0.16) '左',
+        if (cx > 0.16) '右',
+        if (cy < -0.16) '上',
+        if (cy > 0.16) '下',
+      ];
+      return 'コードが${dirs.join("と")}に寄っています';
+    }
+    return null;
+  }
+
+  List<Widget> _hintWidgets() {
+    final h = _guideHint();
+    if (h == null) return const [];
+    return [
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.55),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Text(
+          h,
+          style: const TextStyle(
+            color: Colors.amberAccent,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    ];
+  }
+
   /// プレビュー上の状態バッジ。「探索中 / 位置検出中 / 追従中」を明示する。
   /// 内部でロックしていても画面に出ないと分からないため、状態を必ず可視化する。
   Widget _statusBadge() {
@@ -1243,7 +1325,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         Colors.amber,
         Icons.travel_explore,
       ),
-      _ when _framesDetected > 0 && _missStreak == 0 => (
+      _ when _framesDetected > 0 && _missStreak < kBadgeHoldMissFrames => (
         _camLocked
             ? '追従中 (露出固定)'
             : _seeded
@@ -1479,7 +1561,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                 runSpacing: 6,
                 alignment: WrapAlignment.center,
                 crossAxisAlignment: WrapCrossAlignment.center,
-                children: [_statusBadge(), _gridChip()],
+                children: [_statusBadge(), _gridChip(), ..._hintWidgets()],
               ),
             ),
           ),
@@ -1496,6 +1578,23 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
             child: _alignPanel(),
           ),
         ),
+        if (_restoring)
+          Container(
+            color: Colors.black54,
+            child: const Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 12),
+                  Text(
+                    '復元中…',
+                    style: TextStyle(color: Colors.white, fontSize: 15),
+                  ),
+                ],
+              ),
+            ),
+          ),
         if (_acquiring)
           Container(
             color: Colors.black54,
@@ -1763,13 +1862,35 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                 name: _savedItem?.name ?? '受信データ',
               ),
               const SizedBox(height: 12),
-              _statsTable(),
+              // 詳細の数字は普段は見ないので畳んでおく (計測時だけ開く)
+              ExpansionTile(
+                title: const Text('詳細な統計', style: TextStyle(fontSize: 13)),
+                tilePadding: const EdgeInsets.symmetric(horizontal: 8),
+                childrenPadding: const EdgeInsets.only(bottom: 8),
+                children: [_statsTable()],
+              ),
               const SizedBox(height: 12),
               Wrap(
                 alignment: WrapAlignment.center,
                 spacing: 12,
                 runSpacing: 8,
                 children: [
+                  // テキストなら保存せずその場でコピーできる (短文をわざわざ保存させない)
+                  if ((_savedItem?.type ?? '').startsWith('text/'))
+                    FilledButton.icon(
+                      onPressed: () {
+                        Clipboard.setData(
+                          ClipboardData(
+                            text: utf8.decode(_payload!, allowMalformed: true),
+                          ),
+                        );
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('テキストをコピーしました')),
+                        );
+                      },
+                      icon: const Icon(Icons.copy),
+                      label: const Text('テキストをコピー'),
+                    ),
                   if (_savedItem != null)
                     FilledButton.icon(
                       onPressed: () => _saveToFile(_savedItem!),
