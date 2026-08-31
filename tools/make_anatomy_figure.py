@@ -19,8 +19,8 @@ from PIL import Image, ImageDraw, ImageFont
 sys.path.insert(0, str(Path(__file__).parent))
 import vcode_encode  # noqa: E402
 
-SC = 6  # 描画するセルあたりのピクセル数
-GRID = (7, 6)  # 構造が読み取りやすい大きさの格子で描く (現行既定の 13x18 は細かすぎる)
+SC = 3  # 描画するセルあたりのピクセル数
+GRID = (13, 18)  # 現行既定の格子で描く (実際に使われている形を見せる)
 OUT = Path(__file__).parent.parent / "docs" / "images" / "vcode_anatomy.png"
 
 FONT_REG = "C:/Windows/Fonts/meiryo.ttc"
@@ -44,11 +44,13 @@ def make_frame() -> Image.Image:
 
 
 def main() -> None:
+    # コードは縦長なので、凡例は下ではなく右に置く
     frame = make_frame()
     W, H = frame.size
     pad_t = 96
-    cv = Image.new("RGB", (max(W + 96, 1000), H + pad_t + 24 + 420), "#ffffff")
-    ox = (cv.width - W) // 2
+    ox = 48
+    legend_x = ox + W + 110
+    cv = Image.new("RGB", (legend_x + 660, H + pad_t + 48), "#ffffff")
     cv.paste(frame, (ox, pad_t))
     d = ImageDraw.Draw(cv, "RGBA")
 
@@ -126,21 +128,24 @@ def main() -> None:
         (None, "マーカーの内側の白い帯 (4セル) は余白。マーカー検出の対比に使う"),
     ]
     f_leg = font(24)
-    maxw = cv.width - 48 - 94
-    y = H + pad_t + 40
+    tx = legend_x + 46
+    maxw = cv.width - tx - 24
+    y = pad_t + 24
     for color, text in legend:
         if color:
-            d.rectangle([48, y + 5, 78, y + 35], fill=color)
-        if d.textlength(text, font=f_leg) <= maxw:
-            d.text((94, y), text, font=f_leg, fill="#222222")
-            y += 52
-        else:
-            cut = len(text)
-            while d.textlength(text[:cut], font=f_leg) > maxw:
+            d.rectangle([legend_x, y + 5, legend_x + 30, y + 35], fill=color)
+        # 収まらない行は折り返す
+        rest = text
+        first = True
+        while rest:
+            cut = len(rest)
+            while d.textlength(rest[:cut], font=f_leg) > maxw:
                 cut -= 1
-            d.text((94, y), text[:cut], font=f_leg, fill="#222222")
-            d.text((94, y + 34), text[cut:], font=f_leg, fill="#222222")
-            y += 86
+            d.text((tx, y), rest[:cut], font=f_leg, fill="#222222")
+            rest = rest[cut:]
+            y += 34
+            first = False
+        y += 24
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     cv.save(OUT)
