@@ -5,8 +5,10 @@ import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:camera_android_camerax/camera_android_camerax.dart';
-import 'package:camera_android_camerax/src/camerax_library.g.dart' show PigeonInstanceManager;
-import 'package:camera_platform_interface/camera_platform_interface.dart' show CameraPlatform;
+import 'package:camera_android_camerax/src/camerax_library.g.dart'
+    show PigeonInstanceManager;
+import 'package:camera_platform_interface/camera_platform_interface.dart'
+    show CameraPlatform;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -80,17 +82,25 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   // 決めるので、初期化より前に確定していなければならない。
   int _presetIndex = LaunchArgs.cached.grid != null
       ? -1 // 格子を直接指定したときはカスタム扱い
-      : (LaunchArgs.cached.preset ?? _persistedPresetIndex ?? kDefaultPresetIndex);
+      : (LaunchArgs.cached.preset ??
+            _persistedPresetIndex ??
+            kDefaultPresetIndex);
 
   /// 探索する格子 (kGridAuto か '9x8' 等)。送信側と揃えるほど初回検出が速い
   // 格子の直接指定があればそれを使う (プリセットに無い格子を測るため)
-  String _forcedGrid = LaunchArgs.cached.grid ??
-      kPresets[LaunchArgs.cached.preset ?? _persistedPresetIndex ?? kDefaultPresetIndex].grid;
+  String _forcedGrid =
+      LaunchArgs.cached.grid ??
+      kPresets[LaunchArgs.cached.preset ??
+              _persistedPresetIndex ??
+              kDefaultPresetIndex]
+          .grid;
 
   /// カメラ解像度。9x8 以上は 1080p では px/セル が足りない
-  ResolutionPreset _preset = kPresets[
-          LaunchArgs.cached.preset ?? _persistedPresetIndex ?? kDefaultPresetIndex]
-      .preset;
+  ResolutionPreset _preset =
+      kPresets[LaunchArgs.cached.preset ??
+              _persistedPresetIndex ??
+              kDefaultPresetIndex]
+          .preset;
 
   /// 実際に得られたプレビュー寸法 (完了後もカメラ停止後に残すので統計に出せる)
   Size? _lastPreviewSize;
@@ -98,15 +108,20 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   // --- 検出できないときの切り分け用の実測値 ---
   /// スキャナに渡した回転 (端末間で sensorOrientation が異なると検出 0 になりうる)
   int _lastRot = -1;
+
   /// Y プレーンの寸法と行バイト数 (stride != width の端末がある)
   int _lastImgW = 0, _lastImgH = 0, _lastStride = 0;
+
   /// Y の値域。iOS の 420v は video range (16〜235) に制限される
   int _lumaMin = 255, _lumaMax = 0;
+
   /// 直近の検出失敗理由 (Rust 側が返す FrameError)
   String? _lastError;
+
   /// 失敗理由の内訳 (CornerMismatch / HeaderNotFound / ...)。
   /// 「たまに読める」ときに、読めない側が どの工程で落ちているか を切り分ける。
   final Map<String, int> _errorKinds = {};
+
   /// 成功例と失敗例のダンプをそれぞれ 1 枚ずつ残したか。
   /// 追従できる/できないの差を PC で直接比べるために、両方が要る。
   bool _needOkDump = true;
@@ -149,6 +164,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   int _framesTracked = 0;
   int _blocksOk = 0;
   int _packetsAdded = 0;
+
   /// 検出フレーム 1 枚あたりの回収ブロック数の分布 (0 / ~25% / ~50% / ~75% / ~99% / 100%)。
   /// 二極化 (0 と満点だけ) ならローリングシャッターや残像による時間方向の混入、
   /// 中間に散るなら px/セル・ピント・露出といった空間方向の問題を示す。
@@ -189,8 +205,10 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     if (widget.active) _initCamera();
     // フレームが一定時間途絶えたらカメラを作り直す (校正からの復帰レースや
     // 一時的なカメラ喪失で灰色のまま固まるのを自己修復する)。
-    _watchdog =
-        Timer.periodic(const Duration(seconds: 1), (_) => _checkStale());
+    _watchdog = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _checkStale(),
+    );
   }
 
   void _checkStale() {
@@ -245,8 +263,9 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       try {
         final cams = await availableCameras();
         final back = cams.firstWhere(
-            (c) => c.lensDirection == CameraLensDirection.back,
-            orElse: () => cams.first);
+          (c) => c.lensDirection == CameraLensDirection.back,
+          orElse: () => cams.first,
+        );
         cam = CameraController(
           back,
           // セル解像度が密度の上限を決める。7x6 (140 セル幅) は 1080p で足りるが、
@@ -297,16 +316,20 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         // 露光時間の直接指定 (Intent exp=µs [iso=n])。MainActivity.setManualExposure を参照
         final expUs = LaunchArgs.cached.exposureUs;
         if (expUs != null && expUs > 0) {
-          final iso = LaunchArgs.cached.iso ??
-              (860000 / expUs).round().clamp(50, 6400);
+          final iso =
+              LaunchArgs.cached.iso ?? (860000 / expUs).round().clamp(50, 6400);
           try {
             final platform = CameraPlatform.instance;
             if (platform is! AndroidCameraCameraX) {
               throw StateError('camerax platform unavailable');
             }
-            final id = PigeonInstanceManager.instance.getIdentifier(platform.cameraControl);
+            final id = PigeonInstanceManager.instance.getIdentifier(
+              platform.cameraControl,
+            );
             await const MethodChannel('app.vloom/launch').invokeMethod(
-                'setExposure', {'control': id, 'us': expUs, 'iso': iso});
+              'setExposure',
+              {'control': id, 'us': expUs, 'iso': iso},
+            );
             debugPrint('[vcode-rx] manual exposure ${expUs}us iso $iso');
           } catch (e) {
             debugPrint('[vcode-rx] manual exposure failed: $e');
@@ -385,8 +408,10 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       // 成功例・失敗例を 1 枚ずつ確保するまでは定期的にダンプを要求する。
       // どちらが返ってくるかはスキャンしてみないと分からないので、結果を見て振り分ける。
       final wantDump =
-          ((_needOkDump || _needNgDump) && _framesSeen > 0 && _framesSeen % 20 == 0) ||
-              _lowDumps < LaunchArgs.cached.dumpLow;
+          ((_needOkDump || _needNgDump) &&
+              _framesSeen > 0 &&
+              _framesSeen % 20 == 0) ||
+          _lowDumps < LaunchArgs.cached.dumpLow;
       final rx = _rx;
       if (rx == null) return;
       // 位置検出 (acquire): 画面全体を sweep して実際の 4 隅を取得し、ポップアップで確認 →
@@ -502,10 +527,12 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           }
         }
         _tDec += swDec.elapsedMilliseconds;
-        debugPrint('[vcode-rx] seq=${report.frameSeq} '
-            'blocks=${report.blocksOk}/${report.blocksTotal} '
-            'pkts=$_packetsAdded scan=${_lastScanMs}ms '
-            'tracked=${report.tracked} done=$done');
+        debugPrint(
+          '[vcode-rx] seq=${report.frameSeq} '
+          'blocks=${report.blocksOk}/${report.blocksTotal} '
+          'pkts=$_packetsAdded scan=${_lastScanMs}ms '
+          'tracked=${report.tracked} done=$done',
+        );
         // 半分程度しか取れないフレームは、どの行が落ちたかを出す。散らばって
         // いれば露出やピント、片側や帯なら位置合わせのずれ、と切り分けられる。
         if (report.blocksTotal > 0 &&
@@ -514,10 +541,12 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           final gw = report.cellsW ~/ 20;
           final rows = <String>[];
           for (var i = 0; gw > 0 && i + gw <= report.blockOk.length; i += gw) {
-            rows.add(report.blockOk
-                .sublist(i, i + gw)
-                .map((b) => b ? '#' : '.')
-                .join());
+            rows.add(
+              report.blockOk
+                  .sublist(i, i + gw)
+                  .map((b) => b ? '#' : '.')
+                  .join(),
+            );
           }
           debugPrint('[vcode-rx] blockmap ${rows.join("|")}');
         }
@@ -527,8 +556,10 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           final payload = vcodeUnwrapPayload(payload: _dec!.payload()!);
           if (payload == null) {
             _integrityFails++;
-            debugPrint('[vcode-rx] 整合性エラー: 復元結果が破損 '
-                '($_integrityFails 回目)。デコーダを再作成して受信続行');
+            debugPrint(
+              '[vcode-rx] 整合性エラー: 復元結果が破損 '
+              '($_integrityFails 回目)。デコーダを再作成して受信続行',
+            );
             _dec = null;
             return;
           }
@@ -586,9 +617,11 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       }
       if (!report.detected && _framesSeen % 30 == 0) {
         _lastError = report.error;
-        debugPrint('[vcode-rx] not detected (${report.error}) '
-            'scan=${_lastScanMs}ms seen=$_framesSeen detected=$_framesDetected '
-            'camFps=${_camFps.toStringAsFixed(1)}');
+        debugPrint(
+          '[vcode-rx] not detected (${report.error}) '
+          'scan=${_lastScanMs}ms seen=$_framesSeen detected=$_framesDetected '
+          'camFps=${_camFps.toStringAsFixed(1)}',
+        );
       }
       if (mounted && _framesSeen % 5 == 0) setState(() {});
       // 1 枚あたりの処理時間の内訳 (30 枚ごとの平均)。受信の処理速度が天井になった
@@ -596,11 +629,13 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _tTotal += sw.elapsedMilliseconds;
       _tFrames++;
       if (_tFrames >= 30) {
-        debugPrint('[vcode-rx] timing avg/frame: total=${(_tTotal / _tFrames).toStringAsFixed(1)}ms '
-            'scan(frb)=${(_tScan / _tFrames).toStringAsFixed(1)}ms '
-            'decoder=${(_tDec / _tFrames).toStringAsFixed(1)}ms '
-            'miss=$_tMissN/$_tFrames (${_tMissN == 0 ? 0 : (_tMissMs / _tMissN).toStringAsFixed(0)}ms each) '
-            'rust(rot+dec)=${((_rotateUsSum + _decodeUsSum) / 1000 / (_scanCount == 0 ? 1 : _scanCount)).toStringAsFixed(1)}ms');
+        debugPrint(
+          '[vcode-rx] timing avg/frame: total=${(_tTotal / _tFrames).toStringAsFixed(1)}ms '
+          'scan(frb)=${(_tScan / _tFrames).toStringAsFixed(1)}ms '
+          'decoder=${(_tDec / _tFrames).toStringAsFixed(1)}ms '
+          'miss=$_tMissN/$_tFrames (${_tMissN == 0 ? 0 : (_tMissMs / _tMissN).toStringAsFixed(0)}ms each) '
+          'rust(rot+dec)=${((_rotateUsSum + _decodeUsSum) / 1000 / (_scanCount == 0 ? 1 : _scanCount)).toStringAsFixed(1)}ms',
+        );
         _tTotal = 0;
         _tScan = 0;
         _tDec = 0;
@@ -626,7 +661,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       // release ビルドでは run-as が使えず adb で取り出せない。ここは PC で
       // scan_file にかけるためのダンプなので、取り出せないと意味がない。
       //   adb shell ls /sdcard/Android/data/<pkg>/files/
-      final dir = await getExternalStorageDirectory() ??
+      final dir =
+          await getExternalStorageDirectory() ??
           await getApplicationDocumentsDirectory();
       final path =
           '${dir.path}/vcode_${tag}_${report.debugW}x${report.debugH}.gray';
@@ -639,26 +675,51 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
 
   /// 先頭バイトからファイル種別を推定する (vcode はメタデータを運ばないため)
   (String, String) _sniffType(Uint8List b) {
-    if (b.length > 3 && b[0] == 0xFF && b[1] == 0xD8) return ('jpg', 'image/jpeg');
-    if (b.length > 7 && b[0] == 0x89 && b[1] == 0x50) return ('png', 'image/png');
-    if (b.length > 11 && b[8] == 0x57 && b[9] == 0x45 && b[10] == 0x42 && b[11] == 0x50) {
+    if (b.length > 3 && b[0] == 0xFF && b[1] == 0xD8)
+      return ('jpg', 'image/jpeg');
+    if (b.length > 7 && b[0] == 0x89 && b[1] == 0x50)
+      return ('png', 'image/png');
+    if (b.length > 11 &&
+        b[8] == 0x57 &&
+        b[9] == 0x45 &&
+        b[10] == 0x42 &&
+        b[11] == 0x50) {
       return ('webp', 'image/webp');
     }
     // ISO-BMFF (オフセット 4 に 'ftyp'): HEIC/AVIF (iOS 写真の既定形式)
-    if (b.length > 11 && b[4] == 0x66 && b[5] == 0x74 && b[6] == 0x79 && b[7] == 0x70) {
+    if (b.length > 11 &&
+        b[4] == 0x66 &&
+        b[5] == 0x74 &&
+        b[6] == 0x79 &&
+        b[7] == 0x70) {
       final brand = String.fromCharCodes(b.sublist(8, 12));
-      if (const {'heic', 'heix', 'hevc', 'heim', 'heis', 'mif1', 'msf1'}.contains(brand)) {
+      if (const {
+        'heic',
+        'heix',
+        'hevc',
+        'heim',
+        'heis',
+        'mif1',
+        'msf1',
+      }.contains(brand)) {
         return ('heic', 'image/heic');
       }
       if (brand == 'avif' || brand == 'avis') return ('avif', 'image/avif');
     }
-    if (b.length > 3 && b[0] == 0x25 && b[1] == 0x50 && b[2] == 0x44 && b[3] == 0x46) {
+    if (b.length > 3 &&
+        b[0] == 0x25 &&
+        b[1] == 0x50 &&
+        b[2] == 0x44 &&
+        b[3] == 0x46) {
       return ('pdf', 'application/pdf');
     }
-    if (b.length > 1 && b[0] == 0x50 && b[1] == 0x4B) return ('zip', 'application/zip');
+    if (b.length > 1 && b[0] == 0x50 && b[1] == 0x4B)
+      return ('zip', 'application/zip');
     // 先頭 4KB の制御文字率でテキスト判定
     final probe = b.take(4096);
-    final ctrl = probe.where((c) => c < 9 || (c > 13 && c < 32) || c == 127).length;
+    final ctrl = probe
+        .where((c) => c < 9 || (c > 13 && c < 32) || c == 127)
+        .length;
     if (probe.isNotEmpty && ctrl / probe.length < 0.02) {
       return ('txt', 'text/plain;charset=utf-8');
     }
@@ -671,7 +732,10 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     final Uint8List payload;
     final String name;
     final String mime;
-    final ts = DateTime.now().toIso8601String().replaceAll(':', '-').substring(0, 19);
+    final ts = DateTime.now()
+        .toIso8601String()
+        .replaceAll(':', '-')
+        .substring(0, 19);
     if (meta != null) {
       payload = meta.data;
       final sniff = _sniffType(payload);
@@ -693,24 +757,34 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     });
     final ms = elapsed.inMilliseconds;
     final kbps = ms > 0 ? (payload.length / 1024) / (ms / 1000) : 0.0;
-    final note = '${(ms / 1000).toStringAsFixed(2)}s'
+    final note =
+        '${(ms / 1000).toStringAsFixed(2)}s'
         ' · ${kbps.toStringAsFixed(1)}KB/s'
         ' · cam${_camFps.toStringAsFixed(0)}fps'
         ' · 検出$_framesDetected/$_framesSeen(追従$_framesTracked)'
         ' · blk$_blocksOk · pkt$_packetsAdded'
         ' · scan${_scanCount > 0 ? (_scanMsSum / _scanCount).round() : 0}ms'
         ' (rot${(_rotateUsSum / (_scanCount == 0 ? 1 : _scanCount) / 1000).toStringAsFixed(1)}/dec${(_decodeUsSum / (_scanCount == 0 ? 1 : _scanCount) / 1000).toStringAsFixed(1)}ms)';
-    debugPrint('[vcode-rx] COMPLETE: $name ${payload.length} bytes in ${ms}ms, $note');
+    debugPrint(
+      '[vcode-rx] COMPLETE: $name ${payload.length} bytes in ${ms}ms, $note',
+    );
     // 条件を振って自動計測するとき、結果を画面から目で読むのは現実的でない。
     // 画面と同じ内容を 1 行で吐いておけば adb logcat でそのまま集計できる。
-    debugPrint('[vloom-stats] '
-        '${_statsRows().map((r) => "${r.$1.trim()}=${r.$2}").join(" | ")}');
+    debugPrint(
+      '[vloom-stats] '
+      '${_statsRows().map((r) => "${r.$1.trim()}=${r.$2}").join(" | ")}',
+    );
     // 履歴に保存。名前/種別はヘッダ優先、無ければ内容推定。
     try {
       final slot = HistoryStore.instance.reserveReceivedPath();
       await File(slot.path).writeAsBytes(payload);
-      await HistoryStore.instance
-          .registerReceived(slot.id, name, mime, payload.length, note: note);
+      await HistoryStore.instance.registerReceived(
+        slot.id,
+        name,
+        mime,
+        payload.length,
+        note: note,
+      );
       setState(() {
         _savedItem = HistoryStore.instance.received.first;
       });
@@ -910,10 +984,12 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('位置を検出できませんでした'),
-          content: const Text(
-              'コードが画面に写っているか、ピントが合っているか確認して、もう一度お試しください。'),
+          content: const Text('コードが画面に写っているか、ピントが合っているか確認して、もう一度お試しください。'),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('閉じる')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('閉じる'),
+            ),
           ],
         ),
       );
@@ -923,14 +999,19 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('位置を検出しました'),
-        content: Text('格子 ${rep.gridW}×${rep.gridH} · 直近 ${rep.blocksOk}/${rep.blocksTotal} ブロック\n'
-            'この位置に固定したまま受信を開始しますか?'),
+        content: Text(
+          '格子 ${rep.gridW}×${rep.gridH} · 直近 ${rep.blocksOk}/${rep.blocksTotal} ブロック\n'
+          'この位置に固定したまま受信を開始しますか?',
+        ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false), child: const Text('やり直す')),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('やり直す'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('この位置で受信開始')),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('この位置で受信開始'),
+          ),
         ],
       ),
     );
@@ -995,7 +1076,9 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     return SizedBox(
       height: 72,
       width: double.infinity,
-      child: CustomPaint(painter: _CoverageGridPainter(seen: _seenEsi, k: k)),
+      child: CustomPaint(
+        painter: _CoverageGridPainter(seen: _seenEsi, k: k),
+      ),
     );
   }
 
@@ -1016,7 +1099,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   String _errorKindsText() {
     final total = _errorKinds.values.fold<int>(0, (a, b) => a + b);
     if (total == 0) return '-';
-    final e = _errorKinds.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    final e = _errorKinds.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
     return e
         .map((x) => '${x.key}:${x.value}(${(x.value * 100 / total).round()}%)')
         .join('  ');
@@ -1047,11 +1131,17 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     final rows = <(String, String)>[
       if (isTestImage(_savedItem?.name ?? '')) ('計測データ', _savedItem!.name),
       ('サイズ', '${p.length} B'),
-      ('所要時間 (初検出→完了)', ms >= 1000 ? '${(ms / 1000).toStringAsFixed(2)} 秒' : '$ms ms'),
+      (
+        '所要時間 (初検出→完了)',
+        ms >= 1000 ? '${(ms / 1000).toStringAsFixed(2)} 秒' : '$ms ms',
+      ),
       ('実効スループット', '${kbps.toStringAsFixed(1)} KB/s'),
-      ('カメラ解像度', preview == null
-          ? '-'
-          : '${preview.width.round()}×${preview.height.round()}'),
+      (
+        'カメラ解像度',
+        preview == null
+            ? '-'
+            : '${preview.width.round()}×${preview.height.round()}',
+      ),
       ('格子指定', _forcedGrid == kGridAuto ? '自動 (候補総当たり)' : _forcedGrid),
       ('カメラフレーム数', '$_framesSeen (検出 $_framesDetected / 追従 $_framesTracked)'),
       ('カメラ実効fps', _camFps.toStringAsFixed(1)),
@@ -1061,13 +1151,22 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       ('投入パケット', '$_packetsAdded'),
       ('distinct パケット', '${_seenEsi.length}'),
       if (_integrityFails > 0) ('整合性エラー再試行', '$_integrityFails 回'),
-      ('平均スキャン時間', _scanCount > 0 ? '${(_scanMsSum / _scanCount).round()} ms' : '-'),
-      ('　うち回転コピー', _scanCount > 0
-          ? '${(_rotateUsSum / _scanCount / 1000).toStringAsFixed(1)} ms'
-          : '-'),
-      ('　うち探索・デコード', _scanCount > 0
-          ? '${(_decodeUsSum / _scanCount / 1000).toStringAsFixed(1)} ms'
-          : '-'),
+      (
+        '平均スキャン時間',
+        _scanCount > 0 ? '${(_scanMsSum / _scanCount).round()} ms' : '-',
+      ),
+      (
+        '　うち回転コピー',
+        _scanCount > 0
+            ? '${(_rotateUsSum / _scanCount / 1000).toStringAsFixed(1)} ms'
+            : '-',
+      ),
+      (
+        '　うち探索・デコード',
+        _scanCount > 0
+            ? '${(_decodeUsSum / _scanCount / 1000).toStringAsFixed(1)} ms'
+            : '-',
+      ),
     ];
     return rows;
   }
@@ -1081,17 +1180,22 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       ('格子(受信設定)', _forcedGrid),
       ('bit/セル', preset != null ? '${preset.bpc}' : '-'),
       ('送信fps(想定)', preset != null ? '${preset.fps}' : '-'),
-      ('理論スループット',
-          preset != null ? '${preset.theoreticalKbps.toStringAsFixed(1)} KB/s' : '-'),
+      (
+        '理論スループット',
+        preset != null
+            ? '${preset.theoreticalKbps.toStringAsFixed(1)} KB/s'
+            : '-',
+      ),
     ];
-    final text = [...header, ..._statsRows()]
-        .map((r) => '${r.$1.trim()}\t${r.$2}')
-        .join('\n');
+    final text = [
+      ...header,
+      ..._statsRows(),
+    ].map((r) => '${r.$1.trim()}\t${r.$2}').join('\n');
     await Clipboard.setData(ClipboardData(text: text));
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('統計をコピーしました')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('統計をコピーしました')));
     }
   }
 
@@ -1102,19 +1206,30 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       defaultVerticalAlignment: TableCellVerticalAlignment.middle,
       children: [
         for (final (label, value) in rows)
-          TableRow(children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 8),
-              child: Text(label,
+          TableRow(
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 8),
+                child: Text(
+                  label,
                   style: TextStyle(
-                      fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 8),
-              child: Text(value,
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-            ),
-          ]),
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 8),
+                child: Text(
+                  value,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
       ],
     );
   }
@@ -1123,9 +1238,20 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   /// 内部でロックしていても画面に出ないと分からないため、状態を必ず可視化する。
   Widget _statusBadge() {
     final (String label, Color color, IconData icon) = switch (this) {
-      _ when _acquireRequested || _acquiring => ('位置を検出中…', Colors.amber, Icons.travel_explore),
-      _ when _framesDetected > 0 && _missStreak == 0 =>
-        (_camLocked ? '追従中 (露出固定)' : _seeded ? '追従中 (位置固定)' : '追従中', Colors.cyanAccent, Icons.center_focus_strong),
+      _ when _acquireRequested || _acquiring => (
+        '位置を検出中…',
+        Colors.amber,
+        Icons.travel_explore,
+      ),
+      _ when _framesDetected > 0 && _missStreak == 0 => (
+        _camLocked
+            ? '追従中 (露出固定)'
+            : _seeded
+            ? '追従中 (位置固定)'
+            : '追従中',
+        Colors.cyanAccent,
+        Icons.center_focus_strong,
+      ),
       _ when _autoAcquire => ('位置を探しています…', Colors.orangeAccent, Icons.search),
       _ => ('枠にコードを合わせてください', Colors.orangeAccent, Icons.crop_free),
     };
@@ -1141,7 +1267,14 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         children: [
           Icon(icon, size: 16, color: color),
           const SizedBox(width: 6),
-          Text(label, style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w600)),
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         ],
       ),
     );
@@ -1152,8 +1285,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     final label = _presetIndex >= 0
         ? '${kPresets[_presetIndex].grid} ${kPresets[_presetIndex].name}'
         : _forcedGrid == kGridAuto
-            ? '格子: 自動'
-            : _forcedGrid;
+        ? '格子: 自動'
+        : _forcedGrid;
     return InkWell(
       onTap: _showGridPicker,
       borderRadius: BorderRadius.circular(16),
@@ -1169,9 +1302,14 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           children: [
             const Icon(Icons.grid_on, size: 14, color: Colors.white70),
             const SizedBox(width: 5),
-            Text(label,
-                style: const TextStyle(
-                    color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+            Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
             const Icon(Icons.arrow_drop_down, size: 18, color: Colors.white70),
           ],
         ),
@@ -1189,8 +1327,10 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           children: [
             const Padding(
               padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: Text('格子 — 送信側と同じものを選ぶ',
-                  style: TextStyle(fontWeight: FontWeight.w600)),
+              child: Text(
+                '格子 — 送信側と同じものを選ぶ',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
             ),
             for (var i = 0; i < kPresets.length; i++)
               ListTile(
@@ -1199,11 +1339,16 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                   _presetIndex == i
                       ? Icons.radio_button_checked
                       : Icons.radio_button_off,
-                  color: _presetIndex == i ? Theme.of(ctx).colorScheme.primary : null,
+                  color: _presetIndex == i
+                      ? Theme.of(ctx).colorScheme.primary
+                      : null,
                 ),
                 title: Text('${kPresets[i].grid}  ${kPresets[i].name}'),
-                subtitle: Text(kPresets[i].description,
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                subtitle: Text(
+                  kPresets[i].description,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
                 onTap: () {
                   Navigator.pop(ctx);
                   _selectPreset(i);
@@ -1229,8 +1374,9 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           contentPadding: EdgeInsets.zero,
           title: Text('自動追従', style: small),
           subtitle: Text(
-              '検出できないとき自動で広域探索して位置を掴む (手で合わせる必要がない)',
-              style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor)),
+            '検出できないとき自動で広域探索して位置を掴む (手で合わせる必要がない)',
+            style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
+          ),
           value: _autoAcquire,
           onChanged: (v) => setState(() {
             _autoAcquire = v;
@@ -1261,8 +1407,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         Text(
           _presetIndex >= 0
               ? '格子 ${kPresets[_presetIndex].grid} · '
-                  '${kPresets[_presetIndex].cellsWide} セル幅 · '
-                  '送信側も同じものを選ぶこと'
+                    '${kPresets[_presetIndex].cellsWide} セル幅 · '
+                    '送信側も同じものを選ぶこと'
               : 'カスタム',
           style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
         ),
@@ -1295,7 +1441,9 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
             guideAspect: _guideAspect(),
             // 操作パネルの反対側へ寄せて、パネルが映像 (とくにコードの下側の四隅) に
             // 重ならないようにする
-            alignment: _panelAtTop ? const Alignment(0, 0.3) : const Alignment(0, -0.3),
+            alignment: _panelAtTop
+                ? const Alignment(0, 0.3)
+                : const Alignment(0, -0.3),
             // 検出領域のハイライト (シアン)。緑のガイド枠と区別できる色。
             // カメラ画像の矩形に重ねて描く = 画像座標との対応がそのまま保たれる。
             overlay: _detCorners == null
@@ -1306,8 +1454,10 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                       imgW: _detImgW,
                       imgH: _detImgH,
                       delta:
-                          ((cam.description.sensorOrientation) - _detRot + 360) %
-                              360,
+                          ((cam.description.sensorOrientation) -
+                              _detRot +
+                              360) %
+                          360,
                     ),
                   ),
           ),
@@ -1355,8 +1505,10 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                 children: [
                   CircularProgressIndicator(),
                   SizedBox(height: 12),
-                  Text('位置を検出中…',
-                      style: TextStyle(color: Colors.white, fontSize: 15)),
+                  Text(
+                    '位置を検出中…',
+                    style: TextStyle(color: Colors.white, fontSize: 15),
+                  ),
                 ],
               ),
             ),
@@ -1374,7 +1526,9 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
 
   /// ガイド枠の縦横比。選択中の格子のセル数から求める (自動のときは既定格子)。
   double _guideAspect() {
-    final g = _forcedGrid == kGridAuto ? kPresets[kDefaultPresetIndex].grid : _forcedGrid;
+    final g = _forcedGrid == kGridAuto
+        ? kPresets[kDefaultPresetIndex].grid
+        : _forcedGrid;
     final p = g.split('x');
     final c = vcodeLayoutCells(gridW: int.parse(p[0]), gridH: int.parse(p[1]));
     return c[0] == 0 ? 0.92 : c[1] / c[0];
@@ -1403,8 +1557,12 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     final left = minX * 100, right = (1 - maxX) * 100;
     // px/セル は回転後画像座標での辺の長さをセル数で割る (カメラ画像の実寸)。
     // 縦横で違えば小さいほう = 読み取りが厳しいほうを出す
-    final topLen = math.sqrt(math.pow(c[2] - c[0], 2) + math.pow(c[3] - c[1], 2));
-    final leftLen = math.sqrt(math.pow(c[6] - c[0], 2) + math.pow(c[7] - c[1], 2));
+    final topLen = math.sqrt(
+      math.pow(c[2] - c[0], 2) + math.pow(c[3] - c[1], 2),
+    );
+    final leftLen = math.sqrt(
+      math.pow(c[6] - c[0], 2) + math.pow(c[7] - c[1], 2),
+    );
     final pxW = _detCellsW > 0 ? topLen / _detCellsW : 0.0;
     final pxH = _detCellsH > 0 ? leftLen / _detCellsH : 0.0;
     final pxPerCell = math.min(pxW, pxH);
@@ -1416,8 +1574,12 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       if (right < 2) '右',
     ];
     // いちばん余っている辺を示す。そちらへ寄せる/大きくする余地がある
-    final slack = {'上': top, '下': bottom, '左': left, '右': right}.entries
-        .reduce((a, b) => a.value >= b.value ? a : b);
+    final slack = {
+      '上': top,
+      '下': bottom,
+      '左': left,
+      '右': right,
+    }.entries.reduce((a, b) => a.value >= b.value ? a : b);
     final style = TextStyle(
       color: tight.isEmpty ? Colors.white : Colors.redAccent,
       fontSize: 13,
@@ -1456,7 +1618,11 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         gradient: LinearGradient(
           begin: inner,
           end: edge,
-          colors: const [Color(0x00000000), Color(0x59000000), Color(0xA6000000)],
+          colors: const [
+            Color(0x00000000),
+            Color(0x59000000),
+            Color(0xA6000000),
+          ],
           stops: const [0.0, 0.30, 1.0],
         ),
       ),
@@ -1464,8 +1630,9 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         top: _panelAtTop,
         bottom: !_panelAtTop,
         child: ConstrainedBox(
-          constraints:
-              BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.6),
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.6,
+          ),
           child: SingleChildScrollView(
             padding: _panelAtTop
                 ? const EdgeInsets.fromLTRB(8, 8, 8, 28)
@@ -1474,88 +1641,97 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
             child: Opacity(
               opacity: 0.82,
               child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: _acquiring ? null : () => _startAcquire(),
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: _acquiring ? null : () => _startAcquire(),
+                          icon: Icon(
+                            _seeded ? Icons.refresh : Icons.center_focus_strong,
+                          ),
+                          label: Text(_seeded ? '位置を再検出' : '位置を検出'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // 受信中でもやり直せるようにする。集めたパケットを捨てて最初から始める。
+                      // 途中で条件を変えたときや、間違ったデータを掴んだときに要る。
+                      FilledButton.tonalIcon(
+                        onPressed: _restartReceive,
+                        icon: const Icon(Icons.restart_alt),
+                        label: const Text('リセット'),
+                      ),
+                      IconButton(
+                        tooltip: _panelExpanded ? '詳細を畳む' : '詳細を開く (カバレッジ・設定)',
+                        color: Colors.white,
                         icon: Icon(
-                            _seeded ? Icons.refresh : Icons.center_focus_strong),
-                        label: Text(_seeded ? '位置を再検出' : '位置を検出'),
+                          _panelExpanded
+                              ? Icons.expand_more
+                              : Icons.expand_less,
+                        ),
+                        onPressed: () =>
+                            setState(() => _panelExpanded = !_panelExpanded),
+                      ),
+                      IconButton(
+                        tooltip: _panelAtTop ? '操作パネルを下へ' : '操作パネルを上へ',
+                        color: Colors.white,
+                        icon: Icon(
+                          _panelAtTop
+                              ? Icons.vertical_align_bottom
+                              : Icons.vertical_align_top,
+                        ),
+                        onPressed: () =>
+                            setState(() => _panelAtTop = !_panelAtTop),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  // 畳んでいる間は進捗を細いバーだけで示す (格子は映像の下 1/4 を隠す)
+                  if (total != null && !_panelExpanded)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: LinearProgressIndicator(
+                        value: (_seenEsi.length / total).clamp(0.0, 1.0),
+                        minHeight: 6,
+                        backgroundColor: const Color(0x55FFFFFF),
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    // 受信中でもやり直せるようにする。集めたパケットを捨てて最初から始める。
-                    // 途中で条件を変えたときや、間違ったデータを掴んだときに要る。
-                    FilledButton.tonalIcon(
-                      onPressed: _restartReceive,
-                      icon: const Icon(Icons.restart_alt),
-                      label: const Text('リセット'),
-                    ),
-                    IconButton(
-                      tooltip: _panelExpanded ? '詳細を畳む' : '詳細を開く (カバレッジ・設定)',
-                      color: Colors.white,
-                      icon: Icon(_panelExpanded ? Icons.expand_more : Icons.expand_less),
-                      onPressed: () => setState(() => _panelExpanded = !_panelExpanded),
-                    ),
-                    IconButton(
-                      tooltip: _panelAtTop ? '操作パネルを下へ' : '操作パネルを上へ',
-                      color: Colors.white,
-                      icon: Icon(_panelAtTop
-                          ? Icons.vertical_align_bottom
-                          : Icons.vertical_align_top),
-                      onPressed: () =>
-                          setState(() => _panelAtTop = !_panelAtTop),
-                    ),
+                  // 受信データのカバレッジ格子: ESI ごとのマスを、受信済み=緑(source)/水色(repair)、
+                  // 未受信=灰で塗る。埋まらない穴が「取れていないフレームのデータ」= 未完了の原因。
+                  if (total != null && _panelExpanded) ...[
+                    _coverageGrid(total),
+                    const SizedBox(height: 4),
                   ],
-                ),
-                const SizedBox(height: 6),
-                // 畳んでいる間は進捗を細いバーだけで示す (格子は映像の下 1/4 を隠す)
-                if (total != null && !_panelExpanded)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: LinearProgressIndicator(
-                      value: (_seenEsi.length / total).clamp(0.0, 1.0),
-                      minHeight: 6,
-                      backgroundColor: const Color(0x55FFFFFF),
-                    ),
-                  ),
-                // 受信データのカバレッジ格子: ESI ごとのマスを、受信済み=緑(source)/水色(repair)、
-                // 未受信=灰で塗る。埋まらない穴が「取れていないフレームのデータ」= 未完了の原因。
-                if (total != null && _panelExpanded) ...[
-                  _coverageGrid(total),
-                  const SizedBox(height: 4),
-                ],
-                // 一度も検出できていないときだけ、切り分けに要る実測値を出す。
-                // 回転はスキャナが rot と rot+180 しか試さないため端末差が出やすく、
-                // 輝度レンジは iOS の video range (16〜235) を見分けるために要る。
-                if (_framesDetected == 0 && _framesSeen > 10)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 4),
-                    child: Text(
-                      '未検出の診断: rot=$_lastRot · ${_lastImgW}x$_lastImgH '
-                      '(stride $_lastStride) · 輝度 $_lumaMin–$_lumaMax'
-                      '${_lumaMax <= 240 && _lumaMin >= 10 ? " (video range?)" : ""}'
-                      '${_lastError != null ? "\n$_lastError" : ""}',
-                      style: TextStyle(
+                  // 一度も検出できていないときだけ、切り分けに要る実測値を出す。
+                  // 回転はスキャナが rot と rot+180 しか試さないため端末差が出やすく、
+                  // 輝度レンジは iOS の video range (16〜235) を見分けるために要る。
+                  if (_framesDetected == 0 && _framesSeen > 10)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Text(
+                        '未検出の診断: rot=$_lastRot · ${_lastImgW}x$_lastImgH '
+                        '(stride $_lastStride) · 輝度 $_lumaMin–$_lumaMax'
+                        '${_lumaMax <= 240 && _lumaMin >= 10 ? " (video range?)" : ""}'
+                        '${_lastError != null ? "\n$_lastError" : ""}',
+                        style: TextStyle(
                           fontSize: 11,
-                          color: Theme.of(context).colorScheme.error),
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
                     ),
+                  if (_panelExpanded) _measureSettings(),
+                  Text(
+                    '検出 $_framesDetected/$_framesSeen · '
+                    // distinct (重複除く) が必要数 K に届くと復元される。投入は重複込みの累計。
+                    '受信 ${_seenEsi.length}${total != null ? "/$total 必要" : ""} '
+                    '(投入 $_packetsAdded 重複込) · scan ${_lastScanMs}ms'
+                    '${_seeded ? " · [位置固定]" : ""}'
+                    '${_autoAcquireCount > 0 ? " · 自動取得 $_autoAcquireCount 回" : ""}'
+                    '${_integrityFails > 0 ? " · 整合性エラー $_integrityFails" : ""}',
+                    style: const TextStyle(fontSize: 12, color: Colors.white),
                   ),
-                if (_panelExpanded) _measureSettings(),
-                Text(
-                  '検出 $_framesDetected/$_framesSeen · '
-                  // distinct (重複除く) が必要数 K に届くと復元される。投入は重複込みの累計。
-                  '受信 ${_seenEsi.length}${total != null ? "/$total 必要" : ""} '
-                  '(投入 $_packetsAdded 重複込) · scan ${_lastScanMs}ms'
-                  '${_seeded ? " · [位置固定]" : ""}'
-                  '${_autoAcquireCount > 0 ? " · 自動取得 $_autoAcquireCount 回" : ""}'
-                  '${_integrityFails > 0 ? " · 整合性エラー $_integrityFails" : ""}',
-                  style: const TextStyle(fontSize: 12, color: Colors.white),
-                ),
-              ],
+                ],
               ),
             ),
           ),
@@ -1565,63 +1741,70 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   }
 
   /// 受信完了後の画面。カメラは止まっているので通常のスクロール表示にする。
+  /// アプリ全体が extendBody (映像を全画面にするため) なので、この画面は自前で
+  /// SafeArea に収め、下に浮いているナビバーの高さぶん余白を取る。
   Widget _resultView() {
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.check_circle, size: 64, color: Colors.green),
-            const SizedBox(height: 12),
-            Text(_status, style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 12),
-            // 受け取ったものをその場で確認できるようにする
-            // (画像・テキストは内蔵表示、それ以外は「アプリで開く」へ)
-            ReceivedPreview(
-              bytes: _payload!,
-              mime: _savedItem?.type ?? '',
-              name: _savedItem?.name ?? '受信データ',
-            ),
-            const SizedBox(height: 12),
-            _statsTable(),
-            const SizedBox(height: 12),
-            Wrap(
-              alignment: WrapAlignment.center,
-              spacing: 12,
-              runSpacing: 8,
-              children: [
-                if (_savedItem != null)
-                  FilledButton.icon(
-                    onPressed: () => _saveToFile(_savedItem!),
-                    icon: const Icon(Icons.save_alt),
-                    label: const Text('端末に保存'),
-                  ),
-                if (_savedItem != null)
+    return SafeArea(
+      child: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.check_circle, size: 64, color: Colors.green),
+              const SizedBox(height: 12),
+              Text(_status, style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 12),
+              // 受け取ったものをその場で確認できるようにする
+              // (画像・テキストは内蔵表示、それ以外は「アプリで開く」へ)
+              ReceivedPreview(
+                bytes: _payload!,
+                mime: _savedItem?.type ?? '',
+                name: _savedItem?.name ?? '受信データ',
+              ),
+              const SizedBox(height: 12),
+              _statsTable(),
+              const SizedBox(height: 12),
+              Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 12,
+                runSpacing: 8,
+                children: [
+                  if (_savedItem != null)
+                    FilledButton.icon(
+                      onPressed: () => _saveToFile(_savedItem!),
+                      icon: const Icon(Icons.save_alt),
+                      label: const Text('端末に保存'),
+                    ),
+                  if (_savedItem != null)
+                    FilledButton.tonalIcon(
+                      onPressed: () => shareReceived(_savedItem!),
+                      icon: const Icon(Icons.share),
+                      label: const Text('共有'),
+                    ),
+                  // 条件を振って比べるとき、統計を手で書き写すと必ず抜けるので
+                  // タブ区切りで丸ごとコピーできるようにする
                   FilledButton.tonalIcon(
-                    onPressed: () => shareReceived(_savedItem!),
-                    icon: const Icon(Icons.share),
-                    label: const Text('共有'),
+                    onPressed: _copyStats,
+                    icon: const Icon(Icons.copy_all),
+                    label: const Text('統計をコピー'),
                   ),
-                // 条件を振って比べるとき、統計を手で書き写すと必ず抜けるので
-                // タブ区切りで丸ごとコピーできるようにする
-                FilledButton.tonalIcon(
-                  onPressed: _copyStats,
-                  icon: const Icon(Icons.copy_all),
-                  label: const Text('統計をコピー'),
-                ),
-                // 端末に保存する前でも中身を確認できるようにする
-                // (動画・PDF・Office など内蔵表示できない形式向け)
-                FilledButton.tonalIcon(
-                  onPressed: () => openBytesWithDefaultApp(
-                      context, _payload!, _savedItem?.name ?? 'received.bin'),
-                  icon: const Icon(Icons.open_in_new),
-                  label: const Text('アプリで開く'),
-                ),
-                FilledButton(onPressed: _reset, child: const Text('もう一度受信')),
-              ],
-            ),
-          ],
+                  // 端末に保存する前でも中身を確認できるようにする
+                  // (動画・PDF・Office など内蔵表示できない形式向け)
+                  FilledButton.tonalIcon(
+                    onPressed: () => openBytesWithDefaultApp(
+                      context,
+                      _payload!,
+                      _savedItem?.name ?? 'received.bin',
+                    ),
+                    icon: const Icon(Icons.open_in_new),
+                    label: const Text('アプリで開く'),
+                  ),
+                  FilledButton(onPressed: _reset, child: const Text('もう一度受信')),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1700,11 +1883,12 @@ class _DetectedQuadPainter extends CustomPainter {
       ..close();
     canvas.drawPath(path, Paint()..color = const Color(0x3300E5FF));
     canvas.drawPath(
-        path,
-        Paint()
-          ..color = const Color(0xFF00E5FF)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 3);
+      path,
+      Paint()
+        ..color = const Color(0xFF00E5FF)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3,
+    );
     final dot = Paint()..color = const Color(0xFF00E5FF);
     for (final p in [tl, tr, br, bl]) {
       canvas.drawCircle(p, 6, dot);

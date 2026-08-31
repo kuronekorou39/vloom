@@ -146,7 +146,10 @@ $("txStart").addEventListener("click", async () => {
     const text = $("txText").value;
     if (!text) { $("txInfo").textContent = "ファイルを選択するかテキストを入力してください"; return; }
     bytes = new TextEncoder().encode(text);
-    name = "message.txt";
+    // 毎回 message.txt だと受信側で同名ファイルが積み重なるので、送信時刻を付ける
+    const t = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    name = `message_${t.getFullYear()}${pad(t.getMonth() + 1)}${pad(t.getDate())}_${pad(t.getHours())}${pad(t.getMinutes())}${pad(t.getSeconds())}.txt`;
     mime = "text/plain;charset=utf-8";
   }
   // 元のファイル名/MIME をヘッダに埋めて送る (受信側で元名・種別をそのまま復元)

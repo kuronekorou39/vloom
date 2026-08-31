@@ -128,9 +128,14 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
       return;
     }
     // 元のファイル名/MIME をヘッダに埋めて送る (受信側で元名・種別をそのまま復元)。
+    // テキスト送信の既定名は送信時刻入り (毎回 message.txt だと受信側で同名が積み重なる)
+    final now = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    final stamp = '${now.year}${two(now.month)}${two(now.day)}_'
+        '${two(now.hour)}${two(now.minute)}${two(now.second)}';
     final name = _testAsset != null
         ? testImageName(_testAsset!)
-        : (_pickedName ?? 'message.txt');
+        : (_pickedName ?? 'message_$stamp.txt');
     final mime = _testAsset != null
         ? 'image/jpeg'
         : (_pickedPath != null ? (_pickedMime ?? '') : 'text/plain;charset=utf-8');
