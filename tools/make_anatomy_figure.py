@@ -31,7 +31,8 @@ def make_frame() -> Image.Image:
     """1 フレームぶんを埋め切るランダムペイロードで実物のフレームを作る。"""
     gw, gh = GRID
     payload = os.urandom(gw * gh * vcode_encode.packet_size(1))
-    frames, w, h = vcode_encode.build(payload, gw, gh, 1)
+    frames, _oti, _packets = vcode_encode.build(payload, gw, gh, 1)
+    w, h = vcode_encode.frame_size(gw, gh)
     png = vcode_encode.png_bytes(frames[0], w, h, SC)
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
         f.write(png)
