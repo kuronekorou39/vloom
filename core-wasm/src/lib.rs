@@ -316,6 +316,8 @@ fn vcode_rotate(y: &[u8], w: usize, h: usize, stride: usize, rot: u32) -> (Vec<u
 
 #[wasm_bindgen]
 pub struct VcodeRx {
+    /// 未検出の連続回数。重いガイド総当たりを間引くのに使う
+    misses: u32,
     last: Option<(u32, vcode::Layout, [(f32, f32); 4])>,
     /// 探索するレイアウトの固定指定 (None = CANDIDATES を総当たり)
     forced: Option<vcode::Layout>,
@@ -325,7 +327,7 @@ pub struct VcodeRx {
 impl VcodeRx {
     #[wasm_bindgen(constructor)]
     pub fn new() -> VcodeRx {
-        VcodeRx { last: None, forced: None }
+        VcodeRx { last: None, forced: None, misses: 0 }
     }
 
     /// 探索するレイアウトを 1 つに固定する (grid_w = 0 で解除)。送信側の格子が分かっている
@@ -360,6 +362,7 @@ impl VcodeRx {
             let img = GrayImage { w: rw, h: rh, data: &gray };
             if let Ok(result) = scan_frame_tracked(&img, &corners, layout) {
                 self.last = Some((rot, layout, result.corners));
+                self.misses = 0;
                 return vcode_success(result, layout);
             }
         }
@@ -384,7 +387,12 @@ impl VcodeRx {
             }
 
             // 2) フォールバック: 画角に収まる最大枠 (contain) × 縮尺違いをガイドに探す。
-            //    以前は「中央の正方形 × 幅基準」で、縦長の格子は枠に収まらず検出できなかった
+            //    以前は「中央の正方形 × 幅基準」で、縦長の格子は枠に収まらず検出できなかった。
+            //    格子×縮尺の総当たりは 1 回で秒単位かかるので、未検出が続く間は 5 回に
+            //    1 回に間引く (マーカー直接検出は軽いので毎回走る)
+            if self.misses % 5 != 0 {
+                continue;
+            }
             let base = guide_frac.clamp(0.4, 0.98) as f32;
             let (cx, cy) = (rw as f32 / 2.0, rh as f32 / 2.0);
             for &layout in &cands {
@@ -407,6 +415,7 @@ impl VcodeRx {
             }
         }
         self.last = None;
+        self.misses = self.misses.wrapping_add(1);
         vcode_fail()
     }
 }

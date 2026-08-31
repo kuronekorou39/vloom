@@ -266,9 +266,10 @@ const cellsWide = (grid) => parseInt(grid.split("x")[0], 10) * VCODE_BLOCK;
  * grid は "auto" (候補総当たり) か "9x8" のような固定指定。
  */
 export function cellPxText(guidePx, grid = "auto") {
-  const grids = grid === "auto" ? ["7x6", "5x4"] : [grid];
+  const grids = grid === "auto" ? ["13x18", "7x6"] : [grid];
   const fmt = (g) => `${(guidePx / cellsWide(g)).toFixed(1)} px/セル (${g.replace("x", "×")})`;
+  // 1bit の安定目安は 3px/セル (マーカー直接検出 + オフセット伝播後の実測)
   const densest = guidePx / cellsWide(grids[0]);
-  const mark = densest >= 6 ? "" : densest >= 4.5 ? " ⚠余裕なし" : " ⚠解像度不足";
+  const mark = densest >= 3 ? "" : densest >= 2.4 ? " ⚠余裕なし" : " ⚠解像度不足";
   return `ガイド枠 ${Math.round(guidePx)}px → ${grids.map(fmt).join(" / ")}${mark}`;
 }
