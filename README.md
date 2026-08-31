@@ -32,6 +32,9 @@ QR とほぼ同じですが、**ブロック単位の CRC による部分回収 
 単位なので、読めなければその 1 枚が丸ごと無駄になる — 実効スループットの差はここから
 出ます。形式の仕様は [docs/vcode_format.md](docs/vcode_format.md)。
 
+<p align="center"><img src="docs/images/vcode_anatomy.png" width="560"
+  alt="vcode フレームの構造: 四隅マーカー・ヘッダ・タイミング行・データブロック・較正帯" /></p>
+
 **実測 (1MB 転送、Pixel 9a 受信、13×18 / 1bit)**:
 
 | 送信側 | 実効 |
