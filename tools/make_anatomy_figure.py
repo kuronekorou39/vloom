@@ -50,7 +50,7 @@ def main() -> None:
     pad_t = 96
     ox = 48
     legend_x = ox + W + 110
-    cv = Image.new("RGB", (legend_x + 660, H + pad_t + 48), "#ffffff")
+    cv = Image.new("RGB", (legend_x + 1040, H + pad_t + 48), "#ffffff")
     cv.paste(frame, (ox, pad_t))
     d = ImageDraw.Draw(cv, "RGBA")
 
@@ -127,25 +127,23 @@ def main() -> None:
         (c5, "⑤ 較正帯 — 既知パターン。下端側の位置と輝度の基準"),
         (None, "マーカーの内側の白い帯 (4セル) は余白。マーカー検出の対比に使う"),
     ]
-    f_leg = font(24)
-    tx = legend_x + 46
+    f_leg = font(46)
+    tx = legend_x + 76
     maxw = cv.width - tx - 24
     y = pad_t + 24
     for color, text in legend:
         if color:
-            d.rectangle([legend_x, y + 5, legend_x + 30, y + 35], fill=color)
+            d.rectangle([legend_x, y + 8, legend_x + 56, y + 64], fill=color)
         # 収まらない行は折り返す
         rest = text
-        first = True
         while rest:
             cut = len(rest)
             while d.textlength(rest[:cut], font=f_leg) > maxw:
                 cut -= 1
             d.text((tx, y), rest[:cut], font=f_leg, fill="#222222")
             rest = rest[cut:]
-            y += 34
-            first = False
-        y += 24
+            y += 64
+        y += 40
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     cv.save(OUT)
