@@ -46,8 +46,10 @@ void showToast(
             Icon(icon, color: color, size: 20),
             const SizedBox(width: 10),
             Expanded(
-              child: Text(message,
-                  style: const TextStyle(color: Colors.white, fontSize: 14)),
+              child: Text(
+                message,
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+              ),
             ),
           ],
         ),
@@ -68,7 +70,10 @@ Future<void> openWithDefaultApp(BuildContext context, File file) async {
 /// 復元したバイト列を一時ファイルに書き出して既定アプリで開く。
 /// 端末に保存する前でも中身を確認できるようにするための導線。
 Future<void> openBytesWithDefaultApp(
-    BuildContext context, Uint8List bytes, String name) async {
+  BuildContext context,
+  Uint8List bytes,
+  String name,
+) async {
   final dir = await getTemporaryDirectory();
   final file = File('${dir.path}/$name');
   await file.writeAsBytes(bytes, flush: true);
@@ -98,6 +103,7 @@ class ReceivedPreview extends StatelessWidget {
   bool get _isImage => mime.startsWith('image/');
   bool get _isText => mime.startsWith('text/');
   bool get _isVideo => mime.startsWith('video/');
+  bool get _isAudio => mime.startsWith('audio/');
 
   @override
   Widget build(BuildContext context) {
@@ -109,8 +115,8 @@ class ReceivedPreview extends StatelessWidget {
       body = Image.memory(
         bytes,
         fit: BoxFit.contain,
-        errorBuilder: (_, _, _) => _fallback(context, Icons.image_not_supported,
-            'この形式はアプリ内で表示できません'),
+        errorBuilder: (_, _, _) =>
+            _fallback(context, Icons.image_not_supported, 'この形式はアプリ内で表示できません'),
       );
     } else if (_isText) {
       body = Container(
@@ -127,8 +133,14 @@ class ReceivedPreview extends StatelessWidget {
     } else {
       body = _fallback(
         context,
-        _isVideo ? Icons.movie : Icons.insert_drive_file,
-        _isVideo ? '動画は既定のプレイヤーで再生できます' : 'この種別はアプリで開けます',
+        _isVideo
+            ? Icons.movie
+            : _isAudio
+            ? Icons.audiotrack
+            : Icons.insert_drive_file,
+        _isVideo || _isAudio
+            ? '${_isVideo ? "動画" : "音声"}は「アプリで開く」で既定のプレイヤーで再生できます'
+            : 'この種別はアプリで開けます',
       );
     }
 
@@ -137,7 +149,10 @@ class ReceivedPreview extends StatelessWidget {
       children: [
         ConstrainedBox(
           constraints: BoxConstraints(maxHeight: maxHeight),
-          child: ClipRRect(borderRadius: BorderRadius.circular(10), child: body),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: body,
+          ),
         ),
         const SizedBox(height: 8),
         Text(
@@ -160,8 +175,10 @@ class ReceivedPreview extends StatelessWidget {
         children: [
           Icon(icon, size: 44, color: scheme.onSurfaceVariant),
           const SizedBox(height: 8),
-          Text(label,
-              style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
+          Text(
+            label,
+            style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+          ),
         ],
       ),
     );

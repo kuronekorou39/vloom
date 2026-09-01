@@ -191,10 +191,29 @@ const receiver = new VcodeReceiver({
     $("rxInfo").textContent =
       `スキャン中 · frames ${frames} · 検出 ${detected} · 直近 ${blocks}/${blocksTotal} ブロック`;
   },
-  onDone: ({ name, type, size, blob, stats }) => {
+  onDone: async ({ name, type, size, blob, stats }) => {
     $("rxInfo").innerHTML = `<span class="ok">✅ 復元成功: ${name} (${fmtSize(size)})</span>`;
     const url = URL.createObjectURL(blob);
     const isImage = type.startsWith("image/");
+    const isVideo = type.startsWith("video/");
+    const isAudio = type.startsWith("audio/");
+    const isText = type.startsWith("text/");
+    // 動画・音声・テキストもその場で確認できるようにする (ブラウザのデコーダに任せる)
+    let preview = "";
+    if (isImage) {
+      preview = `<p><img src="${url}" style="max-width:100%;border-radius:8px" /></p>`;
+    } else if (isVideo) {
+      preview = `<p><video controls playsinline src="${url}" style="max-width:100%;border-radius:8px"></video></p>`;
+    } else if (isAudio) {
+      preview = `<p><audio controls src="${url}" style="width:100%"></audio></p>`;
+    } else if (isText) {
+      const esc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      let text = await blob.text();
+      const cut = text.length > 4000;
+      if (cut) text = text.slice(0, 4000);
+      preview = `<pre style="max-height:16em;overflow:auto;white-space:pre-wrap;background:rgba(0,0,0,0.25);padding:0.8em;border-radius:8px">${esc(text)}${cut ? "
+… (以下略。全文はダウンロードで)" : ""}</pre>`;
+    }
     // 条件を振って比べられるよう、計測値を一緒に出す (所要時間は初検出→完了)
     const s = stats || {};
     const rows = [
@@ -205,7 +224,7 @@ const receiver = new VcodeReceiver({
       ["格子指定", s.grid === "auto" ? "自動 (候補総当たり)" : s.grid],
     ];
     $("rxResult").innerHTML =
-      (isImage ? `<p><img src="${url}" style="max-width:100%;border-radius:8px" /></p>` : "") +
+      preview +
       `<table class="stats">${rows
         .map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`)
         .join("")}</table>` +
