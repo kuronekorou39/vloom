@@ -9,10 +9,6 @@ import 'history_store.dart';
 import 'ui_common.dart';
 
 /// ファイルシステムで安全なファイル名にする (パス区切り・禁止文字を _ に)。
-String _safeFileName(String n) {
-  final s = n.replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1f]'), '_').trim();
-  return s.isEmpty ? 'file' : s;
-}
 
 /// 受信ファイルを OS の共有シートで送る (他アプリ送付・ドライブ等)。
 /// 内部保存は ID 名 (拡張子なし) なので、受け側が正しい表示名・拡張子を得られるよう
@@ -24,7 +20,7 @@ Future<void> shareReceived(HistoryItem item) async {
   try {
     final tmp = await getTemporaryDirectory();
     final dir = Directory('${tmp.path}/share')..createSync(recursive: true);
-    final dst = File('${dir.path}/${_safeFileName(item.name)}');
+    final dst = File('${dir.path}/${safeFileName(item.name)}');
     await file.copy(dst.path);
     x = XFile(dst.path, mimeType: item.type, name: item.name);
   } catch (_) {
@@ -40,7 +36,7 @@ Future<bool> saveReceivedToFile(HistoryItem item) async {
   if (file == null || !await file.exists()) return false;
   final params = SaveFileDialogParams(
     sourceFilePath: file.path,
-    fileName: _safeFileName(item.name),
+    fileName: safeFileName(item.name),
     mimeTypesFilter: item.type.isNotEmpty ? [item.type] : null,
   );
   final saved = await FlutterFileDialog.saveFile(params: params);

@@ -67,6 +67,17 @@ Future<void> openWithDefaultApp(BuildContext context, File file) async {
   }
 }
 
+/// 受信したファイル名を、パスとして安全な形に落とす。
+/// 名前は送信側 (= 他人の画面) が決めるので、区切り文字・親ディレクトリ参照・制御文字を
+/// そのまま使うとアプリのサンドボックス内の別ファイルを指せてしまう。
+String safeFileName(String n) {
+  final s = n
+      .replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1f]'), '_')
+      .replaceAll(RegExp(r'^\.+'), '_')
+      .trim();
+  return s.isEmpty ? 'file' : (s.length > 120 ? s.substring(0, 120) : s);
+}
+
 /// 復元したバイト列を一時ファイルに書き出して既定アプリで開く。
 /// 端末に保存する前でも中身を確認できるようにするための導線。
 Future<void> openBytesWithDefaultApp(
@@ -75,7 +86,9 @@ Future<void> openBytesWithDefaultApp(
   String name,
 ) async {
   final dir = await getTemporaryDirectory();
-  final file = File('${dir.path}/$name');
+  // 受信名は相手が決めるので、そのままパスに使わない (../ や / でサンドボックス内の
+  // 別ファイルを書き換えられる)。区切り・制御文字を落としてから使う
+  final file = File('${dir.path}/${safeFileName(name)}');
   await file.writeAsBytes(bytes, flush: true);
   if (!context.mounted) return;
   await openWithDefaultApp(context, file);

@@ -28,13 +28,14 @@ import vcode_encode  # noqa: E402
 PAGES = "https://kuronekorou39.github.io/vloom/index.html"
 
 
-def build_y4m(path: Path, grid: str, payload_len: int, cell_px: int, hold: int) -> tuple[int, int, int]:
+def build_y4m(path: Path, grid: str, payload_len: int, cell_px: int, hold: int,
+              name: str = "e2e.txt") -> tuple[int, int, int]:
     """vcode のフレーム列を、擬似カメラが読める Y4M (I420) にする。"""
     gw, gh = (int(v) for v in grid.split("x"))
     body = ("vloom pwa receive test " * 200)[:payload_len].encode()
     # 送信側と同じ二重ラップ: 内側がファイル名/MIME、外側が復元結果の CRC 検証
     payload = vcode_encode.wrap_payload(
-        vcode_encode.wrap_file("e2e.txt", "text/plain;charset=utf-8", body)
+        vcode_encode.wrap_file(name, "text/plain;charset=utf-8", body)
     )
     frames, _oti, _packets = vcode_encode.build(payload, gw, gh, 1)
     cw, ch = vcode_encode.frame_size(gw, gh)
@@ -75,10 +76,14 @@ def main() -> int:
     ap.add_argument("--hold", type=int, default=4, help="1 フレームを何回書くか (30fps 基準)")
     ap.add_argument("--timeout", type=int, default=60, help="復元を待つ秒数")
     ap.add_argument("--shot", help="終了時のスクリーンショット出力先")
+    ap.add_argument("--xss", action="store_true",
+                    help="ファイル名に HTML を仕込み、実行されない (エスケープされる) ことを確かめる")
     args = ap.parse_args()
 
+    # 受信名は送信側 (= 他人の画面) が決める。HTML を仕込んでも実行されないことを確かめる
+    name = '<img src=x onerror="window.__xss=1">.txt' if args.xss else "e2e.txt"
     tmp = Path(tempfile.gettempdir()) / "vloom_fake_cam.y4m"
-    w, h, n = build_y4m(tmp, args.grid, args.payload, args.cell_px, args.hold)
+    w, h, n = build_y4m(tmp, args.grid, args.payload, args.cell_px, args.hold, name)
     print(f"擬似カメラ {w}x{h} · {n} フレーム · 格子 {args.grid} · {args.payload}B")
 
     with sync_playwright() as p:
@@ -104,6 +109,12 @@ def main() -> int:
             if "復元成功" in info:
                 break
         ok = "復元成功" in info
+        if args.xss:
+            fired = page.evaluate("() => !!window.__xss")
+            escaped = page.evaluate(
+                "() => document.getElementById('rxInfo').textContent.includes('<img src=x')")
+            print(f"XSS 検査: 実行された={fired} / 文字として表示={escaped}")
+            ok = ok and not fired and escaped
         print("結果:", info.strip())
         print("診断:", page.evaluate("() => document.getElementById('rxDiag').textContent").strip())
         err = page.evaluate("() => document.getElementById('rxError').textContent").strip()

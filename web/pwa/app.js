@@ -175,6 +175,12 @@ $("txStart").addEventListener("click", async () => {
 });
 
 // ---- 受信 ----
+// 受信データ由来の文字列を HTML/属性へ入れるときのエスケープ。ファイル名も MIME も
+// 送信側 (= 他人の画面) が決めるので、素のまま innerHTML に入れてはいけない。
+const escHtml = (t) =>
+  String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const escAttr = (t) => escHtml(t).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
 const fmtSize = (n) => {
   if (n >= 1 << 30) return (n / (1 << 30)).toFixed(2) + "GB";
   if (n >= 1 << 20) return (n / (1 << 20)).toFixed(1) + "MB";
@@ -192,7 +198,10 @@ const receiver = new VcodeReceiver({
       `スキャン中 · frames ${frames} · 検出 ${detected} · 直近 ${blocks}/${blocksTotal} ブロック`;
   },
   onDone: async ({ name, type, size, blob, stats }) => {
-    $("rxInfo").innerHTML = `<span class="ok">✅ 復元成功: ${name} (${fmtSize(size)})</span>`;
+    // 受信したファイル名は相手の画面から来る = 攻撃者が選べる。HTML に入れる前に必ず
+    // エスケープする (以前は素のまま innerHTML に入れていて XSS になっていた)
+    const safeName = escHtml(name);
+    $("rxInfo").innerHTML = `<span class="ok">✅ 復元成功: ${safeName} (${fmtSize(size)})</span>`;
     const url = URL.createObjectURL(blob);
     const isImage = type.startsWith("image/");
     const isVideo = type.startsWith("video/");
@@ -207,7 +216,7 @@ const receiver = new VcodeReceiver({
     } else if (isAudio) {
       preview = `<p><audio controls src="${url}" style="width:100%"></audio></p>`;
     } else if (isText) {
-      const esc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const esc = escHtml;
       let text = await blob.text();
       const cut = text.length > 4000;
       if (cut) text = text.slice(0, 4000);
@@ -227,7 +236,7 @@ const receiver = new VcodeReceiver({
       `<table class="stats">${rows
         .map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`)
         .join("")}</table>` +
-      `<p><a href="${url}" download="${name}"><button>ダウンロード: ${name}</button></a></p>`;
+      `<p><a href="${url}" download="${escAttr(name)}"><button>ダウンロード: ${safeName}</button></a></p>`;
     $("rxStart").disabled = false;
     $("rxStop").disabled = true;
   },
