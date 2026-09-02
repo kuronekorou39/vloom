@@ -211,8 +211,7 @@ const receiver = new VcodeReceiver({
       let text = await blob.text();
       const cut = text.length > 4000;
       if (cut) text = text.slice(0, 4000);
-      preview = `<pre style="max-height:16em;overflow:auto;white-space:pre-wrap;background:rgba(0,0,0,0.25);padding:0.8em;border-radius:8px">${esc(text)}${cut ? "
-… (以下略。全文はダウンロードで)" : ""}</pre>`;
+      preview = `<pre style="max-height:16em;overflow:auto;white-space:pre-wrap;background:rgba(0,0,0,0.25);padding:0.8em;border-radius:8px">${esc(text)}${cut ? "\n… (以下略。全文はダウンロードで)" : ""}</pre>`;
     }
     // 条件を振って比べられるよう、計測値を一緒に出す (所要時間は初検出→完了)
     const s = stats || {};

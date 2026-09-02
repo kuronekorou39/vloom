@@ -262,7 +262,7 @@ const cellsWide = (grid) => parseInt(grid.split("x")[0], 10) * VCODE_BLOCK;
 
 /**
  * vcode のガイド枠幅から、1 セルあたり何画素で写るかの理論値を返す。
- * 実機では 6px/セル 以上あれば安定、4px を切ると輝度 4 値はまず復号できない。
+ * 実機の目安は 1bit で 3px/セル 以上 (マーカー直接検出 + オフセット伝播後)。輝度 4 値は 6px/セル 級が要る。
  * grid は "auto" (候補総当たり) か "9x8" のような固定指定。
  */
 export function cellPxText(guidePx, grid = "auto") {
