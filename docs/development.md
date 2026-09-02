@@ -100,6 +100,30 @@ PC とスマホを同じ Wi-Fi に繋ぎ、表示された `https://<PC の IP>:
 端末側は再読み込み 2〜3 回 (切り替わりの途中に空ページが出ることがある) か、サイトデータの
 削除で確実に新しくなります。GitHub Pages と LAN サーバーは別オリジン = 別キャッシュです。
 
+### PWA 受信の自動テスト (擬似カメラ)
+
+実機を出さずに「受信がまったく読めない」壊れ方を捕まえるテスト。vcode の映像を Y4M に
+書き出して Chrome の擬似カメラに食わせ、配信中のページが復元まで到達するかを見る。
+
+```bash
+uv run --group dev python -m playwright install chrome   # 初回だけ
+uv run --group dev python tools/test_pwa_receive.py                    # Pages を 13x18 で
+uv run --group dev python tools/test_pwa_receive.py --grid 7x6
+uv run --group dev python tools/test_pwa_receive.py --url https://localhost:8443/index.html
+```
+
+復元まで行けば終了コード 0。擬似カメラは getUserMedia の理想値 (1920x1080) に合わせて
+映像を縮めるので、スクリプト側でその範囲に収まるセル倍率を選んでいる。
+
+**JS の構文検査は .mjs にコピーしてから**。`node --check foo.js` は CommonJS として
+見るため、モジュール前提のファイルでは壊れた文字列を素通りさせることがある
+(実際、テキストプレビューの `
+` が実改行に化けたのを見逃してページ全体が死んだ)。
+
+```bash
+cp web/pwa/app.js /tmp/chk.mjs && node --check /tmp/chk.mjs
+```
+
 ## デスクトップ送信アプリ (Windows)
 
 PC を送信機として使うだけなら、ブラウザより表示タイミングを正確に刻める PySide6 版が
