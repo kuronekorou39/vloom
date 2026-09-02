@@ -64,10 +64,11 @@ impl FountainDecoder {
         }
         let mut arr = [0u8; 12];
         arr.copy_from_slice(oti_bytes);
-        Ok(FountainDecoder {
-            inner: fountain::Decoder::from_oti_bytes(&arr),
-            last_result: None,
-        })
+        // 宣言サイズの上限を超えるものは、デコーダを作る前に弾く (細工フレーム対策)
+        let inner = fountain::Decoder::from_oti_bytes_checked(&arr).ok_or_else(|| {
+            JsError::new("宣言されたサイズが不正です (壊れたフレームか、上限を超える大きさ)")
+        })?;
+        Ok(FountainDecoder { inner, last_result: None })
     }
 
     /// パケットを 1 つ追加。復元できれば内部に payload を保存し true を返す。

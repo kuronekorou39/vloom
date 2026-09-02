@@ -66,7 +66,28 @@ pub struct Decoder {
     packets_received: u32,
 }
 
+/// 受信側が受け入れる最大ペイロード長。
+///
+/// OTI の転送長は送信側 (= 他人の画面) が決める 40bit の値で、RFC 6330 の上限は約 1TB。
+/// そのまま RaptorQ デコーダに渡すと、1GB で数百 ms かけて確保しに行き、100GB 級では
+/// 確保に失敗して panic する (wasm ではインスタンスが壊れて以降のスキャンが全滅し、
+/// アプリでは FFI 越しの panic になる)。光チャネルの実効速度は 200KB/s 級なので、
+/// 64MB でも 5 分以上かかる。実用として十分広く、確保しても安全な線で頭打ちにする。
+pub const MAX_PAYLOAD_BYTES: u64 = 64 << 20;
+
 impl Decoder {
+    /// OTI からデコーダを作る。宣言された転送長が [MAX_PAYLOAD_BYTES] を超える (または 0)
+    /// なら None。細工されたフレームで確保を暴走させないための入口。
+    pub fn from_oti_bytes_checked(oti_bytes: &[u8; 12]) -> Option<Self> {
+        let oti = ObjectTransmissionInformation::deserialize(oti_bytes);
+        let len = oti.transfer_length();
+        if len == 0 || len > MAX_PAYLOAD_BYTES {
+            return None;
+        }
+        let inner = RqDecoder::new(oti.clone());
+        Some(Self { inner, oti, packets_received: 0 })
+    }
+
     pub fn from_oti_bytes(oti_bytes: &[u8; 12]) -> Self {
         let oti = ObjectTransmissionInformation::deserialize(oti_bytes);
         let inner = RqDecoder::new(oti.clone());
@@ -87,6 +108,29 @@ impl Decoder {
         self.inner.add_new_packet(packet);
         self.packets_received += 1;
         self.inner.get_result()
+    }
+}
+
+#[cfg(test)]
+mod cap_tests {
+    use super::*;
+
+    fn oti_bytes(transfer_len: u64) -> [u8; 12] {
+        let mut b = [0u8; 12];
+        b[..5].copy_from_slice(&transfer_len.to_be_bytes()[3..]);
+        b[6..8].copy_from_slice(&42u16.to_be_bytes());
+        b[8] = 1;
+        b[9..11].copy_from_slice(&1u16.to_be_bytes());
+        b[11] = 1;
+        b
+    }
+
+    #[test]
+    fn oversized_declared_length_is_rejected() {
+        assert!(Decoder::from_oti_bytes_checked(&oti_bytes(1 << 20)).is_some());
+        assert!(Decoder::from_oti_bytes_checked(&oti_bytes(MAX_PAYLOAD_BYTES)).is_some());
+        assert!(Decoder::from_oti_bytes_checked(&oti_bytes(MAX_PAYLOAD_BYTES + 1)).is_none());
+        assert!(Decoder::from_oti_bytes_checked(&oti_bytes(0)).is_none());
     }
 }
 
