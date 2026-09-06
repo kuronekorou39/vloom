@@ -55,20 +55,27 @@ adb shell am start -n app.vloom.vloom.lab/app.vloom.vloom.MainActivity \
 
 ### 条件を振って自動集計する
 
-送信側を流しっぱなしにしたうえで、受信側だけを繰り返し起動して集計します。
+受信側を繰り返し起動し、完了の `[vloom-stats]` を拾って条件ごとに中央値と範囲を出します。
 条件は交互に回すので、発熱や環境光の変化が片方に偏りません。
 
 ```bash
 # 手持ちでピントが効いているかの A/B (合成計測の裏取り。experiments.md 2026-09-06)
-uv run --group dev python tools/measure_rx.py --runs 4     --arm "AF固定あり:--ei afhunt 1" --arm "AF固定なし:--ei afhunt 0"
+# 送信側は流しっぱなしでよい (条件で変わらないため)
+uv run --group dev python tools/measure_rx.py --runs 4 \
+    --arm "AF固定あり:--ei afhunt 1" --arm "AF固定なし:--ei afhunt 0"
 
 # 密度を落としたほうが速いかの A/B
-uv run --group dev python tools/measure_rx.py --runs 4     --arm "13x18:--es grid 13x18" --arm "11x14:--es grid 11x14"
+# 格子は送受で揃っていないと読めないので、--sender で送信側も切り替える
+uv run --group dev python tools/measure_rx.py --runs 4 \
+    --arm "13x18:--es grid 13x18" --arm "11x14:--es grid 11x14" \
+    --sender "13x18=uv run python -m desktop --file web/pwa/testdata/test-1MB.jpg --grid 13x18 --fps 20 --start" \
+    --sender "11x14=uv run python -m desktop --file web/pwa/testdata/test-1MB.jpg --grid 11x14 --fps 20 --start"
 ```
 
 **充電を抜いて、冷えた状態から始めてください。** 充電しながらの連続計測は
 熱制限で復号が 2〜3 倍遅くなります。送るファイルは 1MB 以上に (100KB は 1 秒未満で
-終わり、定常が測れません)。
+終わり、定常が測れません)。カメラ権限は先に一度手で許可しておいてください
+(権限ダイアログが出ると自動起動が止まります)。配布版を測るなら `--pkg app.vloom.vloom`。
 
 ## Python 環境 (uv)
 
