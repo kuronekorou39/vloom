@@ -5,7 +5,7 @@
 
 import { VcodeTx, VcodeRx, FountainDecoder, vcodeUnwrapPayload, vcodeUnwrapFile } from "./pkg/vloom_core_wasm.js";
 import {
-  openCamera, ScanStats, ExposureGuard, cameraInfoText, lumaText, cellPxText,
+  openCamera, ExposureGuard, cameraInfoText, lumaText, cellPxText,
   gridTooDense, pxPerCell,
 } from "./camera.js";
 
@@ -210,6 +210,7 @@ export class VcodeReceiver {
     this.cap = document.createElement("canvas");
     this.stream = null;
     this.rafId = null;
+    this.worker = null;
     this.guideEl = null;
     this._onResize = () => this._positionGuide();
   }
@@ -224,30 +225,144 @@ export class VcodeReceiver {
     this._ensureGuide();
     this.video.addEventListener("loadedmetadata", this._onResize);
     window.addEventListener("resize", this._onResize);
+    this._startWorker();
+  }
+
+  /** 走査ワーカーを起こす。別スレッドにする理由は scan-worker.js の先頭を参照。 */
+  _startWorker() {
+    try {
+      this.worker = new Worker(new URL("./scan-worker.js", import.meta.url), { type: "module" });
+    } catch (e) {
+      console.warn("[vcode-rx] ワーカーを作れないので主スレッドで走査する", e);
+      this._fallbackToMainThread();
+      return;
+    }
+    this.worker.onmessage = (e) => this._onWorker(e.data);
+    this.worker.onerror = (e) => {
+      console.warn("[vcode-rx] ワーカーが起動できないので主スレッドで走査する", e.message);
+      this._fallbackToMainThread();
+    };
+    this.worker.postMessage({ k: "init", grid: this.grid });
+  }
+
+  _onWorker(m) {
+    switch (m.k) {
+      case "ready":
+        this._feedWorker();
+        break;
+      case "progress":
+        this._onWorkerProgress(m);
+        break;
+      case "ack":
+        // 退避経路: 1 枚ぶんの処理が終わった合図 (次の 1 枚を送ってよい)
+        this._inFlight = false;
+        break;
+      case "integrity":
+        console.warn("[vcode-rx] 整合性エラー: 復元結果が破損。デコーダを作り直して受信続行");
+        this.lastDistinct = 0;
+        this.lastGainAt = performance.now();
+        break;
+      case "done":
+        this._finish(m.payload);
+        break;
+      case "error":
+        console.warn("[vcode-rx] worker:", m.msg);
+        break;
+      default:
+        break;
+    }
+  }
+
+  /** カメラ映像をワーカーへ渡す。VideoFrame を直接読める環境ならそちらを使う。 */
+  _feedWorker() {
+    const track = this.stream && this.stream.getVideoTracks()[0];
+    if (track && typeof MediaStreamTrackProcessor !== "undefined") {
+      try {
+        // プレビュー用の track とは別に読む (同じ track を 2 か所で消費しないよう複製)
+        this.procTrack = track.clone();
+        const proc = new MediaStreamTrackProcessor({ track: this.procTrack });
+        this.worker.postMessage({ k: "stream", readable: proc.readable }, [proc.readable]);
+        return;
+      } catch (e) {
+        console.warn("[vcode-rx] VideoFrame 経路が使えないので描画経路にする", e);
+        if (this.procTrack) { this.procTrack.stop(); this.procTrack = null; }
+      }
+    }
+    this._startPushLoop();
+  }
+
+  /** 退避経路: 主スレッドで輝度に落としてワーカーへ送る (VideoFrame が使えない環境)。 */
+  _startPushLoop() {
+    this._inFlight = false;
+    const loop = () => {
+      if (!this.stream || this.finished) return;
+      this.rafId = requestAnimationFrame(loop);
+      if (this._inFlight) return; // 処理中に送っても古くなるだけなので待つ
+      const g = this._grabGray();
+      if (!g) return;
+      this._inFlight = true;
+      this.worker.postMessage(
+        { k: "frame", gray: g.gray.buffer, w: g.w, h: g.h, stride: g.w },
+        [g.gray.buffer],
+      );
+    };
+    this.rafId = requestAnimationFrame(loop);
+  }
+
+  /** 映像 1 枚を輝度バッファにする (退避経路と主スレッド走査で共用)。 */
+  _grabGray() {
+    const vw = this.video.videoWidth, vh = this.video.videoHeight;
+    if (!vw || !vh) return null;
+    const scale = this._scanScale(vw, vh);
+    const tw = Math.round(vw * scale), th = Math.round(vh * scale);
+    this.cap.width = tw; this.cap.height = th;
+    const ctx = this.cap.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(this.video, 0, 0, vw, vh, 0, 0, tw, th);
+    const rgba = ctx.getImageData(0, 0, tw, th).data;
+    const gray = new Uint8Array(tw * th);
+    for (let p = 0, q = 0; p < gray.length; p++, q += 4) {
+      gray[p] = (rgba[q] * 77 + rgba[q + 1] * 150 + rgba[q + 2] * 29) >> 8;
+    }
+    return { gray, w: tw, h: th };
+  }
+
+  /** ワーカーがまったく作れない環境向け (module worker 非対応など)。 */
+  _fallbackToMainThread() {
+    if (this.worker) { this.worker.terminate(); this.worker = null; }
+    if (this.rafId) cancelAnimationFrame(this.rafId);
     this.rx = new VcodeRx();
     this.setGrid(this.grid);
-    const loop = () => { if (!this.stream) return; this._scan(); this.rafId = requestAnimationFrame(loop); };
+    this.dec = null;
+    const loop = () => {
+      if (!this.stream || this.finished) return;
+      this._scanInline();
+      this.rafId = requestAnimationFrame(loop);
+    };
     this.rafId = requestAnimationFrame(loop);
   }
 
   _reset() {
     this.rx = null; this.dec = null; this.finished = false; this.frames = 0; this.detected = 0;
-    this.stats = new ScanStats();
+    this.stats = { fps: 0, mean: 0, sat: 0 };
     this._lastDiag = 0;
     this.firstDetectedAt = null;
     // 重複を除いた被覆 (ESI 集合) と、必要パケット数。進捗表示と停滞判定に使う
-    this.seenEsi = new Set();
+    this.distinct = 0;
     this.needed = 0;
     this.lastDistinct = 0;
     this.lastGainAt = performance.now();
     this.scanW = 0;
     this.scanH = 0;
+    this.blocks = 0;
+    this.blocksTotal = 0;
+    this._inlineEsi = null;
   }
 
   /** 探索する格子を切り替える ("auto" で候補総当たり)。受信中でも即反映する。 */
   setGrid(grid) {
     this.grid = grid;
     this._positionGuide();
+    if (this.worker) { this.worker.postMessage({ k: "grid", grid }); return; }
     if (!this.rx) return;
     if (grid === "auto") {
       this.rx.setLayout(0, 0);
@@ -271,12 +386,12 @@ export class VcodeReceiver {
     );
   }
 
-  // scan() が探索する「中央・正方形クロップの GUIDE_FRAC 幅」ボックスを映像に重ねて描く。
-  // ユーザーはこの枠にコードを収めれば、スキャナのガイド初期値と一致して検出が始まる。
+  // スキャナが探索するボックスを映像に重ねて描く。ユーザーはこの枠にコードを収めれば、
+  // スキャナのガイド初期値と一致して検出が始まる。
   _ensureGuide() {
     if (this.guideEl || !this.video.parentElement) return;
     const el = document.createElement("div");
-    // z-index は映像 (#vrxVideo は z-index:1) より上に。無いと枠が映像の下に潜って見えない。
+    // z-index は映像 (#rxVideo は z-index:1) より上に。無いと枠が映像の下に潜って見えない。
     el.style.cssText =
       "position:absolute;z-index:2;box-sizing:border-box;pointer-events:none;border:3px solid #f59e0b;" +
       "border-radius:6px;box-shadow:0 0 0 9999px rgba(0,0,0,0.28);transition:border-color .12s;";
@@ -287,9 +402,7 @@ export class VcodeReceiver {
 
   _positionGuide() {
     if (!this.guideEl) return;
-    // 映像は object-fit:cover で表示領域いっぱいに出す (外側は切れる)。scan() は「画面に
-    // 見えている中央正方形」だけを走査するので、ガイドもその正方形に一致させる。cover では
-    // 見える中央正方形の表示上の一辺は min(表示幅, 表示高) になり、表示領域の中央に来る。
+    // 映像は object-fit:cover で表示領域いっぱいに出す (外側は切れる)。
     const cw = this.video.clientWidth, ch = this.video.clientHeight;
     if (!cw || !ch) return;
     // 選択中の格子の縦横比で、表示領域に収まる最大枠 × GUIDE_FRAC (自動時は既定の 13x18)
@@ -314,85 +427,20 @@ export class VcodeReceiver {
   stop() {
     if (this.rafId) cancelAnimationFrame(this.rafId);
     this.rafId = null;
+    if (this.worker) {
+      this.worker.postMessage({ k: "stop" });
+      this.worker.terminate();
+      this.worker = null;
+    }
+    if (this.procTrack) { this.procTrack.stop(); this.procTrack = null; }
     this.video.removeEventListener("loadedmetadata", this._onResize);
     window.removeEventListener("resize", this._onResize);
     this._removeGuide();
     if (this.stream) { this.stream.getTracks().forEach((t) => t.stop()); this.stream = null; }
   }
 
-  _scan() {
-    if (this.finished) return;
-    this._positionGuide();
-    const vw = this.video.videoWidth, vh = this.video.videoHeight;
-    if (!vw || !vh) return;
-    // フレーム全体を走査する (画素数が上限を超えたぶんだけ縮小)。以前は中央の正方形だけを
-    // 切り出していて、縦長のコードが枠に収まらず検出できなかった。マーカー直接検出が
-    // 入ったので、コードが画面のどこにどの大きさで写っていても掴める
-    const scale = this._scanScale(vw, vh);
-    const tw = Math.round(vw * scale), th = Math.round(vh * scale);
-    this.cap.width = tw; this.cap.height = th;
-    const ctx = this.cap.getContext("2d", { willReadFrequently: true });
-    ctx.drawImage(this.video, 0, 0, vw, vh, 0, 0, tw, th);
-    const rgba = ctx.getImageData(0, 0, tw, th).data;
-    // RGBA → 輝度 Y
-    const gray = new Uint8Array(tw * th);
-    for (let p = 0, q = 0; p < gray.length; p++, q += 4) {
-      gray[p] = (rgba[q] * 77 + rgba[q + 1] * 150 + rgba[q + 2] * 29) >> 8;
-    }
-    this.frames++;
-    this.scanW = tw;
-    this.scanH = th;
-    this.stats.tick(gray);
-    this._diag();
-    let report;
-    try {
-      report = this.rx.scan(gray, tw, th, tw, 0, VCODE_GUIDE_FRAC);
-    } catch (_) { return; }
-    this._setGuideLocked(report.detected);
-    if (report.detected) {
-      this.detected++;
-      // 所要時間は「初検出 → 復元完了」で測る (カメラを向けるまでの時間を含めない)
-      if (this.firstDetectedAt === null) this.firstDetectedAt = performance.now();
-      if (!this.dec) {
-        try { this.dec = new FountainDecoder(report.oti); } catch (_) { return; }
-      }
-      const n = report.packetCount();
-      let done = false;
-      for (let i = 0; i < n; i++) {
-        const pkt = this.dec ? report.packet(i) : null;
-        if (!pkt) break;
-        // RaptorQ の payload ID = SBN(1) + ESI(3, big-endian)。単一ソースブロック前提で
-        // ESI を「実データの被覆」として数える。同じパケットを何度受けても進まないので、
-        // 進捗はこの重複を除いた数で出さないと「動いているのに終わらない」に見える。
-        if (pkt.length >= 4) this.seenEsi.add((pkt[1] << 16) | (pkt[2] << 8) | pkt[3]);
-        if (this.dec.addPacket(pkt)) { done = true; break; }
-      }
-      // 必要パケット数 K = ceil(ペイロード長 / シンボル長)。RaptorQ は distinct が K を
-      // わずかに超えたところで解ける (表示上はこの K を 100% の目安にする)
-      if (!this.needed && n > 0) {
-        const symbol = report.packet(0).length - 4;
-        if (symbol > 0) this.needed = Math.ceil(Number(this.dec.payloadSize()) / symbol);
-      }
-      this._progress(report.blocksOk, report.blocksTotal);
-      if (done) {
-        // エンドツーエンド CRC-32 検証。不一致 = 復元結果が破損 → デコーダを捨てて受信続行
-        const payload = vcodeUnwrapPayload(this.dec.payload());
-        if (!payload) {
-          console.warn("[vcode-rx] 整合性エラー: 復元結果が破損。デコーダを再作成して受信続行");
-          this.dec = null;
-          this.seenEsi.clear();
-          this.lastDistinct = 0;
-          this.lastGainAt = performance.now();
-          return;
-        }
-        this._finish(payload);
-      }
-    } else {
-      this._progress(0, 0);
-    }
-  }
-
-  /** 走査に使う縮小率。選んだ格子が要求する px/セル を満たすところまでしか縮めない。 */
+  /** 走査に使う縮小率。選んだ格子が要求する px/セル を満たすところまでしか縮めない。
+   *  ワーカー側にも同じ判断がある (scan-worker.js の scanScale)。 */
   _scanScale(vw, vh) {
     // "auto" は候補の中で最も密なもの (13x18) を基準にする
     const grid = this.grid === "auto" ? "13x18" : this.grid;
@@ -403,11 +451,92 @@ export class VcodeReceiver {
     return Math.min(1, want, budget);
   }
 
+  /** ワーカーからの進捗を UI へ流す。 */
+  _onWorkerProgress(m) {
+    this._inFlight = false;
+    this.frames = m.frames;
+    if (m.detected > 0 && this.firstDetectedAt === null) {
+      // 所要時間は「初検出 → 復元完了」で測る (カメラを向けるまでの時間を含めない)
+      this.firstDetectedAt = performance.now();
+    }
+    this.detected = m.detected;
+    this.distinct = m.distinct;
+    this.needed = m.needed;
+    this.scanW = m.scanW;
+    this.scanH = m.scanH;
+    this.blocks = m.blocks;
+    this.blocksTotal = m.blocksTotal;
+    this.stats = { fps: m.fps, mean: m.mean, sat: m.sat };
+    this._setGuideLocked(m.blocksTotal > 0);
+    this._positionGuide();
+    this._diag();
+    this._progress();
+  }
+
+  /** ワーカーが作れない環境向けの、主スレッド走査 1 枚ぶん。 */
+  _scanInline() {
+    const g = this._grabGray();
+    if (!g) return;
+    this.frames++;
+    this.scanW = g.w;
+    this.scanH = g.h;
+    let sum = 0, sat = 0, n = 0;
+    for (let i = 0; i < g.gray.length; i += 64) {
+      const v = g.gray[i];
+      sum += v;
+      if (v >= 250) sat++;
+      n++;
+    }
+    if (n) { this.stats.mean = sum / n; this.stats.sat = sat / n; }
+    let rep;
+    try {
+      rep = this.rx.scan(g.gray, g.w, g.h, g.w, 0, VCODE_GUIDE_FRAC);
+    } catch (_) { return; }
+    this._setGuideLocked(rep.detected);
+    this._positionGuide();
+    this._diag();
+    if (!rep.detected) { this.blocks = 0; this.blocksTotal = 0; this._progress(); return; }
+    this.detected++;
+    if (this.firstDetectedAt === null) this.firstDetectedAt = performance.now();
+    this.blocks = rep.blocksOk;
+    this.blocksTotal = rep.blocksTotal;
+    if (!this.dec) {
+      try { this.dec = new FountainDecoder(rep.oti); } catch (_) { return; }
+    }
+    const seen = this._inlineEsi || (this._inlineEsi = new Set());
+    const n2 = rep.packetCount();
+    let done = false;
+    for (let i = 0; i < n2; i++) {
+      const pkt = rep.packet(i);
+      // RaptorQ の payload ID = SBN(1) + ESI(3, big-endian)。重複を除いた被覆を数える
+      if (pkt.length >= 4) seen.add((pkt[1] << 16) | (pkt[2] << 8) | pkt[3]);
+      if (this.dec.addPacket(pkt)) { done = true; break; }
+    }
+    if (!this.needed && n2 > 0) {
+      const symbol = rep.packet(0).length - 4;
+      if (symbol > 0) this.needed = Math.ceil(Number(this.dec.payloadSize()) / symbol);
+    }
+    this.distinct = seen.size;
+    this._progress();
+    if (!done) return;
+    // エンドツーエンド CRC-32 検証。不一致 = 復元結果が破損 → デコーダを捨てて受信続行
+    const payload = vcodeUnwrapPayload(this.dec.payload());
+    if (!payload) {
+      console.warn("[vcode-rx] 整合性エラー: 復元結果が破損。デコーダを作り直して受信続行");
+      this.dec = null;
+      seen.clear();
+      this.distinct = 0;
+      this.lastDistinct = 0;
+      this.lastGainAt = performance.now();
+      return;
+    }
+    this._finish(payload);
+  }
+
   /** 進捗と、進まないときの原因を UI へ返す。 */
-  _progress(blocks, blocksTotal) {
-    const distinct = this.seenEsi.size;
-    if (distinct > this.lastDistinct) {
-      this.lastDistinct = distinct;
+  _progress() {
+    if (this.distinct > this.lastDistinct) {
+      this.lastDistinct = this.distinct;
       this.lastGainAt = performance.now();
     }
     // 検出できているのにパケットが増えない = 同じ一部のブロックだけを拾い続けている。
@@ -425,9 +554,9 @@ export class VcodeReceiver {
     this.onProgress({
       frames: this.frames,
       detected: this.detected,
-      blocks,
-      blocksTotal,
-      distinct,
+      blocks: this.blocks,
+      blocksTotal: this.blocksTotal,
+      distinct: this.distinct,
       needed: this.needed,
       stall,
     });
@@ -435,6 +564,7 @@ export class VcodeReceiver {
 
   _finish(rawPayload) {
     this.finished = true;
+    const scanFps = this.stats.fps;
     this.stop();
     // ファイル名/MIME ヘッダがあれば元の名前・種別で復元。無ければ従来どおり推測+タイムスタンプ名。
     const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -461,9 +591,9 @@ export class VcodeReceiver {
         kbps: ms > 0 ? (data.length / 1024) / (ms / 1000) : 0,
         frames: this.frames,
         detected: this.detected,
-        scanFps: this.stats.fps,
+        scanFps,
         grid: this.grid,
-        distinct: this.seenEsi.size,
+        distinct: this.distinct,
         needed: this.needed,
         scan: this.scanW ? `${this.scanW}×${this.scanH}` : "",
       },
