@@ -1,6 +1,6 @@
 // Vloom PWA Service Worker: アプリシェル + WASM をキャッシュしてオフライン動作させる。
 // バージョンを上げるとキャッシュを更新する。
-const CACHE = "vloom-pwa-v42";
+const CACHE = "vloom-pwa-v43";
 const ASSETS = [
   "./",
   "./index.html",
@@ -21,7 +21,18 @@ const ASSETS = [
 ];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  // HTTP キャッシュを迂回して取り直す。addAll の既定はブラウザのキャッシュを使うので、
+  // 配信直後でエッジや端末に古い応答が残っていると、それを新しいバージョンの
+  // キャッシュに焼き込んでしまう。実機で「キャッシュは v42 なのに中身は旧版」が
+  // 起きて、直したはずの挙動が出ないまま計測してしまった。
+  e.waitUntil(
+    caches.open(CACHE).then(async (c) => {
+      await Promise.all(ASSETS.map(async (u) => {
+        const res = await fetch(u, { cache: "reload" });
+        if (res.ok) await c.put(u, res);
+      }));
+    }).then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener("activate", (e) => {
