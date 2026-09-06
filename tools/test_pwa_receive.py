@@ -29,7 +29,8 @@ PAGES = "https://kuronekorou39.github.io/vloom/index.html"
 
 
 def build_y4m(path: Path, grid: str, payload_len: int, hold: int, cam: tuple[int, int],
-              fill: float, name: str = "e2e.txt") -> tuple[int, int, int, float]:
+              fill: float, name: str = "e2e.txt",
+              rotate: int = 0) -> tuple[int, int, int, float]:
     """vcode のフレーム列を、擬似カメラが読める Y4M (I420) にする。
 
     映像は実機のカメラと同じ寸法 (既定 1920x1080) で作り、コードはその高さの fill 倍に
@@ -45,6 +46,10 @@ def build_y4m(path: Path, grid: str, payload_len: int, hold: int, cam: tuple[int
     frames, _oti, _packets = vcode_encode.build(payload, gw, gh, 1)
     cw, ch = vcode_encode.frame_size(gw, gh)
     w, h = cam
+    # 送信側が 90 度回して描く構成 (PWA を横長の窓で出すと必ずこうなる) を再現する。
+    # 受信がその向きを掴めるかは、マーカー検出がパターンの回転を許すかで決まる。
+    if rotate in (90, 270):
+        cw, ch = ch, cw
     # 縦横どちらでも収まる倍率。整数倍に丸めず、実機と同じく端数のある拡大にする
     scale = min(w * fill / cw, h * fill / ch)
     code_w, code_h = max(1, round(cw * scale)), max(1, round(ch * scale))
@@ -54,7 +59,10 @@ def build_y4m(path: Path, grid: str, payload_len: int, hold: int, cam: tuple[int
         f.write(f"YUV4MPEG2 W{w} H{h} F30:1 Ip A1:1 C420\n".encode())
         uv = np.full((h // 2, w // 2), 128, np.uint8).tobytes()
         for cells in frames:
-            arr = np.frombuffer(bytes(cells), np.uint8).reshape(ch, cw)  # セル値がそのままグレー値
+            base_h, base_w = (cw, ch) if rotate in (90, 270) else (ch, cw)
+            arr = np.frombuffer(bytes(cells), np.uint8).reshape(base_h, base_w)  # セル値がそのままグレー値
+            if rotate:
+                arr = np.rot90(arr, rotate // 90)
             img = np.array(Image.fromarray(arr).resize((code_w, code_h), Image.BILINEAR))
             canvas = np.full((h, w), 255, np.uint8)
             canvas[oy:oy + code_h, ox:ox + code_w] = img
@@ -73,6 +81,8 @@ def main() -> int:
     ap.add_argument("--payload", type=int, default=3000, help="送るテキストのバイト数")
     ap.add_argument("--cam", default="1920x1080",
                     help="擬似カメラの解像度。実機のカメラと同じ寸法にすること")
+    ap.add_argument("--rotate", type=int, default=0, choices=(0, 90, 180, 270),
+                    help="コードを回して表示する (PWA を横長の窓で出したときの再現)")
     ap.add_argument("--fill", type=float, default=0.88,
                     help="コードが映像の何割を占めるか (実機で枠に収めた状態が 0.85〜0.9)")
     ap.add_argument("--hold", type=int, default=2, help="1 フレームを何回書くか (30fps 基準)")
@@ -86,9 +96,10 @@ def main() -> int:
     name = '<img src=x onerror="window.__xss=1">.txt' if args.xss else "e2e.txt"
     tmp = Path(tempfile.gettempdir()) / "vloom_fake_cam.y4m"
     cam = tuple(int(v) for v in args.cam.split("x"))
-    w, h, n, cell_px = build_y4m(tmp, args.grid, args.payload, args.hold, cam, args.fill, name)
+    w, h, n, cell_px = build_y4m(tmp, args.grid, args.payload, args.hold, cam, args.fill, name,
+                                 args.rotate)
     print(f"擬似カメラ {w}x{h} · {n} フレーム · 格子 {args.grid} · {args.payload}B "
-          f"· {cell_px:.2f} px/セル")
+          f"· {cell_px:.2f} px/セル" + (f" · {args.rotate}度回転" if args.rotate else ""))
 
     with sync_playwright() as p:
         browser = p.chromium.launch(channel="chrome", headless=True, args=[
