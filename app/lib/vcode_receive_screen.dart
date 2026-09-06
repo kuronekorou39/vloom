@@ -86,6 +86,18 @@ const kFocusBadRatio = 0.25;
 /// 探り直しと判断するのに必要な、good → bad → good の往復回数
 const kFocusHuntCycles = 2;
 
+/// good / bad をこの枚数だけ「連続して」満たしたときだけ状態が変わったと見なす。
+///
+/// 回収率は 1〜2 枚おきに大きく上下する (ローリングシャッターで送信フレームの
+/// 切り替わりをまたいだ枚は帯を失う。実機ログで 125/234 と 75/234 が交互に出た)。
+/// 単発の上下を「探り直し」と数えると、実機では受信開始 240ms で 2 往復に達して
+/// 誤爆した。AF の探り直しはボケが 0.5〜2 秒続くので、連続枚数で区別できる。
+const kFocusStateFrames = 6;
+
+/// 検出がこの枚数に達するまでは数え始めない。開始直後は AE/AF が動いている途中で、
+/// 位置合わせも粗いため回収率が低く出る (それを探り直しと取り違えない)。
+const kFocusSettleFrames = 30;
+
 /// AF を固定した後、これだけ連続でボケていたら固定を解除して AF に戻す
 /// (距離が変わって固定したピントが外れた場合)
 const kFocusRelockBadFrames = 12;
@@ -200,7 +212,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   bool _focusLocked = false; // AF を固定済みか
   bool _focusWasGood = false; // 直近が「合っている」側だったか
   int _focusHunts = 0; // good -> bad -> good の往復を観測した回数
-  int _focusBadRun = 0; // 固定後に連続でボケているフレーム数
+  int _focusGoodRun = 0; // 連続して「合っている」側だったフレーム数
+  int _focusBadRun = 0; // 連続して「ボケている」側だったフレーム数
   int _focusAttempts = 0; // AF 固定を試みた回数
   bool _seeded = false; // acquire 結果で受信位置を確定済み (中央ガイド枠に頼らず追従)
   List<double>? _detCorners; // acquire で検出した 4 隅 (回転後画像座標, 8 値) — ハイライト表示用
@@ -926,24 +939,34 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       }
       return;
     }
+    // 開始直後は AE/AF が動いている途中なので数えない
+    if (_framesDetected < kFocusSettleFrames) return;
+    // 連続して同じ側にいる枚数を数える。中間の値はどちらの走も進めず、切りもしない
+    // (1〜2 枚おきの上下で走が途切れると、続いているボケを見つけられない)
     if (ratio >= kFocusGoodRatio) {
-      // 「落ちて戻った」を 1 往復と数える。据え置きでは落ちないのでここに来ない
-      if (!_focusWasGood && _focusHunts > 0) {
-        debugPrint('[vcode-rx] focus hunt $_focusHunts/$kFocusHuntCycles');
-      }
-      _focusWasGood = true;
-      if (_focusHunts >= kFocusHuntCycles && _focusAttempts < kFocusLockAttempts) {
-        // 今まさに合っている。この状態で固定すれば、探り直しのボケを避けられる
-        _focusAttempts++;
-        _focusLocked = true;
-        _focusBadRun = 0;
-        debugPrint('[vcode-rx] focus lock (満点率 ${(ratio * 100).round()}%, '
-            '$_focusAttempts/$kFocusLockAttempts 回目)');
-        _setFocusLocked(true);
-      }
-    } else if (ratio < kFocusBadRatio && _focusWasGood) {
+      _focusGoodRun++;
+      _focusBadRun = 0;
+    } else if (ratio < kFocusBadRatio) {
+      _focusBadRun++;
+      _focusGoodRun = 0;
+    }
+    if (_focusWasGood && _focusBadRun >= kFocusStateFrames) {
+      // 合っていたのが続けてボケた = 探り直しが始まった
       _focusWasGood = false;
       _focusHunts++;
+      debugPrint('[vcode-rx] focus hunt $_focusHunts/$kFocusHuntCycles');
+      return;
+    }
+    if (_focusGoodRun < kFocusStateFrames) return;
+    _focusWasGood = true;
+    if (_focusHunts >= kFocusHuntCycles && _focusAttempts < kFocusLockAttempts) {
+      // 探り直しを見たうえで、今まさに合っている。ここで固定すればボケを避けられる
+      _focusAttempts++;
+      _focusLocked = true;
+      _focusBadRun = 0;
+      debugPrint('[vcode-rx] focus lock (回収率 ${(ratio * 100).round()}%, '
+          '$_focusAttempts/$kFocusLockAttempts 回目)');
+      _setFocusLocked(true);
     }
   }
 
@@ -954,6 +977,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     _focusLocked = false;
     _focusWasGood = false;
     _focusHunts = 0;
+    _focusGoodRun = 0;
     _focusBadRun = 0;
     _focusAttempts = 0;
   }
@@ -1104,6 +1128,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _focusLocked = false;
       _focusWasGood = false;
       _focusHunts = 0;
+      _focusGoodRun = 0;
       _focusBadRun = 0;
       _focusAttempts = 0;
       _seeded = false;
