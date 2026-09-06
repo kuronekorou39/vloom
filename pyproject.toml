@@ -12,8 +12,10 @@ dependencies = []
 # デスクトップ送信アプリ (desktop/)。vloom-core は py/ の PyO3 クレートを
 # maturin でビルドするので、このグループを入れるときだけ Rust が要る。
 desktop = ["vloom-core", "pyside6>=6.6"]
-# 開発用スクリプト: tools/make_testdata.py と web/pwa/serve_https.py
-dev = ["pillow>=10", "cryptography>=42"]
+# 開発用スクリプト: tools/make_testdata.py、web/pwa/serve_https.py、
+# tools/test_pwa_receive.py (擬似カメラで PWA の受信を端から端まで試す回帰テスト)。
+# playwright / numpy が無いと test_pwa_receive.py は import で落ちる。
+dev = ["pillow>=10", "cryptography>=42", "playwright>=1.44", "numpy>=1.26"]
 
 [tool.uv]
 # リポジトリ自体はライブラリとして配布しないので、インストール対象にしない。

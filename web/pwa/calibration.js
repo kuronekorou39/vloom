@@ -103,7 +103,7 @@ export function setupCalibration(els) {
     els.diag.textContent =
       `${cameraInfoText(stream)}\n` +
       `スキャン ${size} · ${stats.fps.toFixed(1)} fps · ${lumaText(stats, exposure)}\n` +
-      cellPxText(target * VCODE_GUIDE_FRAC);
+      cellPxText(target, target);
   };
 
   const renderChips = () => {

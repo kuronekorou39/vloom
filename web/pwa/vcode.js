@@ -4,16 +4,32 @@
 // 受信側で CANDIDATES に無い格子は検出できないため、格子は 7x6 / 5x4 のみ。
 
 import { VcodeTx, VcodeRx, FountainDecoder, vcodeUnwrapPayload, vcodeUnwrapFile } from "./pkg/vloom_core_wasm.js";
-import { openCamera, ScanStats, ExposureGuard, cameraInfoText, lumaText, cellPxText } from "./camera.js";
+import {
+  openCamera, ScanStats, ExposureGuard, cameraInfoText, lumaText, cellPxText,
+  gridTooDense, pxPerCell,
+} from "./camera.js";
 
 const REPAIR_RATE = 0.5;
 
 // スキャナに渡すガイド枠幅 (中央正方形クロップの幅に対する比)。UI のガイド枠と一致させる。
 // アプリ側 kVcodeGuideFrac と同値。
 export const VCODE_GUIDE_FRAC = 0.8;
-// スキャン画像の一辺の上限 (これを超える映像は縮小する)。上げるほど解像するが 1 フレームの
-// 処理コストは面積比で増える。
-const SCAN_MAX = 1280;
+// 走査解像度は「選んだ格子が要求する px/セル」から決める。
+//
+// 以前は「長辺 1280px」の一律縮小だった。vcode は縦長 (13x18 で 260x416 セル) なので
+// 効くのは短辺のほうで、1920x1080 のカメラは長辺基準だと 1280x720 に落ち、短辺 720px を
+// 416 セルで割って 1.5px/セル — 3px/セル の下限をまったく満たさない。この設定では
+// 「検出は毎フレーム成功するのに 234 ブロック中 55 しか回収できず、同じ 55 が延々と
+// 返ってきて永久に復元できない」状態になっていた (擬似カメラで再現済み)。
+//
+// 縮小は処理を軽くするためのものなので、要求を満たしたところで止める。足りない映像を
+// さらに縮めても読めなくなるだけなので、そのときは等倍で渡す。
+const SCAN_TARGET_PX_PER_CELL = 3.6;
+// 1 枚あたりの走査画素数の上限。走査はメインスレッドで回るので、これ以上広げると
+// 1 枚の処理がフレーム間隔を超えて取りこぼしのほうが増える。
+const SCAN_MAX_PIXELS = 2560 * 1440;
+// 検出できているのに新しいパケットが増えない状態がこれだけ続いたら、原因を出す
+const STALL_MS = 6000;
 // 診断表示の更新間隔
 const DIAG_INTERVAL_MS = 500;
 
@@ -219,6 +235,13 @@ export class VcodeReceiver {
     this.stats = new ScanStats();
     this._lastDiag = 0;
     this.firstDetectedAt = null;
+    // 重複を除いた被覆 (ESI 集合) と、必要パケット数。進捗表示と停滞判定に使う
+    this.seenEsi = new Set();
+    this.needed = 0;
+    this.lastDistinct = 0;
+    this.lastGainAt = performance.now();
+    this.scanW = 0;
+    this.scanH = 0;
   }
 
   /** 探索する格子を切り替える ("auto" で候補総当たり)。受信中でも即反映する。 */
@@ -236,16 +259,15 @@ export class VcodeReceiver {
 
   // カメラ実解像度・スキャン fps・明るさ・理論 px/セル を出す。読めないときに
   // 「カメラが違う / 解像度不足 / 白飛び / コードが小さすぎ」を切り分けるための実測値。
-  _diag(crop, target) {
+  _diag() {
     const now = performance.now();
     if (now - this._lastDiag < DIAG_INTERVAL_MS) return;
     this._lastDiag = now;
     this.exposure.update(this.stats);
-    const size = crop === target ? `${target}px` : `${crop}→${target}px`;
     this.onDiag(
       `${cameraInfoText(this.stream)}\n` +
-      `スキャン ${size} · ${this.stats.fps.toFixed(1)} fps · ${lumaText(this.stats, this.exposure)}\n` +
-      cellPxText(target * VCODE_GUIDE_FRAC, this.grid)
+      `${this.stats.fps.toFixed(1)} fps · ${lumaText(this.stats, this.exposure)}\n` +
+      cellPxText(this.scanW, this.scanH, this.grid)
     );
   }
 
@@ -303,10 +325,10 @@ export class VcodeReceiver {
     this._positionGuide();
     const vw = this.video.videoWidth, vh = this.video.videoHeight;
     if (!vw || !vh) return;
-    // フレーム全体を走査する (長辺を SCAN_MAX まで縮小)。以前は中央の正方形だけを
+    // フレーム全体を走査する (画素数が上限を超えたぶんだけ縮小)。以前は中央の正方形だけを
     // 切り出していて、縦長のコードが枠に収まらず検出できなかった。マーカー直接検出が
     // 入ったので、コードが画面のどこにどの大きさで写っていても掴める
-    const scale = Math.min(1, SCAN_MAX / Math.max(vw, vh));
+    const scale = this._scanScale(vw, vh);
     const tw = Math.round(vw * scale), th = Math.round(vh * scale);
     this.cap.width = tw; this.cap.height = th;
     const ctx = this.cap.getContext("2d", { willReadFrequently: true });
@@ -318,8 +340,10 @@ export class VcodeReceiver {
       gray[p] = (rgba[q] * 77 + rgba[q + 1] * 150 + rgba[q + 2] * 29) >> 8;
     }
     this.frames++;
+    this.scanW = tw;
+    this.scanH = th;
     this.stats.tick(gray);
-    this._diag(Math.max(vw, vh), Math.max(tw, th));
+    this._diag();
     let report;
     try {
       report = this.rx.scan(gray, tw, th, tw, 0, VCODE_GUIDE_FRAC);
@@ -335,23 +359,78 @@ export class VcodeReceiver {
       const n = report.packetCount();
       let done = false;
       for (let i = 0; i < n; i++) {
-        if (this.dec.addPacket(report.packet(i))) { done = true; break; }
+        const pkt = this.dec ? report.packet(i) : null;
+        if (!pkt) break;
+        // RaptorQ の payload ID = SBN(1) + ESI(3, big-endian)。単一ソースブロック前提で
+        // ESI を「実データの被覆」として数える。同じパケットを何度受けても進まないので、
+        // 進捗はこの重複を除いた数で出さないと「動いているのに終わらない」に見える。
+        if (pkt.length >= 4) this.seenEsi.add((pkt[1] << 16) | (pkt[2] << 8) | pkt[3]);
+        if (this.dec.addPacket(pkt)) { done = true; break; }
       }
-      this.onProgress({ frames: this.frames, detected: this.detected,
-        blocks: report.blocksOk, blocksTotal: report.blocksTotal });
+      // 必要パケット数 K = ceil(ペイロード長 / シンボル長)。RaptorQ は distinct が K を
+      // わずかに超えたところで解ける (表示上はこの K を 100% の目安にする)
+      if (!this.needed && n > 0) {
+        const symbol = report.packet(0).length - 4;
+        if (symbol > 0) this.needed = Math.ceil(Number(this.dec.payloadSize()) / symbol);
+      }
+      this._progress(report.blocksOk, report.blocksTotal);
       if (done) {
         // エンドツーエンド CRC-32 検証。不一致 = 復元結果が破損 → デコーダを捨てて受信続行
         const payload = vcodeUnwrapPayload(this.dec.payload());
         if (!payload) {
           console.warn("[vcode-rx] 整合性エラー: 復元結果が破損。デコーダを再作成して受信続行");
           this.dec = null;
+          this.seenEsi.clear();
+          this.lastDistinct = 0;
+          this.lastGainAt = performance.now();
           return;
         }
         this._finish(payload);
       }
     } else {
-      this.onProgress({ frames: this.frames, detected: this.detected, blocks: 0, blocksTotal: 0 });
+      this._progress(0, 0);
     }
+  }
+
+  /** 走査に使う縮小率。選んだ格子が要求する px/セル を満たすところまでしか縮めない。 */
+  _scanScale(vw, vh) {
+    // "auto" は候補の中で最も密なもの (13x18) を基準にする
+    const grid = this.grid === "auto" ? "13x18" : this.grid;
+    const have = pxPerCell(vw, vh, grid);
+    // 要求より大きく写っていれば、その余剰ぶんだけ縮めて処理を軽くする
+    const want = have > SCAN_TARGET_PX_PER_CELL ? SCAN_TARGET_PX_PER_CELL / have : 1;
+    const budget = Math.sqrt(SCAN_MAX_PIXELS / (vw * vh));
+    return Math.min(1, want, budget);
+  }
+
+  /** 進捗と、進まないときの原因を UI へ返す。 */
+  _progress(blocks, blocksTotal) {
+    const distinct = this.seenEsi.size;
+    if (distinct > this.lastDistinct) {
+      this.lastDistinct = distinct;
+      this.lastGainAt = performance.now();
+    }
+    // 検出できているのにパケットが増えない = 同じ一部のブロックだけを拾い続けている。
+    // 原因はほぼ px/セル 不足 (密すぎる格子) なので、必要な値と対処を名指しで出す。
+    let stall = null;
+    if (this.detected > 0 && performance.now() - this.lastGainAt > STALL_MS) {
+      stall =
+        gridTooDense(this.scanW, this.scanH, this.grid) ||
+        (this.grid === "auto" && this.scanW
+          ? `新しいデータが増えていません。走査 ${this.scanW}×${this.scanH} では ` +
+            `${pxPerCell(this.scanW, this.scanH, "13x18").toFixed(1)} px/セル しかありません ` +
+            `(13×18 の場合)。粗い格子を選ぶか、コードに近づいてください。`
+          : "新しいデータが増えていません。ピント・明るさ・写る大きさを見直してください。");
+    }
+    this.onProgress({
+      frames: this.frames,
+      detected: this.detected,
+      blocks,
+      blocksTotal,
+      distinct,
+      needed: this.needed,
+      stall,
+    });
   }
 
   _finish(rawPayload) {
@@ -384,6 +463,9 @@ export class VcodeReceiver {
         detected: this.detected,
         scanFps: this.stats.fps,
         grid: this.grid,
+        distinct: this.seenEsi.size,
+        needed: this.needed,
+        scan: this.scanW ? `${this.scanW}×${this.scanH}` : "",
       },
     });
   }

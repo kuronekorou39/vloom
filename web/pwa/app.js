@@ -193,15 +193,28 @@ const rxPicker = new CameraPicker($("rxCamera"));
 const receiver = new VcodeReceiver({
   video: $("rxVideo"),
   onDiag: (t) => { $("rxDiag").textContent = t; },
-  onProgress: ({ frames, detected, blocks, blocksTotal }) => {
+  onProgress: ({ frames, detected, blocks, blocksTotal, distinct, needed, stall }) => {
+    // 進捗は「重複を除いたパケット数 / 必要数」で出す。frames や検出回数は増え続けるので、
+    // それだけを出していると、同じブロックしか拾えていない状態が「順調に見えて終わらない」
+    // になっていた (実際に起きていた壊れ方)。
+    const pct = needed ? Math.min(100, Math.floor((distinct / needed) * 100)) : 0;
+    const head = needed
+      ? `復元まで ${pct}% · ${distinct}/${needed} パケット`
+      : detected
+        ? "コードを検出 · ヘッダ待ち"
+        : "コードを探しています";
     $("rxInfo").textContent =
-      `スキャン中 · frames ${frames} · 検出 ${detected} · 直近 ${blocks}/${blocksTotal} ブロック`;
+      `${head} · 直近 ${blocks}/${blocksTotal} ブロック · ${detected}/${frames} 枚検出`;
+    $("rxBar").style.width = `${pct}%`;
+    $("rxStall").textContent = stall || "";
   },
   onDone: async ({ name, type, size, blob, stats }) => {
     // 受信したファイル名は相手の画面から来る = 攻撃者が選べる。HTML に入れる前に必ず
     // エスケープする (以前は素のまま innerHTML に入れていて XSS になっていた)
     const safeName = escHtml(name);
     $("rxInfo").innerHTML = `<span class="ok">✅ 復元成功: ${safeName} (${fmtSize(size)})</span>`;
+    $("rxBar").style.width = "100%";
+    $("rxStall").textContent = "";
     const url = URL.createObjectURL(blob);
     const isImage = type.startsWith("image/");
     const isVideo = type.startsWith("video/");
@@ -229,6 +242,8 @@ const receiver = new VcodeReceiver({
       ["所要時間 (初検出→完了)", `${((s.ms || 0) / 1000).toFixed(2)} 秒`],
       ["フレーム", `${s.detected || 0} 検出 / ${s.frames || 0} 走査`],
       ["スキャン fps", (s.scanFps || 0).toFixed(1)],
+      ["走査解像度", s.scan || "-"],
+      ["パケット", s.needed ? `${s.distinct} 回収 / 必要 ${s.needed}` : `${s.distinct || 0} 回収`],
       ["格子指定", s.grid === "auto" ? "自動 (候補総当たり)" : s.grid],
     ];
     $("rxResult").innerHTML =
@@ -244,6 +259,8 @@ const receiver = new VcodeReceiver({
 $("rxStart").addEventListener("click", async () => {
   $("rxResult").innerHTML = "";
   $("rxError").textContent = "";
+  $("rxStall").textContent = "";
+  $("rxBar").style.width = "0%";
   $("rxInfo").textContent = "スキャン中 — 送信側の vcode を枠に収めてください";
   $("rxStage").classList.add("active"); // 先に全画面を出す (映像の表示サイズが確定してから走査)
   try {

@@ -9,7 +9,10 @@ const LS_KEY = "vloom.cameraId";
 // Windows Hello の赤外線カメラ・深度センサ。可視光の像が得られないため既定から外す。
 const IR_PATTERN = /(^|[^a-z])(ir|infrared|赤外線|depth)([^a-z]|$)/i;
 
-const SIZE = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+// 要求する撮影解像度。vcode は「1 セルが何画素で写るか」で読めるかが決まるので、
+// 取れるだけ大きく開く (ideal なので、対応していない端末は自動で下がる)。
+// 13x18 は縦 416 セルあり、3px/セル には短辺 1400px 級が要る = 1080p では足りない。
+const SIZE = { width: { ideal: 3840 }, height: { ideal: 2160 } };
 
 export const isIrCamera = (label) => IR_PATTERN.test(label || "");
 
@@ -256,20 +259,53 @@ export function lumaText(stats, guard) {
   return `明るさ ${Math.round(stats.mean)} (飽和 ${sat}%)${note}`;
 }
 
-/** vcode のセル幅 = grid_w × ブロック一辺 (Rust 側 Layout::BLOCK と一致させる) */
+/** vcode のブロック一辺 (Rust 側 Layout::BLOCK と一致させる) と上下ストリップの高さ */
 const VCODE_BLOCK = 20;
-const cellsWide = (grid) => parseInt(grid.split("x")[0], 10) * VCODE_BLOCK;
+const VCODE_STRIP = 28;
+/** 格子からコード全体のセル数 [幅, 高さ] (Rust の Layout::width/height と同じ) */
+export const layoutCells = (grid) => {
+  const [gw, gh] = grid.split("x").map(Number);
+  return [gw * VCODE_BLOCK, gh * VCODE_BLOCK + 2 * VCODE_STRIP];
+};
+
+/** 1bit で安定して読める px/セル の下限 (実機の実測値) */
+export const MIN_PX_PER_CELL = 3.0;
 
 /**
- * vcode のガイド枠幅から、1 セルあたり何画素で写るかの理論値を返す。
- * 実機の目安は 1bit で 3px/セル 以上 (マーカー直接検出 + オフセット伝播後)。輝度 4 値は 6px/セル 級が要る。
- * grid は "auto" (候補総当たり) か "9x8" のような固定指定。
+ * 走査画像 (scanW x scanH) にコードを収めたときの px/セル を返す。
+ *
+ * コードは縦長 (13x18 なら 260x416 セル) なので、効くのは短辺と「縦のセル数」。
+ * 以前は長辺 x 幅のセル数で計算していて、13x18 では実際の 2.6 倍を表示していた
+ * (「3.9 px/セル」と出ているのに 1 枚も復号できない、という状態を作っていた)。
  */
-export function cellPxText(guidePx, grid = "auto") {
+export function pxPerCell(scanW, scanH, grid, fill = 0.88) {
+  const [cw, ch] = layoutCells(grid);
+  return Math.min((scanW * fill) / cw, (scanH * fill) / ch);
+}
+
+/**
+ * px/セル の実測を診断行にする。grid は "auto" (候補総当たり) か "9x8" のような固定指定。
+ * 輝度 4 値は 6px/セル 級が要る。
+ */
+export function cellPxText(scanW, scanH, grid = "auto") {
   const grids = grid === "auto" ? ["13x18", "7x6"] : [grid];
-  const fmt = (g) => `${(guidePx / cellsWide(g)).toFixed(1)} px/セル (${g.replace("x", "×")})`;
-  // 1bit の安定目安は 3px/セル (マーカー直接検出 + オフセット伝播後の実測)
-  const densest = guidePx / cellsWide(grids[0]);
-  const mark = densest >= 3 ? "" : densest >= 2.4 ? " ⚠余裕なし" : " ⚠解像度不足";
-  return `ガイド枠 ${Math.round(guidePx)}px → ${grids.map(fmt).join(" / ")}${mark}`;
+  const fmt = (g) => `${pxPerCell(scanW, scanH, g).toFixed(1)} px/セル (${g.replace("x", "×")})`;
+  const densest = pxPerCell(scanW, scanH, grids[0]);
+  const mark =
+    densest >= MIN_PX_PER_CELL ? "" : densest >= 2.4 ? " ⚠余裕なし" : " ⚠解像度不足";
+  return `走査 ${scanW}×${scanH} → ${grids.map(fmt).join(" / ")}${mark}`;
+}
+
+/** その格子がこの走査解像度で現実的に読めるか (読めないなら理由付きの文言を返す) */
+export function gridTooDense(scanW, scanH, grid) {
+  if (grid === "auto") return null;
+  const px = pxPerCell(scanW, scanH, grid);
+  if (px >= MIN_PX_PER_CELL) return null;
+  const [, ch] = layoutCells(grid);
+  const need = Math.ceil((ch * MIN_PX_PER_CELL) / 0.88);
+  return (
+    `${grid.replace("x", "×")} はこのカメラでは密すぎます ` +
+    `(${px.toFixed(1)} px/セル、必要 ${MIN_PX_PER_CELL})。` +
+    `短辺 ${need}px 以上のカメラか、粗い格子 (7×6 / 9×8) を選んでください。`
+  );
 }
