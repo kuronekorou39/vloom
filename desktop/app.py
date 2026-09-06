@@ -66,6 +66,9 @@ class MainWindow(QWidget):
         self.stage_geometry: QRect | None = None
         # 起動直後から静止させるか (--hold)。構図合わせのときに使う
         self.hold_at_start = False
+        # 1 セルを整数画素で描くか (--snap)。効くかは画面の解像度と格子によるので、
+        # 既定は従来どおり切り下げなし。比べて決めるための切り替え。
+        self.snap_cells = False
 
         self.file_label = QLabel("未選択")
         self.file_label.setWordWrap(True)
@@ -86,7 +89,11 @@ class MainWindow(QWidget):
         self.grid = QComboBox()
         self.grid.addItems(GRIDS)
         self.bpc = QComboBox()
-        self.bpc.addItems(["2 (輝度4値)", "1 (白黒)"])
+        # 既定は 1bit (白黒)。輝度 4 値は復号できるが、同じ格子の 1bit より遅い
+        # (docs/experiments.md 2026-08-28)。既定を 4 値にしていたせいで、
+        # --bpc を省いたコマンドが黙って 4 値で送り、13x18 で回収 0/234 になった。
+        # PWA・スマホアプリの既定も 1bit なので、そちらに揃える。
+        self.bpc.addItems(["1 (白黒)", "2 (輝度4値)"])
         self.fps = QSpinBox()
         self.fps.setRange(2, 60)
         self.grid.setCurrentText("13x18 (超密)")  # 既定は縦長・超密 (実測最速)
@@ -231,7 +238,7 @@ class MainWindow(QWidget):
 
     def _update_theory(self) -> None:
         gw, gh = parse_grid(self.grid.currentText())
-        bpc = 2 if self.bpc.currentIndex() == 0 else 1
+        bpc = 1 if self.bpc.currentIndex() == 0 else 2
         fps = self.fps.value()
         kbps = gw * gh * vloom_core.packet_size(bpc) * fps / 1024
         note = "" if (gw, gh) in AUTO_DETECT_GRIDS else "   ※受信側で格子の明示指定が要る"
@@ -247,7 +254,7 @@ class MainWindow(QWidget):
             return
         data, name, mime = payload
         gw, gh = parse_grid(self.grid.currentText())
-        bpc = 2 if self.bpc.currentIndex() == 0 else 1
+        bpc = 1 if self.bpc.currentIndex() == 0 else 2
         fps = self.fps.value()
 
         # 元のファイル名/MIME をヘッダに埋めて送る (受信側で元名・種別をそのまま復元)
@@ -257,7 +264,8 @@ class MainWindow(QWidget):
         tx = vloom_core.VcodeTx(source, extra_repair, gw, gh, bpc)
 
         self.stage = SenderWindow(tx, fps, len(data), name, self.margin.value(),
-                                  self.zoom.value(), self.dx.value(), self.dy.value(),
+                                  self.zoom.value(), self.snap_cells,
+                                  self.dx.value(), self.dy.value(),
                                   hold=self.hold_at_start)
         self.stage.closed.connect(self._on_stage_closed)
         self.stage.setGeometry(self.stage_geometry or self._stage_rect())
@@ -294,7 +302,7 @@ class MainWindow(QWidget):
                        bpc: int | None = None, fps: int | None = None,
                        repair: int | None = None, margin: int | None = None,
                        zoom: float | None = None, dx: float | None = None,
-                       dy: float | None = None, hold: bool = False,
+                       dy: float | None = None, hold: bool = False, snap: bool = False,
                        geometry: tuple[int, int, int, int] | None = None) -> None:
         """コマンドラインから条件を流し込む。指定のないものは UI の値のまま。"""
         if file:
@@ -312,7 +320,7 @@ class MainWindow(QWidget):
                 i = self.grid.count() - 1
             self.grid.setCurrentIndex(i)
         if bpc is not None:
-            self.bpc.setCurrentIndex(0 if bpc == 2 else 1)
+            self.bpc.setCurrentIndex(0 if bpc == 1 else 1)
         if fps is not None:
             self.fps.setValue(fps)
         if repair is not None:
@@ -326,6 +334,7 @@ class MainWindow(QWidget):
         if dy is not None:
             self.dy.setValue(dy)
         self.hold_at_start = hold
+        self.snap_cells = snap
         if geometry is not None:
             self.stage_geometry = QRect(*geometry)
         self._update_theory()

@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import argparse
 import re
+import shlex
+from pathlib import Path
 import statistics
 import subprocess
 import time
@@ -164,7 +166,7 @@ def main() -> int:
     if pkg is None:
         print(f"Vloom が入っていません (探したもの: {', '.join(PKG_CANDIDATES)})")
         return 1
-    print(f"受信アプリ: {pkg}")
+    print(f"受信アプリ: {pkg}", flush=True)
 
     results: dict[str, list[float]] = {n: [] for n, _ in arms}
     extra_cols: dict[str, list[str]] = {n: [] for n, _ in arms}
@@ -179,23 +181,35 @@ def main() -> int:
                 if sender_proc is not None:
                     sender_proc.terminate()
                     sender_proc.wait(timeout=10)
-                print(f"送信側を起動: {want}")
-                sender_proc = subprocess.Popen(want, shell=True)
+                print(f"送信側を起動: {want}", flush=True)
+                # shell を通さずそのまま起動する。cmd.exe 越しだと
+                # ".venv/Scripts/python.exe" のような相対パスが解決できず、
+                # 何も起動しないまま黙って先へ進んでいた。
+                # 実行ファイルは絶対パスに直す (Windows は相対パス + "/" を嫌う)
+                parts = shlex.split(want)
+                exe = Path(parts[0])
+                if exe.exists():
+                    parts[0] = str(exe.resolve())
+                sender_proc = subprocess.Popen(parts)
                 sender_cmd = want
                 time.sleep(args.sender_warmup)
+                if sender_proc.poll() is not None:
+                    print(f"送信側がすぐ終了しました (終了コード {sender_proc.returncode})。"
+                          "コマンドを確認してください")
+                    return 1
             print(f"[{i + 1}/{args.runs}] {name} …", end=" ", flush=True)
             stats = one_run(pkg, extras, args.timeout)
             if stats is None:
-                print("時間切れ")
+                print("時間切れ", flush=True)
                 continue
             k = kbps_of(stats)
             if k is None:
-                print("統計を読めず")
+                print("統計を読めず", flush=True)
                 continue
             results[name].append(k)
             af = stats.get("AF 探り直し", "-")
             extra_cols[name].append(af)
-            print(f"{k:.1f} KB/s (AF {af})")
+            print(f"{k:.1f} KB/s (AF {af})", flush=True)
             time.sleep(args.cool)
 
     if sender_proc is not None:

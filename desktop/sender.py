@@ -39,7 +39,7 @@ def _keep_display_awake(on: bool) -> None:
 class FrameView(QWidget):
     """コードのフレームだけを描く面。白背景にアスペクト維持でフィットさせる。"""
 
-    def __init__(self, margin_cells: int = 0, zoom: float = 1.0,
+    def __init__(self, margin_cells: int = 0, zoom: float = 1.0, snap: bool = False,
                  dx: float = 0.0, dy: float = 0.0) -> None:
         super().__init__()
         self._image: QImage | None = None
@@ -58,11 +58,18 @@ class FrameView(QWidget):
         # コードが窓いっぱいだと外縁がウィンドウ枠や背景と隣接し、コーナー
         # マーカーの外周 (黒) がどこで終わるか読み取りにくくなる。
         self._margin = max(0, margin_cells)
+        self._snap = snap
+        self._cell_px = 1  # 直近の描画で 1 セルに割り当てた物理画素数 (状態バーに出す)
         self.setAutoFillBackground(False)
 
     def set_smooth(self, on: bool) -> None:
         self._smooth = on
         self.update()
+
+    @property
+    def cell_px(self) -> float:
+        """直近の描画で 1 セルに割り当てた物理画素数 (--snap 時は整数)。"""
+        return float(self._cell_px)
 
     def set_placement(self, zoom: float | None = None,
                       dx: float | None = None, dy: float | None = None) -> None:
@@ -108,7 +115,14 @@ class FrameView(QWidget):
         m = self._margin
         avail_h = max(1, self.height() - self._bottom_inset)
         fit = min(self.width() / (iw + 2 * m), avail_h / (ih + 2 * m))
-        dw, dh = int(iw * fit * self._zoom), int(ih * fit * self._zoom)
+        # --snap: 1 セルを整数個の物理画素で描く。端数があると最近傍拡大でセル幅が
+        # 2px と 3px に混ざり、受信側が張る等間隔の格子と噛み合わない (PWA の送信は
+        # 同じ理由で整数倍にしている)。ただし切り下げるぶんコードは小さくなるので、
+        # 「端数の乱れ」と「小さくなる損」のどちらが重いかは画面の解像度と格子による。
+        # 既定は従来どおり切り下げなし。比べて決めるための切り替え。
+        scale = fit * self._zoom
+        self._cell_px = max(1, int(scale)) if self._snap else scale
+        dw, dh = int(iw * self._cell_px), int(ih * self._cell_px)
         cx = self.width() * (0.5 + self._dx)
         cy = avail_h * (0.5 + self._dy)
         target = QRect(int(cx - dw / 2), int(cy - dh / 2), dw, dh)
@@ -126,7 +140,7 @@ class SenderWindow(QWidget):
     closed = Signal()
 
     def __init__(self, tx, fps: int, payload_len: int, label: str,
-                 margin_cells: int = 0, zoom: float = 1.0,
+                 margin_cells: int = 0, zoom: float = 1.0, snap: bool = False,
                  dx: float = 0.0, dy: float = 0.0, hold: bool = False) -> None:
         super().__init__()
         self.tx = tx
@@ -139,7 +153,7 @@ class SenderWindow(QWidget):
         self.fps = fps
 
         self.setWindowTitle("Vloom 送信")
-        self.view = FrameView(margin_cells, zoom, dx, dy)
+        self.view = FrameView(margin_cells, zoom, snap, dx, dy)
         self.status = QLabel("")
         self.status.setStyleSheet("color:#e6e9ef; font-size:12px;")
         # 状態表示の長さでウィンドウの最小幅が決まってしまい、--geometry で指定した
@@ -322,7 +336,8 @@ class SenderWindow(QWidget):
             f"{self.fps}fps 要求 / 実測 {measured:.1f}fps · "
             f"frame {self.index + 1}/{self.frame_count} · {self.pass_no} 巡目 · "
             f"{elapsed:.0f} 秒経過 (1 巡 {loop_sec:.1f} 秒) · "
-            f"配置 --zoom {z:.2f} --dx {dx:+.3f} --dy {dy:+.3f}"
+            f"配置 --zoom {z:.2f} --dx {dx:+.3f} --dy {dy:+.3f} "
+            f"({self.view.cell_px:.2f}px/セル)"
             + ("  [静止中]" if self.hold else "")
         )
         if not self.hold:

@@ -51,6 +51,8 @@ def main() -> int:
     p.add_argument("--hold", action="store_true",
                    help="静止 (調整用): フレームを進めず 1 枚を出し続ける。送信中は H で切替")
     p.add_argument("--start", action="store_true", help="起動と同時に送信を始める")
+    p.add_argument("--snap", action="store_true",
+                   help="1 セルを整数個の物理画素で描く (端数の乱れは消えるがコードは小さくなる)")
     args = p.parse_args()
 
     app = QApplication(sys.argv[:1])
@@ -59,7 +61,7 @@ def main() -> int:
     win.apply_settings(file=args.file, grid=args.grid, bpc=args.bpc,
                        fps=args.fps, repair=args.repair, margin=args.margin,
                        zoom=args.zoom, dx=args.dx, dy=args.dy, hold=args.hold,
-                       geometry=args.geometry)
+                       snap=args.snap, geometry=args.geometry)
     win.show()
     if args.start:
         win.start_now()
