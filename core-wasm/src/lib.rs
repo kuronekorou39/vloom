@@ -3,6 +3,8 @@
 //! `wasm-pack build --target web --release` で `pkg/` に JS モジュールを生成する。
 //! JS 側からは `import init, { FountainEncoder, FountainDecoder } from "./pkg/vloom_core_wasm.js"` で使う。
 
+use std::borrow::Cow;
+
 use ::vloom_fountain as fountain;
 use wasm_bindgen::prelude::*;
 
@@ -294,7 +296,15 @@ fn vcode_success(result: vcode::scan::ScanResult, layout: vcode::Layout) -> Vcod
     }
 }
 
-fn vcode_rotate(y: &[u8], w: usize, h: usize, stride: usize, rot: u32) -> (Vec<u8>, usize, usize) {
+/// Y プレーンを rot 度回した並びにする。
+///
+/// 回転なしで行が詰まっている (stride == width) 入力は作り直す必要がないので借りて返す。
+/// ブラウザからは常に rotation_deg = 0 で来るため、ここが毎フレーム 2MB の
+/// 無駄なコピーになっていた (しかも探索の段ごとに繰り返し呼ばれる)。
+fn vcode_rotate(y: &[u8], w: usize, h: usize, stride: usize, rot: u32) -> (Cow<'_, [u8]>, usize, usize) {
+    if rot % 360 == 0 && stride == w {
+        return (Cow::Borrowed(&y[..w * h]), w, h);
+    }
     let (rw, rh) = match rot {
         90 | 270 => (h, w),
         _ => (w, h),
@@ -312,7 +322,7 @@ fn vcode_rotate(y: &[u8], w: usize, h: usize, stride: usize, rot: u32) -> (Vec<u
             gray[dy * rw + dx] = row[sx];
         }
     }
-    (gray, rw, rh)
+    (Cow::Owned(gray), rw, rh)
 }
 
 #[wasm_bindgen]
@@ -364,7 +374,7 @@ impl VcodeRx {
 
         if let Some((rot, layout, corners)) = self.last {
             let (gray, rw, rh) = vcode_rotate(y, w, h, stride, rot);
-            let img = GrayImage { w: rw, h: rh, data: &gray };
+            let img = GrayImage { w: rw, h: rh, data: &gray[..] };
             if let Ok(result) =
                 scan_frame_tracked_with(&img, &corners, layout, self.last_offsets.as_deref())
             {
@@ -381,7 +391,7 @@ impl VcodeRx {
         };
         for rot in [rotation_deg % 360, (rotation_deg + 180) % 360] {
             let (gray, rw, rh) = vcode_rotate(y, w, h, stride, rot);
-            let img = GrayImage { w: rw, h: rh, data: &gray };
+            let img = GrayImage { w: rw, h: rh, data: &gray[..] };
 
             // 1) コーナーマーカーの直接検出 (アプリと同じ経路)。ガイド枠にも縮尺の仮定にも
             //    依存せず、縦長のコードが画面のどこにどの大きさで写っていても掴める
