@@ -443,6 +443,34 @@ fn scan_frame_ranged(
     decode_at(img, hmat, layout, prior)
 }
 
+/// 追従で「四隅はまだ合っている」と見なす既知セルの一致率。
+/// これを下回ったときだけ精密化 (descend) を回す。高めに取っておかないと、
+/// ずれたまま復号に入ってブロックを落とす。
+const TRACK_SKIP_REFINE: f32 = 0.97;
+
+/// 与えたホモグラフィで、既知セル (コーナー + 較正) がどれだけ一致するかの割合。
+/// descend の採点と同じものを 1 回だけ回す。
+fn known_match(img: &GrayImage, hm: &Homography, layout: Layout, thr: u8) -> f32 {
+    let cells = known_cells(layout);
+    if cells.is_empty() {
+        return 0.0;
+    }
+    // 採点は descend の追従時と同じ 1/4 間引きで足りる
+    let mut n = 0usize;
+    let mut ok = 0usize;
+    for (i, &(r, c, black)) in cells.iter().enumerate() {
+        if (i + 2 * c) % 4 != 0 {
+            continue;
+        }
+        let (x, y) = hm.map(c as f32 + 0.5, r as f32 + 0.5);
+        n += 1;
+        if (img.bilinear(x, y) < thr as f32) == black {
+            ok += 1;
+        }
+    }
+    if n == 0 { 0.0 } else { ok as f32 / n as f32 }
+}
+
 /// 前フレームで成功した 4 隅を初期値に、粗探索なしの座標降下だけで追従スキャンする。
 /// 手持ちのフレーム間変位 (数 px) を吸収する。大きく外れた場合はエラーを返すので、
 /// 呼び出し側は scan_frame (フル探索) にフォールバックすること。
@@ -475,10 +503,18 @@ pub fn scan_frame_tracked_with(
     let thr0 = threshold_for(img, &hmat0, layout);
     #[cfg(feature = "profile")]
     let t1 = std::time::Instant::now();
+    // 前フレームの四隅がまだ十分合っているなら、精密化を丸ごと省く。
+    // 据え置きでは四隅がほとんど動かないのに、descend は 4 隅 x 2 周 x 2 段 x 9 候補 =
+    // 144 回の採点 (約 12 万サンプル) を毎フレーム回しており、追従スキャンの大きな項。
+    // 判定は同じ採点関数を 1 回だけ回すので、1/144 のコストで済む。
     // 60fps 処理予算 (16ms) に収めるため探索ステップは 2 段に抑える。
     // 高フレームレートではフレーム間変位が数 px なのでこれで十分追従できる。
-    let hmat = descend(img, &mut corners, layout, thr0, &[2.0, 0.5], 4)
-        .ok_or(FrameError::CornerMismatch)?;
+    let hmat = if known_match(img, &hmat0, layout, thr0) >= TRACK_SKIP_REFINE {
+        hmat0
+    } else {
+        descend(img, &mut corners, layout, thr0, &[2.0, 0.5], 4)
+            .ok_or(FrameError::CornerMismatch)?
+    };
     #[cfg(feature = "profile")]
     let t2 = std::time::Instant::now();
     let r = decode_at(img, hmat, layout, prior);
