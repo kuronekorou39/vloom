@@ -197,16 +197,19 @@ const fmtSize = (n) => {
 
 const rxPicker = new CameraPicker($("rxCamera"));
 
-// どの ESI (パケット番号) が埋まったかを 1 マス 1 パケットで描く。
+// どの ESI (パケット番号) が埋まったかを帯で描く。
 // 進捗の % だけだと「全体に薄く集まっている」のか「一部だけを繰り返し拾っている」のかが
-// 区別できない。後者は永久に終わらない状態で、実際にそれで詰まっていた。
-// 緑 = source パケット、水色 = repair パケット、暗色 = 未取得。
+// 区別できない。後者は永久に終わらない状態で、今日まさにそれで詰まっていた。
+//
+// 1 マス 1 パケットで描くと、1MB でも 2 万マスを超えて潰れる (実機で細い線の帯になった)。
+// 番号順にバケットへまとめ、そのバケットの充足率を濃淡で出す。
+// 緑 = source パケットの範囲、水色 = repair の範囲。
 const covCanvas = $("rxCoverage");
 let covLast = -1;
 function drawCoverage(seen, needed) {
   if (!seen || !needed) { covCanvas.classList.remove("on"); return; }
   covCanvas.classList.add("on");
-  // 増えていなければ描き直さない (毎フレーム全マスを塗るのは無駄)
+  // 増えていなければ描き直さない
   if (seen.size === covLast) return;
   covLast = seen.size;
   const dpr = window.devicePixelRatio || 1;
@@ -218,22 +221,29 @@ function drawCoverage(seen, needed) {
   // repair も含めて、届いている中で最大の番号までを描く
   let cap = needed;
   for (const e of seen) if (e + 1 > cap) cap = e + 1;
-  // 決まった面積に cap マスを正方で詰める (増えるほど 1 マスを小さくする)
-  let s = 8 * dpr;
-  const fit = () => {
-    const cols = Math.max(1, Math.floor(w / s));
-    return [cols, Math.ceil(cap / cols)];
-  };
-  let [cols, rows] = fit();
-  while (rows * s > h && s > 1) { s -= 0.5 * dpr; [cols, rows] = fit(); }
-  const gap = s > 3 * dpr ? dpr : 0;
-  ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = "rgba(55,71,79,0.85)";
-  ctx.fillRect(0, 0, w, h);
+  const s = Math.max(3 * dpr, Math.round(5 * dpr));
+  const cols = Math.max(1, Math.floor(w / s));
+  const rows = Math.max(1, Math.floor(h / s));
+  const cells = cols * rows;
+  const per = Math.max(1, Math.ceil(cap / cells));
+  const got = new Uint32Array(cells);
   for (const e of seen) {
-    if (e >= cap) continue;
-    ctx.fillStyle = e < needed ? "#4caf50" : "#29b6f6";
-    ctx.fillRect((e % cols) * s, Math.floor(e / cols) * s, s - gap, s - gap);
+    const i = Math.floor(e / per);
+    if (i < cells) got[i]++;
+  }
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "rgba(20,26,32,0.72)";
+  ctx.fillRect(0, 0, w, h);
+  const gap = s > 4 * dpr ? dpr : 0;
+  for (let i = 0; i < cells; i++) {
+    const ratio = Math.min(1, got[i] / per);
+    if (ratio === 0) continue;
+    // source と repair で色を分ける (バケットの中心がどちら側かで判定)
+    const src = (i + 0.5) * per < needed;
+    ctx.fillStyle = src
+      ? `rgba(76,175,80,${0.25 + 0.75 * ratio})`
+      : `rgba(41,182,246,${0.25 + 0.75 * ratio})`;
+    ctx.fillRect((i % cols) * s, Math.floor(i / cols) * s, s - gap, s - gap);
   }
 }
 

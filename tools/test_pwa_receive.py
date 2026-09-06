@@ -30,7 +30,7 @@ PAGES = "https://kuronekorou39.github.io/vloom/index.html"
 
 def build_y4m(path: Path, grid: str, payload_len: int, hold: int, cam: tuple[int, int],
               fill: float, name: str = "e2e.txt",
-              rotate: int = 0) -> tuple[int, int, int, float]:
+              rotate: int = 0, cam_fps: int = 30) -> tuple[int, int, int, float]:
     """vcode のフレーム列を、擬似カメラが読める Y4M (I420) にする。
 
     映像は実機のカメラと同じ寸法 (既定 1920x1080) で作り、コードはその高さの fill 倍に
@@ -85,7 +85,10 @@ def main() -> int:
                     help="コードを回して表示する (PWA を横長の窓で出したときの再現)")
     ap.add_argument("--fill", type=float, default=0.88,
                     help="コードが映像の何割を占めるか (実機で枠に収めた状態が 0.85〜0.9)")
-    ap.add_argument("--hold", type=int, default=2, help="1 フレームを何回書くか (30fps 基準)")
+    ap.add_argument("--hold", type=int, default=2, help="1 フレームを何回書くか (カメラ fps 基準)")
+    ap.add_argument("--cam-fps", type=int, default=30,
+                    help="擬似カメラの fps。受信が処理しきれない速さにすると計算律速になり、"
+                         "格子ごとの計算コストの差を測れる")
     ap.add_argument("--timeout", type=int, default=60, help="復元を待つ秒数")
     ap.add_argument("--shot", help="終了時のスクリーンショット出力先")
     ap.add_argument("--xss", action="store_true",
@@ -97,7 +100,7 @@ def main() -> int:
     tmp = Path(tempfile.gettempdir()) / "vloom_fake_cam.y4m"
     cam = tuple(int(v) for v in args.cam.split("x"))
     w, h, n, cell_px = build_y4m(tmp, args.grid, args.payload, args.hold, cam, args.fill, name,
-                                 args.rotate)
+                                 args.rotate, args.cam_fps)
     print(f"擬似カメラ {w}x{h} · {n} フレーム · 格子 {args.grid} · {args.payload}B "
           f"· {cell_px:.2f} px/セル" + (f" · {args.rotate}度回転" if args.rotate else ""))
 
