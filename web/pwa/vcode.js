@@ -298,6 +298,10 @@ export class VcodeReceiver {
    *  1 枚ずつ配れば枚単位で並列になる (SharedArrayBuffer も COOP/COEP も要らない)。
    *  big.LITTLE では速いコアの数までしか伸びないうえ、増やすほど発熱するので上限を置く。 */
   _workerCount() {
+    // 実機で本数を振って決められるように localStorage で上書きできる
+    // (localStorage.setItem("vloom.workers", "6") など)
+    const forced = parseInt(localStorage.getItem("vloom.workers") || "", 10);
+    if (forced >= 1 && forced <= 8) return forced;
     const cores = navigator.hardwareConcurrency || 4;
     return Math.max(1, Math.min(4, cores - 1));
   }
@@ -430,6 +434,7 @@ export class VcodeReceiver {
     if (!this.dec) {
       try { this.dec = new FountainDecoder(m.oti); } catch (_) { return; }
     }
+    const tDec = performance.now();
     let done = false;
     for (const pkt of m.packets) {
       // RaptorQ の payload ID = SBN(1) + ESI(3, big-endian)。単一ソースブロック前提で
@@ -441,6 +446,9 @@ export class VcodeReceiver {
       const symbol = m.packets[0].length - 4;
       if (symbol > 0) this.needed = Math.ceil(Number(this.dec.payloadSize()) / symbol);
     }
+    // 主スレッドでのデコーダ投入時間 (1 枚あたり)。ワーカーを増やしても伸びないとき、
+    // ここが詰まっているのかを切り分ける
+    this.decMs = this.decMs * 0.9 + (performance.now() - tDec) * 0.1;
     this.distinct = this.seenEsi.size;
     this._progress();
     if (!done) return;
@@ -524,6 +532,7 @@ export class VcodeReceiver {
     this.reader = null;
     this._fpsFrames = 0;
     this._fpsSince = 0;
+    this.decMs = 0;
   }
 
   /** 探索する格子を切り替える ("auto" で候補総当たり)。受信中でも即反映する。 */
@@ -552,7 +561,8 @@ export class VcodeReceiver {
     this.exposure.update(this.stats);
     this.onDiag(
       `${cameraInfoText(this.stream)}\n` +
-      `${this.stats.fps.toFixed(1)} fps · ${lumaText(this.stats, this.exposure)}\n` +
+      `${this.stats.fps.toFixed(1)} fps · 走査 ${this.workers.length} 本 · ` +
+      `投入 ${this.decMs.toFixed(1)}ms · ${lumaText(this.stats, this.exposure)}\n` +
       cellPxText(this.scanW, this.scanH, this.grid)
     );
   }
