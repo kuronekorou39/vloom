@@ -37,11 +37,34 @@ PKG_CANDIDATES = ("app.vloom.vloom.lab", "app.vloom.vloom")
 STATS_RE = re.compile(r"\[vloom-stats\] (.*)")
 
 
+# 対象端末 (-s に渡す)。複数繋がっているときは main で決める
+_serial: str | None = None
+
+
 def adb(*args: str, timeout: float = 30) -> str:
-    return subprocess.run(
-        ["adb", *args], capture_output=True, text=True, timeout=timeout, encoding="utf-8",
+    """adb を呼んで stdout を返す。失敗は黙って空文字にせず、その場で気付けるようにする
+    (USB と Wi-Fi の両方が繋がっていると "more than one device" が stderr に出るだけで、
+    stdout は空になる。これを握りつぶすと「アプリが入っていない」に化けた)。"""
+    cmd = ["adb"] + (["-s", _serial] if _serial else []) + list(args)
+    r = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=timeout, encoding="utf-8",
+        errors="replace",
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"{' '.join(cmd)} が失敗: {(r.stderr or r.stdout).strip()}")
+    return r.stdout
+
+
+def list_devices() -> list[str]:
+    out = subprocess.run(
+        ["adb", "devices"], capture_output=True, text=True, timeout=30, encoding="utf-8",
         errors="replace",
     ).stdout
+    return [
+        line.split("	")[0]
+        for line in out.splitlines()[1:]
+        if line.strip() and line.split("	")[-1].strip() == "device"
+    ]
 
 
 def detect_pkg() -> str | None:
@@ -71,7 +94,7 @@ def one_run(pkg: str, extras: list[str], timeout: float) -> dict[str, str] | Non
     adb("shell", "am", "start", "-n", f"{pkg}/app.vloom.vloom.MainActivity",
         "--ei", "tab", "1", *extras)
     proc = subprocess.Popen(
-        ["adb", "logcat", "-s", "flutter:V"],
+        ["adb"] + (["-s", _serial] if _serial else []) + ["logcat", "-s", "flutter:V"],
         stdout=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
     )
     deadline = time.time() + timeout
@@ -103,6 +126,8 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=120, help="1 試行の待ち時間 (秒)")
     ap.add_argument("--cool", type=float, default=5, help="試行の間に待つ秒数 (発熱対策)")
     ap.add_argument("--pkg", help="受信アプリのパッケージ名 (既定は端末から自動判別)")
+    ap.add_argument("--device", "-s",
+                    help="対象端末のシリアル (USB と Wi-Fi を同時に繋いでいるときに要る)")
     ap.add_argument("--sender", action="append", default=[],
                     help='"条件名=コマンド" 。格子を振るときは送信側も変えないと'
                          '成立しないので、その条件に入る前に送信側を起動し直す')
@@ -120,9 +145,20 @@ def main() -> int:
         name, _, rest = a.partition(":")
         arms.append((name.strip(), rest.split()))
 
-    if not adb("devices").strip().splitlines()[1:]:
+    global _serial
+    devices = list_devices()
+    if not devices:
         print("端末が見つかりません (adb devices)")
         return 1
+    if args.device:
+        _serial = args.device
+    elif len(devices) > 1:
+        print(f"端末が複数繋がっています: {', '.join(devices)}")
+        print("--device <シリアル> で選ぶか、片方を外してください")
+        print("(USB と Wi-Fi の両方が繋がっていると、同じ端末が 2 つに見えます)")
+        return 1
+    else:
+        _serial = devices[0]
 
     pkg = args.pkg or detect_pkg()
     if pkg is None:
