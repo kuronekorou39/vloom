@@ -109,7 +109,7 @@ impl FountainDecoder {
 // =============================================================
 use vloom_vcode as vcode;
 use vloom_vcode::markers::locate_markers;
-use vloom_vcode::scan::{scan_frame, scan_frame_tracked, GrayImage, Quad};
+use vloom_vcode::scan::{scan_frame, scan_frame_tracked_with, GrayImage, Quad};
 
 #[wasm_bindgen]
 pub struct VcodeTx {
@@ -322,13 +322,17 @@ pub struct VcodeRx {
     last: Option<(u32, vcode::Layout, [(f32, f32); 4])>,
     /// 探索するレイアウトの固定指定 (None = CANDIDATES を総当たり)
     forced: Option<vcode::Layout>,
+    /// 直近に成功したフレームの、ブロックごとのサブセルオフセット。
+    /// レンズ歪曲が主因の場でフレーム間ではほとんど動かないので、次フレームの
+    /// 候補の先頭に据えて外れ候補を読む無駄を減らす (アプリ側と同じ仕組み)。
+    last_offsets: Option<Vec<Option<(f32, f32)>>>,
 }
 
 #[wasm_bindgen]
 impl VcodeRx {
     #[wasm_bindgen(constructor)]
     pub fn new() -> VcodeRx {
-        VcodeRx { last: None, forced: None, misses: 0 }
+        VcodeRx { last: None, forced: None, misses: 0, last_offsets: None }
     }
 
     /// 探索するレイアウトを 1 つに固定する (grid_w = 0 で解除)。送信側の格子が分かっている
@@ -361,8 +365,11 @@ impl VcodeRx {
         if let Some((rot, layout, corners)) = self.last {
             let (gray, rw, rh) = vcode_rotate(y, w, h, stride, rot);
             let img = GrayImage { w: rw, h: rh, data: &gray };
-            if let Ok(result) = scan_frame_tracked(&img, &corners, layout) {
+            if let Ok(result) =
+                scan_frame_tracked_with(&img, &corners, layout, self.last_offsets.as_deref())
+            {
                 self.last = Some((rot, layout, result.corners));
+                self.last_offsets = Some(result.block_offsets.clone());
                 self.misses = 0;
                 return vcode_success(result, layout);
             }
@@ -382,6 +389,7 @@ impl VcodeRx {
                 for &layout in &cands {
                     if let Ok(result) = scan_frame(&img, &q, layout) {
                         self.last = Some((rot, layout, result.corners));
+                        self.last_offsets = Some(result.block_offsets.clone());
                         return vcode_success(result, layout);
                     }
                 }
@@ -410,12 +418,14 @@ impl VcodeRx {
                     };
                     if let Ok(result) = scan_frame(&img, &guide, layout) {
                         self.last = Some((rot, layout, result.corners));
+                        self.last_offsets = Some(result.block_offsets.clone());
                         return vcode_success(result, layout);
                     }
                 }
             }
         }
         self.last = None;
+        self.last_offsets = None;
         self.misses = self.misses.wrapping_add(1);
         vcode_fail()
     }

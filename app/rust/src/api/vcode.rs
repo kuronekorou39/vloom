@@ -8,7 +8,9 @@
 use vloom_fountain as fountain;
 use vloom_vcode as vcode;
 use vloom_vcode::markers::locate_markers;
-use vloom_vcode::scan::{locate_code, scan_frame, scan_frame_tracked, scan_frame_wide, GrayImage, Quad};
+use vloom_vcode::scan::{
+    locate_code, scan_frame, scan_frame_tracked_with, scan_frame_wide, GrayImage, Quad,
+};
 
 /// 送信側ハンドル。payload を vcode フレーム列に変換する。
 pub struct VcodeTx {
@@ -350,12 +352,16 @@ pub struct VcodeRx {
     forced: Option<vcode::Layout>,
     /// 追従スキャンの連続失敗回数 (TRACK_RETRY_FRAMES 未満ならフル探索に落とさない)
     track_misses: u32,
+    /// 直近に成功したフレームの、ブロックごとのサブセルオフセット。
+    /// この場の正体はレンズ歪曲と四隅の当てはめ残差で、フレーム間ではほとんど動かない。
+    /// 次フレームの候補の先頭に据えると、外れ候補を読む無駄が減る。
+    last_offsets: Option<Vec<Option<(f32, f32)>>>,
 }
 
 impl VcodeRx {
     #[flutter_rust_bridge::frb(sync)]
     pub fn new() -> VcodeRx {
-        VcodeRx { last: None, last_ok: None, forced: None, track_misses: 0 }
+        VcodeRx { last: None, last_ok: None, forced: None, track_misses: 0, last_offsets: None }
     }
 
     /// 探索するレイアウトを 1 つに固定する (grid_w = 0 で解除)。
@@ -425,12 +431,14 @@ impl VcodeRx {
             let rotate_us = t_rot.elapsed().as_micros() as u32;
             let img = GrayImage { w: rw, h: rh, data: &gray };
             let t_dec = std::time::Instant::now();
-            if let Ok(result) = scan_frame_tracked(&img, &corners, layout) {
+            if let Ok(result) =
+                scan_frame_tracked_with(&img, &corners, layout, self.last_offsets.as_deref())
+            {
                 let decode_us = t_dec.elapsed().as_micros() as u32;
-                self.track_misses = 0;
                 self.track_misses = 0;
                 self.last = Some((rot, layout, result.corners));
                 self.last_ok = Some((rot, layout));
+                self.last_offsets = Some(result.block_offsets.clone());
                 let mut report = success(result, true, layout, rot, rw, rh, rotate_us, decode_us);
                 if debug_dump {
                     // 追従中の画像も PC 解析用に返す (読めないブロックの原因調査)
@@ -484,6 +492,7 @@ impl VcodeRx {
                     self.track_misses = 0;
                     self.last = Some((rot, layout, result.corners));
                     self.last_ok = Some((rot, layout));
+                    self.last_offsets = Some(result.block_offsets.clone());
                     return success(result, false, layout, rot, rw, rh, rotate_us, decode_us);
                 }
             }
@@ -512,6 +521,7 @@ impl VcodeRx {
                     self.track_misses = 0;
                     self.last = Some((rot, layout, result.corners));
                     self.last_ok = Some((rot, layout));
+                    self.last_offsets = Some(result.block_offsets.clone());
                     return success(result, false, layout, rot, rw, rh, rotate_us, decode_us);
                 }
             }
@@ -538,6 +548,7 @@ impl VcodeRx {
                     let decode_us = t_dec.elapsed().as_micros() as u32;
                     self.track_misses = 0;
                     self.last = Some((rot, layout, result.corners));
+                    self.last_offsets = Some(result.block_offsets.clone());
                     return success(result, false, layout, rot, rw, rh, rotate_us, decode_us);
                 }
             }
@@ -568,6 +579,7 @@ impl VcodeRx {
                             self.track_misses = 0;
                             self.last = Some((rot, layout, result.corners));
                             self.last_ok = Some((rot, layout));
+                            self.last_offsets = Some(result.block_offsets.clone());
                             let decode_us = t_dec.elapsed().as_micros() as u32;
                             return success(result, false, layout, rot, rw, rh, rotate_us, decode_us);
                         }
@@ -581,10 +593,12 @@ impl VcodeRx {
                 report.debug_w = rw as u32;
                 report.debug_h = rh as u32;
                 self.last = None;
+                self.last_offsets = None;
                 return report;
             }
         }
         self.last = None;
+        self.last_offsets = None;
         fail(&errors.join(" / "))
     }
 
@@ -788,5 +802,6 @@ impl VcodeRx {
         ];
         self.track_misses = 0;
         self.last = Some((rot, layout, c));
+        self.last_offsets = None; // 構図を入れ替えたので前の場は当てにならない
     }
 }

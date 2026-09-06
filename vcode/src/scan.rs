@@ -180,7 +180,17 @@ pub struct ScanResult {
     pub homography: Homography,
     /// 精密化後の 4 隅 (画像座標、tl→tr→br→bl)。次フレームのトラッキング初期値に使う。
     pub corners: [(f32, f32); 4],
+    /// ブロックごとに CRC が通ったサブセルオフセット (通らなかったブロックは None)。
+    /// この場はレンズ歪曲が主因でフレーム間でほとんど動かないので、次フレームへ
+    /// 引き渡して候補の先頭に置く (OffsetPrior)。
+    pub block_offsets: Vec<Option<(f32, f32)>>,
 }
+
+/// 前フレームで各ブロックの CRC が通ったサブセルオフセットの場。
+/// レンズ歪曲と四隅の当てはめ残差はフレーム間で滑らかに変わるだけなので、
+/// これを候補の先頭に据えると多くのブロックが 1 回目の試行で通る
+/// (総当たりは 5x5 = 25 通りで、外れるほど 1 ブロックのコストが 25 倍になる)。
+pub type OffsetPrior<'a> = Option<&'a [Option<(f32, f32)>]>;
 
 /// コーナーマーカーのセル一覧 (構造が低周波で、粗い位置合わせのスコアに向く)
 fn corner_cells(layout: Layout) -> Vec<(usize, usize, bool)> {
@@ -393,7 +403,7 @@ pub fn scan_frame(
     layout: Layout,
 ) -> Result<ScanResult, FrameError> {
     // 通常受信: 中央ガイド枠付近を ±48px で探索
-    scan_frame_ranged(img, guide, layout, 48, 3)
+    scan_frame_ranged(img, guide, layout, 48, 3, None)
 }
 
 /// 位置合わせ (acquire) 用の広域版。コーナー粗探索を ±96px に広げ、呼び出し側の
@@ -404,7 +414,7 @@ pub fn scan_frame_wide(
     guide: &Quad,
     layout: Layout,
 ) -> Result<ScanResult, FrameError> {
-    scan_frame_ranged(img, guide, layout, 96, 6)
+    scan_frame_ranged(img, guide, layout, 96, 6, None)
 }
 
 fn scan_frame_ranged(
@@ -413,6 +423,7 @@ fn scan_frame_ranged(
     layout: Layout,
     coarse_half: i32,
     coarse_step: usize,
+    prior: OffsetPrior,
 ) -> Result<ScanResult, FrameError> {
     let (wc, hc) = (layout.width() as f32, layout.height() as f32);
 
@@ -429,7 +440,7 @@ fn scan_frame_ranged(
     let hmat = refine_homography(img, &mut corners, layout, thr0, coarse_half, coarse_step)
         .ok_or(FrameError::CornerMismatch)?;
 
-    decode_at(img, hmat, layout)
+    decode_at(img, hmat, layout, prior)
 }
 
 /// 前フレームで成功した 4 隅を初期値に、粗探索なしの座標降下だけで追従スキャンする。
@@ -439,6 +450,18 @@ pub fn scan_frame_tracked(
     img: &GrayImage,
     prev_corners: &[(f32, f32); 4],
     layout: Layout,
+) -> Result<ScanResult, FrameError> {
+    scan_frame_tracked_with(img, prev_corners, layout, None)
+}
+
+/// scan_frame_tracked に、前フレームのサブセルオフセット場 (OffsetPrior) を渡せる版。
+/// 場はレンズ歪曲が主因でフレーム間でほとんど動かないので、これを候補の先頭に置くと
+/// 大半のブロックが 1 回目の試行で CRC を通り、1 枚の処理時間が縮む。
+pub fn scan_frame_tracked_with(
+    img: &GrayImage,
+    prev_corners: &[(f32, f32); 4],
+    layout: Layout,
+    prior: OffsetPrior,
 ) -> Result<ScanResult, FrameError> {
     let (wc, hc) = (layout.width() as f32, layout.height() as f32);
     let mut corners = *prev_corners;
@@ -458,7 +481,7 @@ pub fn scan_frame_tracked(
         .ok_or(FrameError::CornerMismatch)?;
     #[cfg(feature = "profile")]
     let t2 = std::time::Instant::now();
-    let r = decode_at(img, hmat, layout);
+    let r = decode_at(img, hmat, layout, prior);
     #[cfg(feature = "profile")]
     eprintln!(
         "[profile] tracked: threshold {:.2} ms / descend {:.2} ms / decode_at {:.2} ms",
@@ -474,6 +497,7 @@ fn decode_at(
     img: &GrayImage,
     hmat: Homography,
     layout: Layout,
+    prior: OffsetPrior,
 ) -> Result<ScanResult, FrameError> {
     let (w, h) = (layout.width(), layout.height());
     let thr = threshold_for(img, &hmat, layout) as f32;
@@ -659,10 +683,48 @@ fn decode_at(
     // (受信の 1 枚あたり処理時間で最大の項)。以前は「直前に当たったカーブを先に試す」
     // ヒントをブロック間で共有していたが、並列化のために線形カーブ固定で始める
     // 順にした。2 値 (bpc=1) はカーブ補正が無関係なので何も変わらない。
+    // オフセット候補の絞り込み。CRC は「通ったか」しか返さないので、外れた候補には
+    // 毎回 1 ブロック (400 セル) を丸ごと読む代償を払っていた。候補 25 通りを全部
+    // 外すブロック (混ざり帯・ボケ) が 1 枚の復号時間の大半を占める。
+    //
+    // そこで、CRC の前に「セル中心が閾値からどれだけ離れているか」を間引いたセルで測る。
+    // オフセットが半セルずれていればセル中心はセル境界に乗って中間値になるので、
+    // 余裕が最大の候補が正解に最も近い。混ざり帯のブロックはどの候補でも余裕が出ず、
+    // 上位数個を試して落ちればそこで打ち切れる。
+    // 1bit 専用 (輝度 4 値は「閾値からの距離」がそのまま尤度にならない)。
+    // 間引き幅はブロックの一辺 (Layout::BLOCK = 20) と互いに素にする。約数 (5 など) だと
+    // 同じ列ばかり見てしまい、横方向のずれに鈍くなって回収ブロックが 2% 落ちた。
+    const MARGIN_STRIDE: usize = 13; // 400 セル中 31 セルを、列を一巡しながら見る
+    // 上位いくつを実際に CRC 判定するか。合成手振れ 90 枚 x 4 条件での掃引では
+    // 5 が最良 (1 枚 23.3 -> 14.9ms、回収ブロックは -0.5%)。増やすほど取りこぼしは
+    // 減るが速くならず、4 以下にすると回収が 1% 以上落ちる。
+    const RANK_TRY: usize = 5;
+    let margin_at = |or: usize, oc: usize, dx: f32, dy: f32| -> f32 {
+        let n = layout.block * layout.block;
+        let mut sum = 0.0f32;
+        let mut i = 0;
+        while i < n {
+            let (r, c) = (or + i / layout.block, oc + i % layout.block);
+            sum += (sample_raw(r, c, dx, dy) - thr).abs();
+            i += MARGIN_STRIDE;
+        }
+        sum
+    };
+
     // ブロック 1 つを、与えたオフセット候補の順に試して、最初に CRC が通った (ペイロード, オフセット) を返す
     let decode_block_with = |bi: usize, cands: &[(f32, f32)]| -> Option<(Vec<u8>, (f32, f32))> {
         let (or, oc) = layout.block_origin(bi);
         let gamma_order: &[usize] = if bpc == 1 { &[0] } else { &[0, 1, 2] };
+        // 候補が多いときだけ並べ替える (伝播パスの 9 通りなどはそのまま順に試す)
+        let ranked: Vec<(f32, f32)> = if bpc == 1 && cands.len() > RANK_TRY {
+            let mut v: Vec<((f32, f32), f32)> =
+                cands.iter().map(|&(dx, dy)| ((dx, dy), margin_at(or, oc, dx, dy))).collect();
+            v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            v.into_iter().take(RANK_TRY).map(|(o, _)| o).collect()
+        } else {
+            cands.to_vec()
+        };
+        let cands: &[(f32, f32)] = &ranked;
         for (k, &gi) in gamma_order.iter().enumerate() {
             let gamma = GAMMAS[gi];
             // 先頭 (線形) 以外のカーブは中央寄りの 5 オフセットだけ試す (コスト抑制)
@@ -688,7 +750,38 @@ fn decode_at(
         }
         None
     };
-    let decode_block = |bi: usize| decode_block_with(bi, &offs);
+    // 前フレームのオフセット場があれば、そのブロックで通った値を候補の先頭に置く。
+    // 場はレンズ歪曲が主因でフレーム間でほとんど動かないので、多くのブロックが
+    // 1 回目で CRC を通る (外れると 1 ブロックが 25 通りぶんのコストになる)。
+    // 格子が変わると場のブロック数も変わる。長さが合わないものは黙って無視する
+    // (呼び出し側がレイアウト切り替え時に捨て忘れても壊れないように)。
+    let prior = prior.filter(|p| p.len() == layout.block_count());
+    let block_cands = |bi: usize| -> Vec<(f32, f32)> {
+        match prior.and_then(|p| p.get(bi).copied().flatten()) {
+            None => offs.clone(),
+            Some(o) => {
+                let mut v: Vec<(f32, f32)> = Vec::with_capacity(offs.len() + 9);
+                // 予測点 → その周り (±0.25) → 従来の 5x5。同じ点は 1 度だけ試す
+                for &(ddx, ddy) in &[
+                    (0.0f32, 0.0f32), (0.25, 0.0), (-0.25, 0.0), (0.0, 0.25), (0.0, -0.25),
+                    (0.25, 0.25), (-0.25, 0.25), (0.25, -0.25), (-0.25, -0.25),
+                ] {
+                    v.push((o.0 + ddx, o.1 + ddy));
+                }
+                v.extend_from_slice(&offs);
+                let mut seen: Vec<(f32, f32)> = Vec::with_capacity(v.len());
+                v.retain(|&c| {
+                    let dup = seen.iter().any(|&s| (s.0 - c.0).abs() < 1e-3 && (s.1 - c.1).abs() < 1e-3);
+                    if !dup {
+                        seen.push(c);
+                    }
+                    !dup
+                });
+                v
+            }
+        }
+    };
+    let decode_block = |bi: usize| decode_block_with(bi, &block_cands(bi));
     #[cfg(feature = "profile")]
     let td1 = std::time::Instant::now();
     #[cfg(feature = "parallel")]
@@ -798,7 +891,14 @@ fn decode_at(
             break;
         }
     }
-    let blocks: Vec<Option<Vec<u8>>> = found.into_iter().map(|f| f.map(|(p, _)| p)).collect();
+    let mut block_offsets: Vec<Option<(f32, f32)>> = Vec::with_capacity(found.len());
+    let blocks: Vec<Option<Vec<u8>>> = found
+        .into_iter()
+        .map(|f| {
+            block_offsets.push(f.as_ref().map(|(_, o)| *o));
+            f.map(|(p, _)| p)
+        })
+        .collect();
     #[cfg(feature = "profile")]
     eprintln!(
         "[profile] decode_at: corners+header {:.2} ms (header 区間分け含む) / blocks {:.2} ms",
@@ -816,6 +916,7 @@ fn decode_at(
             hmat.map(0.0, hc),
         ],
         homography: hmat,
+        block_offsets,
     })
 }
 
