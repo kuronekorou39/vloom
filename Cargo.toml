@@ -12,8 +12,11 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
-# wasm バイナリを最小化 (core-wasm の release ビルド向け)。
-# ワークスペース直下に置かないと非 root パッケージのプロファイルは無視される。
+# core-wasm の release ビルド向け。
+# 以前は opt-level = "z" (サイズ最小) にしていたが、PWA の受信はスキャナが計算律速で、
+# 実機 (Pixel 9a / Chrome) では 3.6 fps しか出ていなかった。wasm はスレッドを使えず
+# rayon も効かないぶん、コード生成の質がそのまま効く。サイズは 236KB -> 318KB に増えるが、
+# Service Worker が一度キャッシュすれば毎回は落ちてこないので速度を採る。
 [profile.release]
-opt-level = "z"
+opt-level = 3
 lto = true
