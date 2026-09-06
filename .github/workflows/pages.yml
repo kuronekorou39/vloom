@@ -9,6 +9,9 @@ on:
       - "web/pwa/**"
       - "core-wasm/**"
       - "fountain/**"
+      # vcode (スキャナ本体) も wasm に入る。ここが抜けていて、スキャナだけを直しても
+      # Pages が再ビルドされなかった
+      - "vcode/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
