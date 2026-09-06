@@ -296,14 +296,18 @@ export class VcodeReceiver {
    *  1 枚 170ms (実機 Pixel 9a) では 1 本では 6 fps しか出ず、カメラの 30fps に
    *  まったく追いつかない。ワーカーはそれぞれ独立した wasm と追従状態を持つので、
    *  1 枚ずつ配れば枚単位で並列になる (SharedArrayBuffer も COOP/COEP も要らない)。
-   *  big.LITTLE では速いコアの数までしか伸びないうえ、増やすほど発熱するので上限を置く。 */
+   *  実機 (Pixel 9a / Tensor G4 = 大1 + 中3 + 小4) で本数を振った結果、20 秒あたりの
+   *  回収パケットは 1 本 13,223 / 2 本 21,289 / 3 本 23,969 / 4 本 21,068 / 6 本 21,698。
+   *  1 -> 2 で +61%、3 で頭打ち、それ以上は増えない (速いコアの数で決まる)。
+   *  増やすほどワーカーごとに wasm を持つぶんメモリと電力も食うので 3 で止める。
+   *  掃引は後半ほど端末が温まるので、4 本以降がやや不利に出ている可能性はある。 */
   _workerCount() {
     // 実機で本数を振って決められるように localStorage で上書きできる
     // (localStorage.setItem("vloom.workers", "6") など)
     const forced = parseInt(localStorage.getItem("vloom.workers") || "", 10);
     if (forced >= 1 && forced <= 8) return forced;
     const cores = navigator.hardwareConcurrency || 4;
-    return Math.max(1, Math.min(4, cores - 1));
+    return Math.max(1, Math.min(3, cores - 1));
   }
 
   /** 走査ワーカーの一団を起こす。理由は scan-worker.js の先頭を参照。 */
