@@ -197,10 +197,50 @@ const fmtSize = (n) => {
 
 const rxPicker = new CameraPicker($("rxCamera"));
 
+// どの ESI (パケット番号) が埋まったかを 1 マス 1 パケットで描く。
+// 進捗の % だけだと「全体に薄く集まっている」のか「一部だけを繰り返し拾っている」のかが
+// 区別できない。後者は永久に終わらない状態で、実際にそれで詰まっていた。
+// 緑 = source パケット、水色 = repair パケット、暗色 = 未取得。
+const covCanvas = $("rxCoverage");
+let covLast = -1;
+function drawCoverage(seen, needed) {
+  if (!seen || !needed) { covCanvas.classList.remove("on"); return; }
+  covCanvas.classList.add("on");
+  // 増えていなければ描き直さない (毎フレーム全マスを塗るのは無駄)
+  if (seen.size === covLast) return;
+  covLast = seen.size;
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.round(covCanvas.clientWidth * dpr);
+  const h = Math.round(covCanvas.clientHeight * dpr);
+  if (!w || !h) return;
+  if (covCanvas.width !== w || covCanvas.height !== h) { covCanvas.width = w; covCanvas.height = h; }
+  const ctx = covCanvas.getContext("2d");
+  // repair も含めて、届いている中で最大の番号までを描く
+  let cap = needed;
+  for (const e of seen) if (e + 1 > cap) cap = e + 1;
+  // 決まった面積に cap マスを正方で詰める (増えるほど 1 マスを小さくする)
+  let s = 8 * dpr;
+  const fit = () => {
+    const cols = Math.max(1, Math.floor(w / s));
+    return [cols, Math.ceil(cap / cols)];
+  };
+  let [cols, rows] = fit();
+  while (rows * s > h && s > 1) { s -= 0.5 * dpr; [cols, rows] = fit(); }
+  const gap = s > 3 * dpr ? dpr : 0;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "rgba(55,71,79,0.85)";
+  ctx.fillRect(0, 0, w, h);
+  for (const e of seen) {
+    if (e >= cap) continue;
+    ctx.fillStyle = e < needed ? "#4caf50" : "#29b6f6";
+    ctx.fillRect((e % cols) * s, Math.floor(e / cols) * s, s - gap, s - gap);
+  }
+}
+
 const receiver = new VcodeReceiver({
   video: $("rxVideo"),
   onDiag: (t) => { $("rxDiag").textContent = t; },
-  onProgress: ({ frames, detected, blocks, blocksTotal, distinct, needed, stall }) => {
+  onProgress: ({ frames, detected, blocks, blocksTotal, distinct, needed, stall, seen }) => {
     // 進捗は「重複を除いたパケット数 / 必要数」で出す。frames や検出回数は増え続けるので、
     // それだけを出していると、同じブロックしか拾えていない状態が「順調に見えて終わらない」
     // になっていた (実際に起きていた壊れ方)。
@@ -214,6 +254,7 @@ const receiver = new VcodeReceiver({
       `${head} · 直近 ${blocks}/${blocksTotal} ブロック · ${detected}/${frames} 枚検出`;
     $("rxBar").style.width = `${pct}%`;
     $("rxStall").textContent = stall || "";
+    drawCoverage(seen, needed);
   },
   onDone: async ({ name, type, size, blob, stats }) => {
     // 受信したファイル名は相手の画面から来る = 攻撃者が選べる。HTML に入れる前に必ず
@@ -222,6 +263,7 @@ const receiver = new VcodeReceiver({
     $("rxInfo").innerHTML = `<span class="ok">✅ 復元成功: ${safeName} (${fmtSize(size)})</span>`;
     $("rxBar").style.width = "100%";
     $("rxStall").textContent = "";
+    covCanvas.classList.remove("on");
     const url = URL.createObjectURL(blob);
     const isImage = type.startsWith("image/");
     const isVideo = type.startsWith("video/");
@@ -268,6 +310,8 @@ $("rxStart").addEventListener("click", async () => {
   $("rxError").textContent = "";
   $("rxStall").textContent = "";
   $("rxBar").style.width = "0%";
+  covLast = -1;
+  covCanvas.classList.remove("on");
   $("rxInfo").textContent = "スキャン中 — 送信側の vcode を枠に収めてください";
   $("rxStage").classList.add("active"); // 先に全画面を出す (映像の表示サイズが確定してから走査)
   try {

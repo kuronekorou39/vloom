@@ -151,6 +151,9 @@
     #rxTop .rxprog { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.35em; }
     #rxBarWrap { height: 5px; border-radius: 3px; background: rgba(255,255,255,0.25); overflow: hidden; }
     #rxBar { height: 100%; width: 0; border-radius: 3px; background: #22c55e; transition: width .2s; }
+    #rxCoverage { position: absolute; z-index: 5; left: 1em; right: 1em; bottom: 7.5em;
+      height: 56px; width: calc(100% - 2em); border-radius: 4px; display: none; }
+    #rxCoverage.on { display: block; }
     #rxStall:empty { display: none; }
     #rxStall { position: absolute; z-index: 5; left: 1em; right: 1em; top: 4.6em;
       background: rgba(180,83,9,0.92); color: #fff; padding: 0.6em 0.8em; border-radius: 8px;
@@ -322,6 +325,9 @@
     </div>
     <!-- 進捗が止まったときの原因 (px/セル 不足など) を名指しで出す -->
     <div id="rxStall"></div>
+    <!-- どの ESI が埋まったかの可視化。バーの % だけだと「全体に薄く集まっている」のか
+         「一部だけ繰り返し拾っている」のかが分からない (後者は永久に終わらない) -->
+    <canvas id="rxCoverage"></canvas>
     <div id="rxBottom" class="scanbar">
       <div id="rxExpo" hidden>
         <label><input type="checkbox" id="rxExpoAuto" checked /> 自動露出</label>

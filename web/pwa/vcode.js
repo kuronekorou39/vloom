@@ -720,6 +720,7 @@ export class VcodeReceiver {
       distinct: this.distinct,
       needed: this.needed,
       stall,
+      seen: this.seenEsi,
     });
   }
 
