@@ -92,7 +92,14 @@ $("txSize").addEventListener("input", () => {
   $("txSizeVal").textContent = `${$("txSize").value}%`;
 });
 $("txHold").addEventListener("change", () => sender.setHold($("txHold").checked));
-setInterval(() => { if (sender.running) $("txGeom").textContent = sender.info(); }, 500);
+setInterval(() => {
+  if (!sender.running) return;
+  // info() は「寸法」と、読めない大きさのときだけ付く「警告」を改行で返す。
+  // 警告は muted の中に混ぜると見落とすので、別の枠に出す。
+  const [geom, warn] = sender.info().split("\n");
+  $("txGeom").textContent = geom;
+  $("txWarn").textContent = warn || "";
+}, 500);
 
 // 送信の輝度/モアレ調整。キャンバスへの CSS フィルタで効かせる。
 // 輝度=白レベルを下げて受信側の白飛びを抑える。

@@ -39,9 +39,53 @@ export const packetSizeFor = (bpc) => (bpc === 2 ? 92 : 42);
 /** 1 フレームは 2 リフレッシュ周期表示する必要があるため、60Hz 画面での fps 上限 */
 export const REFRESH_SAFE_FPS = 30;
 
-// 送信ステージの余白 (セル)。マーカーの外側に白が要る (受信の環/余白の対比検査)。
-// 画面の外は黒い縁なので、画面いっぱいには描かない
-const TX_MARGIN_CELLS = 6;
+// 送信ステージの余白 (物理画素)。マーカーの外側に白が要る (受信の環/余白の対比検査)。
+// 画面の外は黒い縁なので、画面いっぱいには描かない。
+//
+// 以前はここをセル数 (片側 6 セル) で取っていた。倍率を上げると余白も比例して太るため、
+// 整数へ切り捨てた時点で 1 セルぶん丸ごと失う。窓 502x943 では理想 1.85px/セル が
+// 1px/セル に落ち、面積の 71% を捨てて「読めないコードを黙って出す」状態になっていた。
+// 余白の役目はマーカーの外の白なので、画素で最低限を確保すれば足りる。
+const TX_MARGIN_PX = 16;
+// ただし 1 セルが大きく写る構成では、画素の下限だけだと相対的に細くなりすぎる。
+// セル数でも下限を置く (元は 6 セル固定。半分に減らすぶんは実機で確かめること)。
+const TX_MARGIN_CELLS_MIN = 3;
+
+// 送信側の 1 セルがこれを下回ると、受信側は何をしても読めない。カメラは情報を
+// 増やせないので、近づいても解像度を上げても回復しない (格子を粗くするか、
+// 表示を大きくするしかない)。受信側の下限 3px/セル と同じ値。
+const TX_MIN_PX_PER_CELL = 3;
+
+/** 選べる格子 (密度の高い順)。窓に収まる最密のものを勧めるのに使う */
+const TX_GRIDS = ["13x18", "18x13", "11x14", "11x10", "9x8", "7x6", "5x4"];
+
+/** 格子からコード全体のセル数 [幅, 高さ] (Rust の Layout::width/height と同じ) */
+function txLayoutCells(grid) {
+  const [gw, gh] = grid.split("x").map(Number);
+  return [gw * 20, gh * 20 + 56];
+}
+
+/** 余白 (片側, 物理画素) を決めて、収まる倍率を返す。
+ *  余白はセル数にも依存するので、画素の下限で一度求めてから 1 度だけ効かせ直す。 */
+function txFit(canvasW, canvasH, cw, ch) {
+  const fit = (m) =>
+    Math.max(0, Math.min((canvasW - 2 * m) / cw, (canvasH - 2 * m) / ch));
+  const first = fit(TX_MARGIN_PX);
+  return fit(Math.max(TX_MARGIN_PX, first * TX_MARGIN_CELLS_MIN));
+}
+
+/** 表示領域 (物理画素) に対して、その格子が何 px/セル で描けるか */
+export function txPxPerCell(canvasW, canvasH, grid) {
+  let [cw, ch] = txLayoutCells(grid);
+  // 画面とコードの縦横が食い違うなら 90 度回して描く (_rotated と同じ判定)
+  if ((canvasW > canvasH) !== (cw > ch)) [cw, ch] = [ch, cw];
+  return txFit(canvasW, canvasH, cw, ch);
+}
+
+/** この表示領域で TX_MIN_PX_PER_CELL を満たす最密の格子 (無ければ null) */
+export function txBestGrid(canvasW, canvasH) {
+  return TX_GRIDS.find((g) => txPxPerCell(canvasW, canvasH, g) >= TX_MIN_PX_PER_CELL) || null;
+}
 
 export class VcodeSender {
   constructor({ canvas, onStatus }) {
@@ -91,8 +135,9 @@ export class VcodeSender {
   }
 
   /** 表示領域 (CSS px) を与えて、キャンバスの裏バッファを端末の物理画素に合わせる。
-   *  1 セルを整数個の物理画素で描く。以前は 1080x1080 固定の裏バッファを CSS で拡縮
-   *  していて、セルの境界が画素にまたがってぼけていた (スマホは DPR 3 なので特に)。 */
+   *  以前は 1080x1080 固定の裏バッファを CSS で拡縮していて、セルの境界が画素に
+   *  またがってぼけていた (スマホは DPR 3 なので特に)。裏バッファを物理画素に
+   *  合わせたうえで、そこへ最近傍で描く。 */
   fit(cssW, cssH) {
     this.cssW = cssW; this.cssH = cssH;
     if (!cssW || !cssH) return;
@@ -108,11 +153,24 @@ export class VcodeSender {
   setSizePct(pct) { this.sizePct = pct; this.dirty = true; }
   setHold(on) { this.hold = on; this.dirty = true; }
 
-  /** 現在の描画情報 (診断表示用): 1 セルの物理画素数と画面上の大きさ */
+  /** 現在の描画情報 (診断表示用): 1 セルの物理画素数と画面上の大きさ。
+   *  読めない大きさでしか描けていないときは、その場で対処を出す。 */
   info() {
     if (!this.w) return "";
     const px = this._cellPx();
-    return `${this.w}×${this.h} セル · ${px}px/セル · ${this.w * px}×${this.h * px}px${this._rotated() ? " · 90°回転" : ""}`;
+    const geom =
+      `${this.w}×${this.h} セル · ${px.toFixed(1)}px/セル · ` +
+      `${Math.round(this.w * px)}×${Math.round(this.h * px)}px` +
+      (this._rotated() ? " · 90°回転" : "");
+    if (px >= TX_MIN_PX_PER_CELL) return geom;
+    // カメラは情報を増やせないので、この状態では受信側は何をしても読めない
+    const { canvas } = this;
+    const best = txBestGrid(canvas.width, canvas.height);
+    const need = Math.ceil((TX_MIN_PX_PER_CELL / px) * 100);
+    return `${geom}\n⚠ この大きさでは受信できません (${TX_MIN_PX_PER_CELL}px/セル 必要)。` +
+      (best
+        ? `ウィンドウを ${need}% に広げるか、格子を ${best.replace("x", "×")} にしてください。`
+        : "ウィンドウを大きくしてください (今の大きさではどの格子も足りません)。");
   }
 
   /** 画面とコードの縦横が食い違うとき (横向きの端末で縦長コード) は 90° 回して描く。
@@ -124,12 +182,17 @@ export class VcodeSender {
     return (canvas.width > canvas.height) !== (this.w > this.h);
   }
 
+  /** 1 セルあたりの物理画素数。整数に丸めない。
+   *
+   *  以前は「1 セル = 整数画素」に切り捨てていた (セル境界が画素をまたぐぼけを避けるため)。
+   *  だが実機 A/B では、整数 2.00px/セル と端数 2.32px/セル の実効スループットが
+   *  133.0 対 133.2 KB/s で並んだ (2026-09-07)。丸めて得られる分は測れないのに、
+   *  丸めて失う分は理想倍率の落ち方しだいで面積の 7 割に達する。だから丸めない。 */
   _cellPx() {
     const { canvas } = this;
-    const m = TX_MARGIN_CELLS * 2;
     const [cw, ch] = this._rotated() ? [this.h, this.w] : [this.w, this.h];
-    const max = Math.min(canvas.width / (cw + m), canvas.height / (ch + m));
-    return Math.max(1, Math.floor(max * this.sizePct / 100));
+    const max = txFit(canvas.width, canvas.height, cw, ch);
+    return Math.max(0.1, max * this.sizePct / 100);
   }
 
   _drawFrame(i) {

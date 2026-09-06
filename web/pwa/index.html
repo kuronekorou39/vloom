@@ -83,6 +83,9 @@
       display: flex; gap: 0.4em 0.8em; align-items: center; flex-wrap: wrap; }
     #txBar.hidden { display: none; }
     #txBar .grow { flex: 1; font-size: 0.8em; min-width: 8em; }
+    #txWarn:empty { display: none; }
+    #txWarn { margin-top: 0.35em; padding: 0.4em 0.6em; border-radius: 6px;
+      background: rgba(180,83,9,0.92); color: #fff; font-size: 1.05em; line-height: 1.4; }
     #txBar .txctl { font-size: 0.8em; white-space: nowrap; }
     #txBar input[type="range"] { width: 5em; vertical-align: middle; }
     /* 受信: カメラ映像。開始前後で高さが変わらないよう 4:3 の枠を確保し、映像は
@@ -298,7 +301,9 @@
       <label class="txctl"><input type="checkbox" id="txHold" /> 静止</label>
       <label class="txctl">輝度 <input type="range" id="txBright" min="30" max="100" value="100" /></label>
       <label class="txctl">モアレ <input type="range" id="txBlur" min="0" max="3" step="0.5" value="0" /></label>
-      <div class="grow"><span id="txStatus"></span> <span id="txGeom" class="muted"></span></div>
+      <div class="grow"><span id="txStatus"></span> <span id="txGeom" class="muted"></span>
+        <!-- 読めない大きさでしか描けていないときの警告。muted に混ぜると見落とすので分ける -->
+        <div id="txWarn"></div></div>
       <button id="txStop" class="secondary">停止</button>
     </div>
   </div>
