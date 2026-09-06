@@ -19,8 +19,8 @@
   - 充電しながらの連続計測は熱制限で復号が 2〜3 倍遅くなる。充電を抜いて、
     冷えた状態から始めること。--cool で試行間に待ちを入れられる
   - 1MB 以上を送ること。100KB は 1 秒未満で終わり、定常が測れない
-  - 受信アプリのカメラ権限は先に一度手で許可しておくこと (権限ダイアログが出ると
-    自動起動が止まる)
+  - 受信アプリのカメラ権限は先に通しておくこと。権限ダイアログが出ると自動起動が
+    止まる (adb shell pm grant <パッケージ> android.permission.CAMERA)
 """
 
 from __future__ import annotations
@@ -31,7 +31,9 @@ import statistics
 import subprocess
 import time
 
-DEFAULT_PKG = "app.vloom.vloom.lab"
+# 計測用の lab ビルド (docs/development.md) が入っていればそちらを、
+# 無ければ通常のパッケージを測る。どちらの運用でも --pkg を指定せずに済む
+PKG_CANDIDATES = ("app.vloom.vloom.lab", "app.vloom.vloom")
 STATS_RE = re.compile(r"\[vloom-stats\] (.*)")
 
 
@@ -40,6 +42,15 @@ def adb(*args: str, timeout: float = 30) -> str:
         ["adb", *args], capture_output=True, text=True, timeout=timeout, encoding="utf-8",
         errors="replace",
     ).stdout
+
+
+def detect_pkg() -> str | None:
+    """端末に入っている Vloom を探す (lab があればそちらを優先)。"""
+    installed = {
+        line.strip().removeprefix("package:")
+        for line in adb("shell", "pm", "list", "packages").splitlines()
+    }
+    return next((c for c in PKG_CANDIDATES if c in installed), None)
 
 
 def parse_stats(line: str) -> dict[str, str]:
@@ -91,8 +102,7 @@ def main() -> int:
     ap.add_argument("--runs", type=int, default=3, help="条件あたりの試行回数")
     ap.add_argument("--timeout", type=float, default=120, help="1 試行の待ち時間 (秒)")
     ap.add_argument("--cool", type=float, default=5, help="試行の間に待つ秒数 (発熱対策)")
-    ap.add_argument("--pkg", default=DEFAULT_PKG,
-                    help=f"受信アプリのパッケージ名 (既定 {DEFAULT_PKG})")
+    ap.add_argument("--pkg", help="受信アプリのパッケージ名 (既定は端末から自動判別)")
     ap.add_argument("--sender", action="append", default=[],
                     help='"条件名=コマンド" 。格子を振るときは送信側も変えないと'
                          '成立しないので、その条件に入る前に送信側を起動し直す')
@@ -114,6 +124,12 @@ def main() -> int:
         print("端末が見つかりません (adb devices)")
         return 1
 
+    pkg = args.pkg or detect_pkg()
+    if pkg is None:
+        print(f"Vloom が入っていません (探したもの: {', '.join(PKG_CANDIDATES)})")
+        return 1
+    print(f"受信アプリ: {pkg}")
+
     results: dict[str, list[float]] = {n: [] for n, _ in arms}
     extra_cols: dict[str, list[str]] = {n: [] for n, _ in arms}
     sender_proc: subprocess.Popen | None = None
@@ -132,7 +148,7 @@ def main() -> int:
                 sender_cmd = want
                 time.sleep(args.sender_warmup)
             print(f"[{i + 1}/{args.runs}] {name} …", end=" ", flush=True)
-            stats = one_run(args.pkg, extras, args.timeout)
+            stats = one_run(pkg, extras, args.timeout)
             if stats is None:
                 print("時間切れ")
                 continue
