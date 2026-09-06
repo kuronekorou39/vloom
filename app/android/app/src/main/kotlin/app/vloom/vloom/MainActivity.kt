@@ -34,6 +34,7 @@ class MainActivity : FlutterActivity() {
                             "preset" to intent.getIntExtra("preset", -1),
                             "grid" to intent.getStringExtra("grid"),
                             "camlock" to intent.getStringExtra("camlock"),
+                            "afhunt" to intent.getIntExtra("afhunt", -1),
                             "ev" to intent.getStringExtra("ev"),
                             "aepoint" to intent.getStringExtra("aepoint"),
                             "dump" to intent.getIntExtra("dump", -1),

@@ -47,10 +47,28 @@ adb shell am start -n app.vloom.vloom.lab/app.vloom.vloom.MainActivity \
   # --es aepoint none                 # AE 測光点 (既定 center) を外す
   # --ei exp 2083 --ei iso 300        # 露光時間 µs と ISO の直接指定 (AE off)
   # --es camlock none|ae|both         # 追従安定後のカメラロック
+  # --ei afhunt 0                     # ピントの探り直しを見て AF を固定する挙動を切る
   # --ei dump 4                       # 70% 未満しか読めなかったフレームを N 枚保存
 ```
 
 統計は `adb logcat` の `[vloom-stats]` (完了時) と `[vcode-rx] seq=` (フレームごと) に出ます。
+
+### 条件を振って自動集計する
+
+送信側を流しっぱなしにしたうえで、受信側だけを繰り返し起動して集計します。
+条件は交互に回すので、発熱や環境光の変化が片方に偏りません。
+
+```bash
+# 手持ちでピントが効いているかの A/B (合成計測の裏取り。experiments.md 2026-09-06)
+uv run --group dev python tools/measure_rx.py --runs 4     --arm "AF固定あり:--ei afhunt 1" --arm "AF固定なし:--ei afhunt 0"
+
+# 密度を落としたほうが速いかの A/B
+uv run --group dev python tools/measure_rx.py --runs 4     --arm "13x18:--es grid 13x18" --arm "11x14:--es grid 11x14"
+```
+
+**充電を抜いて、冷えた状態から始めてください。** 充電しながらの連続計測は
+熱制限で復号が 2〜3 倍遅くなります。送るファイルは 1MB 以上に (100KB は 1 秒未満で
+終わり、定常が測れません)。
 
 ## Python 環境 (uv)
 
@@ -112,8 +130,18 @@ uv run --group dev python tools/test_pwa_receive.py --grid 7x6
 uv run --group dev python tools/test_pwa_receive.py --url https://localhost:8443/index.html
 ```
 
-復元まで行けば終了コード 0。擬似カメラは getUserMedia の理想値 (1920x1080) に合わせて
-映像を縮めるので、スクリプト側でその範囲に収まるセル倍率を選んでいる。
+復元まで行けば終了コード 0。擬似カメラの映像は既定で実機と同じ 1920x1080 で作り、
+コードはその 88% を占める大きさに置く (`--cam` / `--fill` で変えられる)。**ここを実寸で
+作らないと「px/セル が足りなくて読めない」という現実の壁を再現できず、テストだけ通って
+しまう**。以前は 650x1040 の小さな映像にコードが画面いっぱいで、13x18 が実機で
+まったく復元できない状態を取り逃がしていた。
+
+スループットも出るので、条件を振って比べられる:
+
+```bash
+uv run --group dev python tools/test_pwa_receive.py --grid 13x18 --payload 1000000
+uv run --group dev python tools/test_pwa_receive.py --grid 13x18 --cam 1280x720   # 低解像度カメラ
+```
 
 **JS の構文検査は .mjs にコピーしてから**。`node --check foo.js` は CommonJS として
 見るため、モジュール前提のファイルでは壊れた文字列を素通りさせることがある

@@ -16,6 +16,7 @@ class LaunchArgs {
       this.preset,
       this.grid,
       this.camLock,
+      this.afHunt,
       this.ev,
       this.aePoint,
       this.dumpLow = 0,
@@ -36,6 +37,11 @@ class LaunchArgs {
   /// (= 既定の ae)。ロック操作はフレーム供給を秒単位で止めることがあるので、
   /// 効果と代償を測るために切り替えられるようにしてある。
   final String? camLock;
+
+  /// ピントの探り直しを見つけて AF を固定する挙動を使うか (1=使う / 0=使わない)。
+  /// 指定がなければ null (= 既定の有効)。手持ちで効くはずの経路なので、
+  /// 三脚での比較計測ができるように切れるようにしてある。
+  final int? afHunt;
 
   /// 露出補正 (EV)。露光時間を短くして、表示の切り替わりがカメラの 1 枚に
   /// 混ざる幅を狭める。指定がなければ null (= 受信画面の既定 -2 EV)
@@ -88,6 +94,8 @@ class LaunchArgs {
         preset: pick('preset'),
         grid: (g is String && g.isNotEmpty) ? g : null,
         camLock: (cl is String && cl.isNotEmpty) ? cl : null,
+        // 未指定は Intent 側で -1 が来る。pick と同じく負値は「指定なし」扱い
+        afHunt: pick('afhunt'),
       );
     } catch (_) {
       // 指定なしで普通に起動する

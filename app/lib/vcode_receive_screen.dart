@@ -62,6 +62,55 @@ const kAutoAcquireCooldownFrames = 45;
 // 転送だけが 1 回の停止と引き換えに露出の安定 (白飛び防止) を得る形にする。
 const kCamLockStreak = 300;
 
+// --- ピント (AF) の探り直しを見つけて、合っている瞬間に固定する ---
+//
+// 合成計測 (track_motion) では、手振れそのものより**ピント**が効く。13x18
+// (3.4px/セル) で中心のボケ半径が 0.35 → 0.80px になるだけで回収ブロックが
+// 8 割落ちた (露光を 2 倍にしたときの 4 割減より桁で大きい)。据え置きなら AF は
+// 一度合えば動かないが、手持ちは距離が変わり続けて連続 AF が探り直す。
+// 実機の「三脚 138 / 手持ち 60 KB/s」はこれで説明が付く。
+//
+// ただし AF ロックは無条件にやると損をする。三脚では既に合っているので、
+// モード切替の停止 (0.5〜5 秒) だけが乗る (実測 both 49 / ae 76 KB/s)。
+// そこで「探り直しが起きている」証拠を掴んでからにする: 満点率が高い状態から
+// 低い状態へ落ちて戻る、を 2 度観測したら AF が探っていると見なし、
+// 次に高い状態になった瞬間 (= 今ピントが合っている) に固定する。
+// 据え置きでは満点率が落ちないのでこの経路には入らない。
+
+/// 「ピントが合っている」と見なす満点ブロック率 (回収 / 全体)
+const kFocusGoodRatio = 0.55;
+
+/// 「ボケている」と見なす満点ブロック率
+const kFocusBadRatio = 0.25;
+
+/// 探り直しと判断するのに必要な、good → bad → good の往復回数
+const kFocusHuntCycles = 2;
+
+/// AF を固定した後、これだけ連続でボケていたら固定を解除して AF に戻す
+/// (距離が変わって固定したピントが外れた場合)
+const kFocusRelockBadFrames = 12;
+
+/// 1 回の受信で AF 固定を試みる上限。切替のたびにフレームが止まるので粘らない
+const kFocusLockAttempts = 3;
+
+// --- 密すぎる格子から降りる誘導 ---
+//
+// ブロックは 400 セル全部が合って初めて回収できるので、1 セルあたりの画素が
+// 足りないと満点率が落ちる。合成計測 (track_motion) では、ボケ 0.80px のとき
+// 13x18 (3.4px/セル) が 35 KB/s まで崩れるのに対し、11x14 (4.2px/セル) は
+// 101 KB/s を保った。読めていないときは、密度を落とすほうが速い。
+// 既定は変えない (据え置きで合っていれば 13x18 が最速のため) — 誘導だけ出す。
+
+/// 誘導を出すか判断し始める検出フレーム数
+const kSparseHintFrames = 40;
+
+/// 平均の回収率がこれを下回っていたら、粗い格子を勧める
+const kSparseHintRatio = 0.35;
+
+/// 勧める格子と、その格子のセル幅 (これ以下なら勧めない)
+const kSparseHintGrid = '11x14';
+const kSparseHintCellsW = 220;
+
 // 既定の露出補正 (EV)。理由は _initCameraInner の適用箇所を参照。
 // -2 は最初の三脚位置では最良だったが、据え直した位置では白が 70 まで沈んで
 // ヘッダが読めなくなった (0 EV なら 157)。カメラの自動露出が何を見るかで
@@ -147,6 +196,12 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   int _detectStreak = 0; // 連続して検出できたフレーム数 (AF/AE ロックの判断に使う)
   bool _restoring = false; // 全パケット到達後の復元・検証中 (画面が固まって見えないように出す)
   bool _camLocked = false; // フォーカス・露出をロック済みか
+  // --- AF の探り直し検出 (定数の解説は kFocusGoodRatio 付近) ---
+  bool _focusLocked = false; // AF を固定済みか
+  bool _focusWasGood = false; // 直近が「合っている」側だったか
+  int _focusHunts = 0; // good -> bad -> good の往復を観測した回数
+  int _focusBadRun = 0; // 固定後に連続でボケているフレーム数
+  int _focusAttempts = 0; // AF 固定を試みた回数
   bool _seeded = false; // acquire 結果で受信位置を確定済み (中央ガイド枠に頼らず追従)
   List<double>? _detCorners; // acquire で検出した 4 隅 (回転後画像座標, 8 値) — ハイライト表示用
   int _detImgW = 0, _detImgH = 0, _detRot = 0; // 検出時の回転後画像寸法と回転 (表示座標への変換用)
@@ -170,6 +225,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   int _framesDetected = 0;
   int _framesTracked = 0;
   int _blocksOk = 0;
+  /// 検出フレームの blocksTotal の累計 (平均回収率 = _blocksOk / これ)
+  int _blocksTotalSum = 0;
   int _packetsAdded = 0;
 
   /// 検出フレーム 1 枚あたりの回収ブロック数の分布 (0 / ~25% / ~50% / ~75% / ~99% / 100%)。
@@ -513,6 +570,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         if (report.tracked) _framesTracked++;
         _firstDetected ??= DateTime.now();
         _blocksOk += report.blocksOk;
+        _blocksTotalSum += report.blocksTotal;
         _blockHist[_histBucket(report.blocksOk, report.blocksTotal)]++;
         _dec ??= FountainDecoder(otiBytes: report.oti);
         if (_packetSize == null && report.packets.isNotEmpty) {
@@ -582,14 +640,15 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           return;
         }
         _missStreak = 0;
-        // 追従が安定したらフォーカスと露出をロックする。据え置きでも AF は数秒おきに
-        // ピントを探り直し、その間 (1〜2 秒) ボケて検出が全滅する。実機ログで
-        // 「順調な追従が周期的に途切れる」として観測された、光学経路最大の敵。
+        // 追従が安定したら露出をロックする。数十秒以上の転送だけが、1 回の停止と
+        // 引き換えに露出の安定 (白飛び防止) を得る形にしている。
         _detectStreak++;
         if (!_camLocked && _detectStreak >= kCamLockStreak) {
           _camLocked = true;
           _lockCamera(true);
         }
+        // ピントの探り直しを見つけて、合っている瞬間に AF を固定する
+        _updateFocusLock(report.blocksOk, report.blocksTotal);
         // 「今どこを読んでいるか」を毎フレーム更新する。追従中も枠が動くので、
         // ロックできているかが画面を見れば分かる。
         if (report.corners.length >= 8) {
@@ -845,6 +904,73 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   /// フォーカスと露出のロック/解除。据え置きの AF ハンチング (数秒おきのピント
   /// 探り直しで 1〜2 秒検出が全滅する) を止める。ブラウザにはできないネイティブの強み。
   /// 未対応端末では例外になるだけなので握りつぶす。
+  /// 満点ブロック率の推移から AF の探り直しを見つけ、合っている瞬間に固定する。
+  /// 判断の根拠と定数は kFocusGoodRatio 付近を参照。
+  void _updateFocusLock(int ok, int total) {
+    // 露出だけをロックする設定 (既定) でも、AF の固定はこちらで別に判断する。
+    // camlock=none は「カメラに一切触らない」、both は「_lockCamera が AF も握る」
+    // 指定なので、どちらもこちらでは触らない。afhunt=0 で比較計測用に切れる。
+    final mode = LaunchArgs.cached.camLock ?? 'ae';
+    if (mode == 'none' || mode == 'both' || total <= 0) return;
+    if (LaunchArgs.cached.afHunt == 0) return;
+    final ratio = ok / total;
+    if (_focusLocked) {
+      // 固定したピントが外れた (距離が変わった) なら AF に戻す
+      _focusBadRun = ratio < kFocusBadRatio ? _focusBadRun + 1 : 0;
+      if (_focusBadRun >= kFocusRelockBadFrames) {
+        _focusBadRun = 0;
+        _focusLocked = false;
+        _focusWasGood = false;
+        debugPrint('[vcode-rx] focus unlock (ピントが外れた)');
+        _setFocusLocked(false);
+      }
+      return;
+    }
+    if (ratio >= kFocusGoodRatio) {
+      // 「落ちて戻った」を 1 往復と数える。据え置きでは落ちないのでここに来ない
+      if (!_focusWasGood && _focusHunts > 0) {
+        debugPrint('[vcode-rx] focus hunt $_focusHunts/$kFocusHuntCycles');
+      }
+      _focusWasGood = true;
+      if (_focusHunts >= kFocusHuntCycles && _focusAttempts < kFocusLockAttempts) {
+        // 今まさに合っている。この状態で固定すれば、探り直しのボケを避けられる
+        _focusAttempts++;
+        _focusLocked = true;
+        _focusBadRun = 0;
+        debugPrint('[vcode-rx] focus lock (満点率 ${(ratio * 100).round()}%, '
+            '$_focusAttempts/$kFocusLockAttempts 回目)');
+        _setFocusLocked(true);
+      }
+    } else if (ratio < kFocusBadRatio && _focusWasGood) {
+      _focusWasGood = false;
+      _focusHunts++;
+    }
+  }
+
+  /// AF の判定状態を初期に戻す (受信のやり直し・カメラの作り直し)。
+  /// 固定していたら AF に返してから捨てる。
+  void _resetFocusState() {
+    if (_focusLocked) _setFocusLocked(false);
+    _focusLocked = false;
+    _focusWasGood = false;
+    _focusHunts = 0;
+    _focusBadRun = 0;
+    _focusAttempts = 0;
+  }
+
+  /// AF だけを固定/解除する (露出は _lockCamera が別に扱う)。
+  /// FocusMode の切替はフレーム供給を 0.5〜5 秒止めることがあるので、
+  /// 呼ぶのは _updateFocusLock が「探り直しが起きている」と判断したときだけ。
+  Future<void> _setFocusLocked(bool lock) async {
+    final cam = _cam;
+    if (cam == null || !cam.value.isInitialized) return;
+    try {
+      await cam.setFocusMode(lock ? FocusMode.locked : FocusMode.auto);
+    } catch (e) {
+      debugPrint('[vcode-rx] setFocusMode failed: $e');
+    }
+  }
+
   Future<void> _lockCamera(bool lock) async {
     final cam = _cam;
     if (cam == null || !cam.value.isInitialized) return;
@@ -870,12 +996,14 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   /// 受信中のやり直し。集めたパケットと追従状態を捨てて最初から始める。
   /// カメラは開いたままなので即座に再開する。
   void _restartReceive() {
+    _resetFocusState();
     setState(() {
       _dec = null;
       _packetSize = null;
       _seenEsi.clear();
       _packetsAdded = 0;
       _blocksOk = 0;
+      _blocksTotalSum = 0;
       _blockHist.fillRange(0, _blockHist.length, 0);
       _errorKinds.clear();
       _framesSeen = 0;
@@ -952,6 +1080,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _framesDetected = 0;
       _framesTracked = 0;
       _blocksOk = 0;
+      _blocksTotalSum = 0;
       _blockHist.fillRange(0, _blockHist.length, 0);
       _errorKinds.clear();
       _packetsAdded = 0;
@@ -971,6 +1100,12 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _missStreak = 0;
       _detectStreak = 0;
       _camLocked = false; // カメラは作り直すので AF/AE は自動に戻る
+      // カメラごと作り直すため、AF の固定も判定の履歴も無効になる
+      _focusLocked = false;
+      _focusWasGood = false;
+      _focusHunts = 0;
+      _focusBadRun = 0;
+      _focusAttempts = 0;
       _seeded = false;
       _detCorners = null;
       _status = 'カメラ起動待ち';
@@ -1164,6 +1299,15 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       ('回収ブロック', '$_blocksOk (部分回収込み)'),
       ('　1 枚あたり分布', _histText()),
       ('未検出の内訳', _errorKindsText()),
+      // AF の探り直しをいくつ観測し、固定できたか。手持ちの遅さがピント由来かを
+      // 実機ログで確かめるための一次情報 (三脚では 0 回のままになるはず)
+      (
+        'AF 探り直し',
+        _focusAttempts > 0
+            ? '$_focusHunts 回検出 → $_focusAttempts 回固定'
+                '${_focusLocked ? " (固定中)" : " (解除済み)"}'
+            : '$_focusHunts 回検出 (固定せず)',
+      ),
       ('投入パケット', '$_packetsAdded'),
       ('distinct パケット', '${_seenEsi.length}'),
       if (_integrityFails > 0) ('整合性エラー再試行', '$_integrityFails 回'),
@@ -1294,7 +1438,53 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     return null;
   }
 
+  /// 密度を落としたほうが速い状況なら、その誘導文を返す。
+  /// 検出はできているのに満点ブロックが集まらない = 1 セルあたりの画素が足りない。
+  String? _sparseHint() {
+    if (_framesDetected < kSparseHintFrames || _blocksTotalSum <= 0) return null;
+    if (_detCellsW <= kSparseHintCellsW) return null; // すでに十分粗い
+    if (_forcedGrid == kSparseHintGrid) return null;
+    final ratio = _blocksOk / _blocksTotalSum;
+    if (ratio >= kSparseHintRatio) return null;
+    return '読めているのは ${(ratio * 100).round()}% です。'
+        'タップして $kSparseHintGrid にすると速いことがあります';
+  }
+
+  Widget _hintBadge(String text, {VoidCallback? onTap}) {
+    final badge = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Text(
+        text,
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          color: Colors.amberAccent,
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+    return onTap == null ? badge : GestureDetector(onTap: onTap, child: badge);
+  }
+
   List<Widget> _hintWidgets() {
+    final sparse = _sparseHint();
+    return [
+      if (sparse != null)
+        _hintBadge(sparse, onTap: () {
+          // 送信側も同じ格子にしないと読めないので、切り替えたことが分かるように
+          // 通常の格子選択と同じ経路 (_selectGrid) を通す
+          final i = kPresets.indexWhere((p) => p.grid == kSparseHintGrid);
+          if (i >= 0) _selectPreset(i);
+        }),
+      ..._legacyHintWidgets(),
+    ];
+  }
+
+  List<Widget> _legacyHintWidgets() {
     final h = _guideHint();
     if (h == null) return const [];
     return [
