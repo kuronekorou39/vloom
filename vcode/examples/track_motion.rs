@@ -18,7 +18,7 @@ use vloom_vcode::{encode_frame, Bitmap, FrameHeader, Layout, VERSION};
 /// 受信カメラの画素数 (Pixel 9a の max = 1600x1200 を縦持ちに回した向き)
 const CAM_W: usize = 1200;
 const CAM_H: usize = 1600;
-/// 露光時間 / フレーム間隔。動きボケの量を決める
+/// 露光時間 / フレーム間隔の既定 (--exposure で上書き)。動きボケと混ざり帯の量を決める
 const EXPOSURE_FRAC: f32 = 0.25;
 /// 露光内のサンプル数 (動きボケの積分)
 const SUBS: usize = 3;
@@ -103,9 +103,18 @@ fn corners_at(shake: &Shake, t: f32, code_w: f32, code_h: f32) -> [(f32, f32); 4
 /// 成分で、実測ではコードが画角の 9 割を占めると周辺が ±1.5 セル (3.4px/セルで約 5px)
 /// ずれる。ここが手持ちでブロックが落ちる主因なので、同じ量を合成側にも入れる。
 const LENS_K1: f32 = 0.005;
-/// 画面中心 / 周辺のボケ半径 (px)。AF が中心に合っていても周辺は像面湾曲で緩む
+/// 画面中心 / 周辺のボケ半径 (px) の既定 (--blur で中心側を上書き)。
+/// AF が中心に合っていても周辺は像面湾曲で緩む。手持ちでは AF が合わせ直す間、
+/// 中心のボケがこれより大きくなる。
 const BLUR_CENTER: f32 = 0.35;
 const BLUR_EDGE: f32 = 1.15;
+
+/// 実行時パラメータ (掃引して、手持ちで効いているのが動きか光学かを切り分ける)
+#[derive(Clone, Copy)]
+struct Opt {
+    exposure: f32,
+    blur: f32,
+}
 
 /// 画像座標 → 歪曲を取り除いた理想座標 (中心からの距離の 3 次で内側へ)
 fn undistort(x: f32, y: f32) -> (f32, f32) {
@@ -148,13 +157,13 @@ fn splat(acc: &mut [f32], frames: &[Bitmap], row_frame: &dyn Fn(usize) -> usize,
 
 /// 中心から離れるほど強くなるボケ。分離可能な 3 タップで近似する
 /// (半径 r のガウスは、両隣に r^2/2 を配る 3 タップとほぼ同じ)。
-fn defocus(buf: &mut [f32]) {
+fn defocus(buf: &mut [f32], blur_center: f32) {
     let (cx, cy) = (CAM_W as f32 / 2.0, CAM_H as f32 / 2.0);
     let r_norm = (cx * cx + cy * cy).sqrt();
     let weight = |x: usize, y: usize| {
         let (dx, dy) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
         let r = (dx * dx + dy * dy).sqrt() / r_norm;
-        let sigma = BLUR_CENTER + (BLUR_EDGE - BLUR_CENTER) * r * r;
+        let sigma = blur_center + (BLUR_EDGE - BLUR_CENTER).max(0.0) * r * r;
         (sigma * sigma / 2.0).min(0.45)
     };
     let src = buf.to_vec();
@@ -175,12 +184,12 @@ fn defocus(buf: &mut [f32]) {
     }
 }
 
-fn render(frames: &[Bitmap], shake: &Shake, i: usize, code_w: f32, code_h: f32) -> Vec<u8> {
+fn render(frames: &[Bitmap], shake: &Shake, i: usize, code_w: f32, code_h: f32, opt: Opt) -> Vec<u8> {
     let t = i as f32 / FPS;
     let mut sum = vec![0.0f32; CAM_W * CAM_H];
     let mut acc = vec![0.0f32; CAM_W * CAM_H];
     for s in 0..SUBS {
-        let sub = EXPOSURE_FRAC * (s as f32 + 0.5) / SUBS as f32 / FPS;
+        let sub = opt.exposure * (s as f32 + 0.5) / SUBS as f32 / FPS;
         let ts = t + sub;
         let dst = corners_at(shake, ts, code_w, code_h);
         acc.iter_mut().for_each(|v| *v = 0.0);
@@ -196,7 +205,7 @@ fn render(frames: &[Bitmap], shake: &Shake, i: usize, code_w: f32, code_h: f32) 
     }
     let inv = 1.0 / SUBS as f32;
     sum.iter_mut().for_each(|d| *d *= inv);
-    defocus(&mut sum);
+    defocus(&mut sum, opt.blur);
     let mut rng = Lcg(0xBEEF + i as u64);
     sum.iter()
         .map(|v| {
@@ -235,6 +244,7 @@ fn run(
     n_frames: usize,
     use_prior: bool,
     cell_px: f32,
+    opt: Opt,
 ) -> (usize, usize, f64) {
     let frames = build_frames(layout, 8);
     let (code_w, code_h) = (layout.width() as f32 * cell_px, layout.height() as f32 * cell_px);
@@ -245,7 +255,7 @@ fn run(
     let mut scan_ms = 0.0f64;
 
     for i in 0..n_frames {
-        let gray = render(&frames, shake, i, code_w, code_h);
+        let gray = render(&frames, shake, i, code_w, code_h, opt);
         let img = GrayImage { w: CAM_W, h: CAM_H, data: &gray };
         let t0 = Instant::now();
         let mut ok = false;
@@ -281,45 +291,57 @@ fn run(
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args
-        .iter()
-        .position(|a| a == "--frames")
-        .and_then(|i| args.get(i + 1))
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(90);
-    let layout = Layout::V6_XDENSE;
-    // 実機の 3.1〜3.5 px/セル に合わせる (13x18 を縦持ち視野いっぱいに写した状態)
-    let cell_px = (CAM_H as f32 * 0.88) / layout.height() as f32;
+    let num = |name: &str, def: f32| -> f32 {
+        args.iter()
+            .position(|a| a == name)
+            .and_then(|i| args.get(i + 1))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(def)
+    };
+    let n = num("--frames", 90.0) as usize;
+    let grids = if args.iter().any(|a| a == "--grids") {
+        vec![Layout::V2_ULTRA, Layout::V4_TALL, Layout::V6_XDENSE]
+    } else {
+        vec![Layout::V6_XDENSE]
+    };
+    println!("{CAM_W}x{CAM_H} / 1bit / {n} フレーム · コードは画角の 88% を占める");
     println!(
-        "13x18 / 1bit / {:.2} px/セル / {CAM_W}x{CAM_H} / 露光 {:.0}% / {n} フレーム\n",
-        cell_px,
-        EXPOSURE_FRAC * 100.0
+        "手持ちで失われるぶんが「動き」か「光学」かを見る。
+         露光 = 露光時間 / フレーム間隔 (動きボケと、前後フレームが混ざる帯の量)。
+         ボケ = 画面中心のボケ半径 px (AF が合わせ直している間はここが大きくなる)。
+"
     );
     println!(
-        "{:<24} {:>9} {:>13} {:>11} {:>9}  {}",
-        "手振れ (並進/回転)", "検出", "回収ブロック", "実効 KB/s", "scan ms", "オフセット探索"
+        "{:<8} {:>8} {:<20} {:>6} {:>6} {:>8} {:>12} {:>11}",
+        "格子", "px/セル", "手振れ", "露光", "ボケ", "検出", "回収ブロック", "実効 KB/s"
     );
-    for &(tr, rot, name) in &[
-        (0.0f32, 0.0f32, "三脚 (0px / 0.00deg)"),
-        (3.0, 0.15, "軽い (3px / 0.15deg)"),
-        (7.0, 0.35, "手持ち (7px / 0.35deg)"),
-        (14.0, 0.7, "強い (14px / 0.70deg)"),
-    ] {
-        for &use_prior in &[false, true] {
-            let shake = Shake::new(tr, rot, 0.006, 12345);
-            let (det, blk, ms) = run(layout, &shake, n, use_prior, cell_px);
-            // 1 ブロック = 42 byte のパケット。取りこぼしなく積めた場合の実効速度
-            let kbps = blk as f64 * 42.0 * FPS as f64 / n as f64 / 1024.0;
-            println!(
-                "{:<24} {:>3}/{:<5} {:>13} {:>11.1} {:>9.1}  {}",
-                name,
-                det,
-                n,
-                blk,
-                kbps,
-                ms,
-                if use_prior { "オフセット引継ぎ" } else { "現状 (毎回 5x5)" }
-            );
+    let shakes: [(f32, f32, &str); 2] = [
+        (0.0, 0.0, "三脚 (0px/0.00deg)"),
+        (7.0, 0.35, "手持ち (7px/0.35deg)"),
+    ];
+    // 露光とボケを別々に振る。片方だけを動かした行を比べれば、どちらが効くか分かる
+    let opts: [(f32, f32); 4] = [
+        (0.25, 0.35), // 基準 (ピントが合っている)
+        (0.50, 0.35), // 露光だけ 2 倍
+        (0.25, 0.80), // ボケだけ増やす (AF が合わせ直している最中)
+        (0.25, 1.20), // ボケだけさらに増やす
+    ];
+    for &layout in &grids {
+        // どの格子も同じ画角に収める = 密なほど 1 セルが小さくなる
+        let cell_px = (CAM_H as f32 * 0.88) / layout.height() as f32;
+        let name_g = format!("{}x{}", layout.grid_w, layout.grid_h);
+        for &(tr, rot, name) in &shakes {
+            for &(exposure, blur) in &opts {
+                let shake = Shake::new(tr, rot, 0.006, 12345);
+                let opt = Opt { exposure, blur };
+                let (det, blk, _ms) = run(layout, &shake, n, true, cell_px, opt);
+                // 1 ブロック = 42 byte のパケット。取りこぼしなく積めた場合の実効速度
+                let kbps = blk as f64 * 42.0 * FPS as f64 / n as f64 / 1024.0;
+                println!(
+                    "{:<8} {:>8.2} {:<20} {:>6.2} {:>6.2} {:>4}/{:<3} {:>12} {:>11.1}",
+                    name_g, cell_px, name, exposure, blur, det, n, blk, kbps
+                );
+            }
         }
     }
 }
