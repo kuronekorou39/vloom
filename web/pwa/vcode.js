@@ -273,7 +273,7 @@ export class VcodeReceiver {
     this.cap = document.createElement("canvas");
     this.stream = null;
     this.rafId = null;
-    this.worker = null;
+    this.workers = [];
     this.guideEl = null;
     this._onResize = () => this._positionGuide();
   }
@@ -288,63 +288,76 @@ export class VcodeReceiver {
     this._ensureGuide();
     this.video.addEventListener("loadedmetadata", this._onResize);
     window.addEventListener("resize", this._onResize);
-    this._startWorker();
+    this._startWorkers();
   }
 
-  /** 走査ワーカーを起こす。別スレッドにする理由は scan-worker.js の先頭を参照。 */
-  _startWorker() {
+  /** 走査ワーカーの数。
+   *
+   *  1 枚 170ms (実機 Pixel 9a) では 1 本では 6 fps しか出ず、カメラの 30fps に
+   *  まったく追いつかない。ワーカーはそれぞれ独立した wasm と追従状態を持つので、
+   *  1 枚ずつ配れば枚単位で並列になる (SharedArrayBuffer も COOP/COEP も要らない)。
+   *  big.LITTLE では速いコアの数までしか伸びないうえ、増やすほど発熱するので上限を置く。 */
+  _workerCount() {
+    const cores = navigator.hardwareConcurrency || 4;
+    return Math.max(1, Math.min(4, cores - 1));
+  }
+
+  /** 走査ワーカーの一団を起こす。理由は scan-worker.js の先頭を参照。 */
+  _startWorkers() {
+    const n = this._workerCount();
+    this.workers = [];
     try {
-      this.worker = new Worker(new URL("./scan-worker.js", import.meta.url), { type: "module" });
+      for (let i = 0; i < n; i++) {
+        const w = new Worker(new URL("./scan-worker.js", import.meta.url), { type: "module" });
+        w.busy = false;
+        w.onmessage = (e) => this._onWorker(w, e.data);
+        w.onerror = (err) => {
+          console.warn("[vcode-rx] ワーカーが起動できないので主スレッドで走査する", err.message);
+          this._fallbackToMainThread();
+        };
+        w.postMessage({ k: "init", grid: this.grid });
+        this.workers.push(w);
+      }
     } catch (e) {
       console.warn("[vcode-rx] ワーカーを作れないので主スレッドで走査する", e);
       this._fallbackToMainThread();
       return;
     }
-    this.worker.onmessage = (e) => this._onWorker(e.data);
-    this.worker.onerror = (e) => {
-      console.warn("[vcode-rx] ワーカーが起動できないので主スレッドで走査する", e.message);
-      this._fallbackToMainThread();
-    };
-    this.worker.postMessage({ k: "init", grid: this.grid });
+    this.readyCount = 0;
   }
 
-  _onWorker(m) {
+  _onWorker(w, m) {
     switch (m.k) {
       case "ready":
-        this._feedWorker();
+        w.ready = true;
+        // 1 本でも動き出したら映像を流し始める (残りは追いついた順に加わる)
+        if (++this.readyCount === 1) this._feedWorkers();
         break;
-      case "progress":
-        this._onWorkerProgress(m);
-        break;
-      case "ack":
-        // 退避経路: 1 枚ぶんの処理が終わった合図 (次の 1 枚を送ってよい)
-        this._inFlight = false;
-        break;
-      case "integrity":
-        console.warn("[vcode-rx] 整合性エラー: 復元結果が破損。デコーダを作り直して受信続行");
-        this.lastDistinct = 0;
-        this.lastGainAt = performance.now();
-        break;
-      case "done":
-        this._finish(m.payload);
-        break;
-      case "error":
-        console.warn("[vcode-rx] worker:", m.msg);
+      case "scanned":
+        w.busy = false;
+        this._onScanned(m);
         break;
       default:
         break;
     }
   }
 
-  /** カメラ映像をワーカーへ渡す。VideoFrame を直接読める環境ならそちらを使う。 */
-  _feedWorker() {
+  /** 空いているワーカーを 1 本返す (無ければ null)。 */
+  _idleWorker() {
+    return (this.workers || []).find((w) => w.ready && !w.busy) || null;
+  }
+
+  /** カメラ映像をワーカーへ配る。VideoFrame を直接読める環境ならそちらを使う。 */
+  _feedWorkers() {
+    if (this.feeding) return;
+    this.feeding = true;
     const track = this.stream && this.stream.getVideoTracks()[0];
     if (track && typeof MediaStreamTrackProcessor !== "undefined") {
       try {
         // プレビュー用の track とは別に読む (同じ track を 2 か所で消費しないよう複製)
         this.procTrack = track.clone();
         const proc = new MediaStreamTrackProcessor({ track: this.procTrack });
-        this.worker.postMessage({ k: "stream", readable: proc.readable }, [proc.readable]);
+        this._pump(proc.readable);
         return;
       } catch (e) {
         console.warn("[vcode-rx] VideoFrame 経路が使えないので描画経路にする", e);
@@ -354,22 +367,107 @@ export class VcodeReceiver {
     this._startPushLoop();
   }
 
+  /** VideoFrame を読み続けて、空いているワーカーへ 1 枚ずつ渡す。
+   *  全員ふさがっている枚は捨てる (溜めても古くなるだけで、閉じないと供給が止まる)。 */
+  async _pump(readable) {
+    const reader = readable.getReader();
+    this.reader = reader;
+    while (this.stream && !this.finished) {
+      let res;
+      try {
+        res = await reader.read();
+      } catch (_) {
+        break;
+      }
+      if (res.done) break;
+      const frame = res.value;
+      const w = this._idleWorker();
+      if (!w) { frame.close(); continue; }
+      w.busy = true;
+      this.frames++;
+      w.postMessage({ k: "frame", seq: this.frames, frame }, [frame]);
+    }
+    try { reader.cancel(); } catch (_) { /* 既に閉じている */ }
+  }
+
   /** 退避経路: 主スレッドで輝度に落としてワーカーへ送る (VideoFrame が使えない環境)。 */
   _startPushLoop() {
-    this._inFlight = false;
     const loop = () => {
       if (!this.stream || this.finished) return;
       this.rafId = requestAnimationFrame(loop);
-      if (this._inFlight) return; // 処理中に送っても古くなるだけなので待つ
+      const w = this._idleWorker();
+      if (!w) return;
       const g = this._grabGray();
       if (!g) return;
-      this._inFlight = true;
-      this.worker.postMessage(
-        { k: "frame", gray: g.gray.buffer, w: g.w, h: g.h, stride: g.w },
+      w.busy = true;
+      this.frames++;
+      w.postMessage(
+        { k: "frame", seq: this.frames, gray: g.gray.buffer, w: g.w, h: g.h, stride: g.w },
         [g.gray.buffer],
       );
     };
     this.rafId = requestAnimationFrame(loop);
+  }
+
+  /** ワーカーが返した 1 枚ぶんの結果を、1 つのデコーダに積む。
+   *  デコーダをワーカー側に置くと、ワーカーごとに別々の集合になって合流できない。 */
+  _onScanned(m) {
+    if (this.finished) return;
+    this._tickFps();
+    if (m.w) { this.scanW = m.w; this.scanH = m.h; }
+    if (typeof m.mean === "number") this.stats.mean = m.mean;
+    if (typeof m.sat === "number") this.stats.sat = m.sat;
+    this._setGuideLocked(!!m.detected);
+    this._positionGuide();
+    this._diag();
+    if (!m.detected) { this.blocks = 0; this.blocksTotal = 0; this._progress(); return; }
+
+    this.detected++;
+    // 所要時間は「初検出 → 復元完了」で測る (カメラを向けるまでの時間を含めない)
+    if (this.firstDetectedAt === null) this.firstDetectedAt = performance.now();
+    this.blocks = m.blocks;
+    this.blocksTotal = m.blocksTotal;
+    if (!this.dec) {
+      try { this.dec = new FountainDecoder(m.oti); } catch (_) { return; }
+    }
+    let done = false;
+    for (const pkt of m.packets) {
+      // RaptorQ の payload ID = SBN(1) + ESI(3, big-endian)。単一ソースブロック前提で
+      // ESI を「重複を除いた被覆」として数える (進捗と停滞判定に使う)
+      if (pkt.length >= 4) this.seenEsi.add((pkt[1] << 16) | (pkt[2] << 8) | pkt[3]);
+      if (this.dec.addPacket(pkt)) { done = true; break; }
+    }
+    if (!this.needed && m.packets.length > 0) {
+      const symbol = m.packets[0].length - 4;
+      if (symbol > 0) this.needed = Math.ceil(Number(this.dec.payloadSize()) / symbol);
+    }
+    this.distinct = this.seenEsi.size;
+    this._progress();
+    if (!done) return;
+    // エンドツーエンド CRC-32 検証。不一致 = 復元結果が破損 → デコーダを捨てて受信続行
+    const payload = vcodeUnwrapPayload(this.dec.payload());
+    if (!payload) {
+      console.warn("[vcode-rx] 整合性エラー: 復元結果が破損。デコーダを作り直して受信続行");
+      this.dec = null;
+      this.seenEsi.clear();
+      this.distinct = 0;
+      this.lastDistinct = 0;
+      this.lastGainAt = performance.now();
+      return;
+    }
+    this._finish(payload);
+  }
+
+  /** 走査 fps の実測 (ワーカー全体の合計)。 */
+  _tickFps() {
+    this._fpsFrames = (this._fpsFrames || 0) + 1;
+    const now = performance.now();
+    if (!this._fpsSince) this._fpsSince = now;
+    if (now - this._fpsSince >= 500) {
+      this.stats.fps = (this._fpsFrames * 1000) / (now - this._fpsSince);
+      this._fpsFrames = 0;
+      this._fpsSince = now;
+    }
   }
 
   /** 映像 1 枚を輝度バッファにする (退避経路と主スレッド走査で共用)。 */
@@ -391,7 +489,8 @@ export class VcodeReceiver {
 
   /** ワーカーがまったく作れない環境向け (module worker 非対応など)。 */
   _fallbackToMainThread() {
-    if (this.worker) { this.worker.terminate(); this.worker = null; }
+    for (const w of this.workers) w.terminate();
+    this.workers = [];
     if (this.rafId) cancelAnimationFrame(this.rafId);
     this.rx = new VcodeRx();
     this.setGrid(this.grid);
@@ -418,14 +517,23 @@ export class VcodeReceiver {
     this.scanH = 0;
     this.blocks = 0;
     this.blocksTotal = 0;
-    this._inlineEsi = null;
+    // 被覆はワーカーをまたいで 1 つにまとめる (ワーカーごとに持つと合流できない)
+    this.seenEsi = new Set();
+    this.readyCount = 0;
+    this.feeding = false;
+    this.reader = null;
+    this._fpsFrames = 0;
+    this._fpsSince = 0;
   }
 
   /** 探索する格子を切り替える ("auto" で候補総当たり)。受信中でも即反映する。 */
   setGrid(grid) {
     this.grid = grid;
     this._positionGuide();
-    if (this.worker) { this.worker.postMessage({ k: "grid", grid }); return; }
+    if (this.workers.length) {
+      for (const w of this.workers) w.postMessage({ k: "grid", grid });
+      return;
+    }
     if (!this.rx) return;
     if (grid === "auto") {
       this.rx.setLayout(0, 0);
@@ -490,11 +598,9 @@ export class VcodeReceiver {
   stop() {
     if (this.rafId) cancelAnimationFrame(this.rafId);
     this.rafId = null;
-    if (this.worker) {
-      this.worker.postMessage({ k: "stop" });
-      this.worker.terminate();
-      this.worker = null;
-    }
+    for (const w of this.workers) w.terminate();
+    this.workers = [];
+    if (this.reader) { try { this.reader.cancel(); } catch (_) { /* 済 */ } this.reader = null; }
     if (this.procTrack) { this.procTrack.stop(); this.procTrack = null; }
     this.video.removeEventListener("loadedmetadata", this._onResize);
     window.removeEventListener("resize", this._onResize);
@@ -512,28 +618,6 @@ export class VcodeReceiver {
     const want = have > SCAN_TARGET_PX_PER_CELL ? SCAN_TARGET_PX_PER_CELL / have : 1;
     const budget = Math.sqrt(SCAN_MAX_PIXELS / (vw * vh));
     return Math.min(1, want, budget);
-  }
-
-  /** ワーカーからの進捗を UI へ流す。 */
-  _onWorkerProgress(m) {
-    this._inFlight = false;
-    this.frames = m.frames;
-    if (m.detected > 0 && this.firstDetectedAt === null) {
-      // 所要時間は「初検出 → 復元完了」で測る (カメラを向けるまでの時間を含めない)
-      this.firstDetectedAt = performance.now();
-    }
-    this.detected = m.detected;
-    this.distinct = m.distinct;
-    this.needed = m.needed;
-    this.scanW = m.scanW;
-    this.scanH = m.scanH;
-    this.blocks = m.blocks;
-    this.blocksTotal = m.blocksTotal;
-    this.stats = { fps: m.fps, mean: m.mean, sat: m.sat };
-    this._setGuideLocked(m.blocksTotal > 0);
-    this._positionGuide();
-    this._diag();
-    this._progress();
   }
 
   /** ワーカーが作れない環境向けの、主スレッド走査 1 枚ぶん。 */
@@ -566,7 +650,7 @@ export class VcodeReceiver {
     if (!this.dec) {
       try { this.dec = new FountainDecoder(rep.oti); } catch (_) { return; }
     }
-    const seen = this._inlineEsi || (this._inlineEsi = new Set());
+    const seen = this.seenEsi;
     const n2 = rep.packetCount();
     let done = false;
     for (let i = 0; i < n2; i++) {
