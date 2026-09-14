@@ -135,6 +135,14 @@ jobs:
     # Apple の要件 (2026-04-28 以降) で iOS 26 SDK / Xcode 26 以降が要る。
     # macos-latest だと世代が変わったときに黙って古い SDK になりうるので固定する
     runs-on: macos-26
+    # step の if では secrets コンテキストを参照できないので、ジョブの env に写して判定する
+    env:
+      IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
+      IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+      IOS_APPSTORE_PROFILE_BASE64: ${{ secrets.IOS_APPSTORE_PROFILE_BASE64 }}
+      APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+      APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+      APPSTORE_API_PRIVATE_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v5
 
@@ -153,10 +161,7 @@ jobs:
         run: flutter pub get
 
       - name: Import signing certificate
-        if: ${{ secrets.IOS_CERTIFICATE_BASE64 != '' }}
-        env:
-          IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
-          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+        if: env.IOS_CERTIFICATE_BASE64 != ''
         run: |
           KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
           KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
@@ -173,9 +178,7 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN_PATH"
 
       - name: Install provisioning profile
-        if: ${{ secrets.IOS_APPSTORE_PROFILE_BASE64 != '' }}
-        env:
-          IOS_APPSTORE_PROFILE_BASE64: ${{ secrets.IOS_APPSTORE_PROFILE_BASE64 }}
+        if: env.IOS_APPSTORE_PROFILE_BASE64 != ''
         run: |
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
           echo "$IOS_APPSTORE_PROFILE_BASE64" | base64 --decode \
@@ -199,7 +202,7 @@ jobs:
           plutil -lint "$APP/PrivacyInfo.xcprivacy"
 
       - name: Archive and export signed IPA
-        if: ${{ secrets.IOS_APPSTORE_PROFILE_BASE64 != '' }}
+        if: env.IOS_APPSTORE_PROFILE_BASE64 != ''
         working-directory: app
         run: |
           echo "=== 使える署名 ==="
@@ -240,12 +243,8 @@ jobs:
           echo "IPA_NAME=$NAME" >> "$GITHUB_ENV"
 
       - name: Upload to App Store Connect
-        if: ${{ secrets.APPSTORE_API_KEY_ID != '' && env.IPA_NAME != '' }}
+        if: env.APPSTORE_API_KEY_ID != '' && env.IPA_NAME != ''
         working-directory: app
-        env:
-          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
-          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
-          APPSTORE_API_PRIVATE_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
         run: |
           KEY_DIR=~/.appstoreconnect/private_keys
           mkdir -p "$KEY_DIR"
@@ -263,7 +262,7 @@ jobs:
       # 配布証明書で署名してあるので他人の端末には入らない。Release には添付せず、
       # 何を送ったかを確認できるように Actions のアーティファクトにだけ残す
       - uses: actions/upload-artifact@v7
-        if: ${{ env.IPA_NAME != '' }}
+        if: env.IPA_NAME != ''
         with:
           name: vloom-ios-appstore-ipa
           path: app/${{ env.IPA_NAME }}
