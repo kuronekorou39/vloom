@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  プライバシーマニフェスト (2024年5月以降、App Store へのアップロードで必須)。
+
+  Vloom は光だけでファイルを渡すアプリで、ネットワーク通信を一切行わない。
+  アカウントも無く、受信したファイルと履歴は端末内 (アプリ専用の領域) にだけ残る。
+  したがって NSPrivacyCollectedDataTypes は空。
+
+  NSPrivacyAccessedAPITypes は「理由の宣言が要る API」の一覧。使っている
+  パッケージと自前のコードから逆算して並べている。
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+
+	<!-- 端末内で完結するため、収集しているデータは無い -->
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<!-- 受信ファイル・履歴 (history.json) ・受信設定 (rx_prefs.json) の読み書き
+		     (path_provider)。C617.1 = 自アプリのコンテナ内のファイル -->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
+			</array>
+		</dict>
+
+		<!-- 受信のフレーム処理時間・スループットの計測 (Stopwatch)。
+		     35F9.1 = 端末内での経過時間の計測にのみ利用 -->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>35F9.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

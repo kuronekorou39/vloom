@@ -347,7 +347,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           back,
           // セル解像度が密度の上限を決める。7x6 (140 セル幅) は 1080p で足りるが、
           // 9x8 (180) / 11x10 (220) は 6px/セル に 1080/1320px 要るので 2160p 以上が要る。
-          _preset,
+          // iOS では max がセンサー最大になるので読み替える (preset.dart)
+          cameraResolutionFor(_preset),
           enableAudio: false,
           // 30fps を要求する。以前は 60 を要求していて、UI isolate が空くと実際に
           // 約 40fps 届いたが、処理できるのは毎秒 25 枚前後で、捨てるフレームの

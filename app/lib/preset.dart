@@ -10,10 +10,23 @@
 // 揃うことがあり、「追従中なのに blocks=0/42」になる)。
 // 20fps を超えて稼ぐ道はないので、そこから先は 1 フレームあたりの容量で稼ぐ。
 
+import 'dart:io' show Platform;
+
 import 'package:camera/camera.dart';
 
 /// bpc ごとの RaptorQ packet_size (Layout.block = 20 前提で block_payload_len - 4)
 int packetSizeFor(int bpc) => bpc == 2 ? 92 : 42;
+
+/// プリセットの解像度指定を、実際にカメラへ渡す値に読み替える。
+///
+/// [ResolutionPreset.max] は Android (CameraX) では 1600x1200 (4:3) になるが、iOS
+/// (AVFoundation) ではセンサーの最大フォーマットになる (iPhone 12 Pro で 4032x3024)。
+/// その Y プレーンを毎フレーム Dart へ渡すだけで処理が追いつかないので、iOS では
+/// 画素数が 1600x1200 に近い 1920x1080 に落とす。iOS の動画フォーマットは 16:9 しか
+/// ないため画角は Android より横が 25% 狭くなる (その分だけ離して撮ることになる)。
+/// 実機で詰めるまでの暫定値。
+ResolutionPreset cameraResolutionFor(ResolutionPreset p) =>
+    (Platform.isIOS && p == ResolutionPreset.max) ? ResolutionPreset.veryHigh : p;
 
 class VcodePreset {
   const VcodePreset({

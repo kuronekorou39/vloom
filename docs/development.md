@@ -217,18 +217,31 @@ Python には重すぎるためで、取りこぼしたブロックは次の周�
 
 ## iOS について
 
-iOS 版のバイナリは配布していません。署名なしの IPA は受け取った側での再署名が必要で、無料
-アカウントでは 7 日で失効するためです。Mac があれば自分でビルドできます。
+iOS 版は App Store での配布に向けて準備中です (進め方と提出物は
+[app-store-submission.md](app-store-submission.md))。それまでのあいだ、手元の iPhone に
+入れるには CI が作る署名なし IPA を [Sideloadly](https://sideloadly.io/) で再署名します。
+Mac は要りません。
 
-```bash
-cd app
-open ios/Runner.xcworkspace
-```
+1. [Actions の build ワークフロー](../../../actions/workflows/build.yml) で最新の main の実行を開き、
+   アーティファクト `vloom-ios-unsigned-ipa` をダウンロードして展開する
+2. Sideloadly を起動し、iPhone を USB で繋ぐ
+3. IPA をドラッグし、Apple ID を入れて Start。有料の Developer アカウントなら 1 年、無料なら 7 日で失効
+4. iPhone の 設定 → 一般 → VPN とデバイス管理 で、その Apple ID の開発元を信頼する
 
-Signing & Capabilities で自分の Apple ID (Personal Team) を選び、Bundle Identifier を固有値に
-変更してから Run してください。Rust の iOS ターゲットが必要です
-(`rustup target add aarch64-apple-ios`)。無料アカウントは 7 日で失効するため、常用なら PWA を
-お勧めします。
+署名なしの IPA を Releases に添付していないのは、受け取った側での再署名が必要で配布物として
+機能しないためです。
+
+Mac があるなら Xcode から直接入れられます (`cd app && open ios/Runner.xcworkspace`。
+Signing & Capabilities で自分のチームを選び、Rust の iOS ターゲット
+`rustup target add aarch64-apple-ios` を入れてから Run)。
+
+iOS で Android と違うところ:
+
+- 受信の解像度指定 `ResolutionPreset.max` は、Android では 1600x1200 (4:3) ですが iOS では
+  センサー最大 (12MP) になります。処理が追いつかないので `preset.dart` の
+  `cameraResolutionFor` で 1920x1080 に読み替えています。iOS の動画フォーマットは 16:9
+  しかないため画角は横が 25% 狭くなります。実機で詰めるまでの暫定値です。
+- 計測用の起動引数と手動露光は Android 専用で、iOS では何もしません。
 
 ## 調査用ツール (vcode/examples)
 

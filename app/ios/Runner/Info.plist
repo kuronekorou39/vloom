@@ -4,8 +4,8 @@
 <dict>
 	<key>NSCameraUsageDescription</key>
 	<string>コードを読み取ってデータを受信するためにカメラを使用します。</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>送信する画像を選ぶために写真ライブラリにアクセスします。</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>音声は使用しません。カメラ機能のライブラリが宣言を必要とするための記載です。</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
@@ -28,6 +28,8 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

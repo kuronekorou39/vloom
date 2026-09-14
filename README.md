@@ -11,7 +11,7 @@
 |---|---|---|
 | [**Web で開く**](https://kuronekorou39.github.io/vloom/) | どの端末でも | インストール不要。まずここから |
 | [Releases の APK](../../releases) | Android | ネイティブの方が高速。カメラ制御が細かい |
-| ソースからビルド | iOS | Mac + Xcode が必要 ([手順](docs/development.md#ios-について)) |
+| [Actions の IPA](../../actions/workflows/build.yml) を Sideloadly で | iOS | App Store 版は準備中。Mac は不要 ([手順](docs/development.md#ios-について)) |
 | `desktop/` を実行 | Windows (送信のみ) | フレーム間隔を正確に刻める ([手順](docs/development.md#デスクトップ送信アプリ-windows)) |
 
 **使い方**: 送信側の画面いっぱいにコードを表示し (輝度は最大)、受信側のカメラを向けて
