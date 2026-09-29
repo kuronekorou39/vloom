@@ -8,6 +8,7 @@ import {
   openCamera, ExposureGuard, cameraInfoText, lumaText, cellPxText,
   gridTooDense, pxPerCell,
 } from "./camera.js";
+import { fmtSize, fmtElapsed } from "./format.js";
 
 const REPAIR_RATE = 0.5;
 
@@ -241,7 +242,12 @@ export class VcodeSender {
       this.shownIdx = want;
       this.dirty = false;
       const pass = Math.floor(want / this.frameCount) + 1;
-      this.onStatus(`${this.hold ? "静止" : "送信中"} · ${this.payloadLen}B · frame ${want % this.frameCount + 1}/${this.frameCount} · ${pass} 巡目`);
+      // 一方向なので受信できたかは分からないが、経過と 1 巡の長さは出せる
+      // (受信側は最低 1 巡ぶん見ていれば全パケットを一度は目にする)
+      const loop = this.frameCount / this.fps;
+      this.onStatus(
+        `${this.hold ? "静止" : "送信中"} · ${fmtSize(this.payloadLen)} · ` +
+        `${fmtElapsed((now - this.t0) / 1000)} · ${pass} 巡目 (1 巡 ${loop.toFixed(1)} 秒)`);
     }
     requestAnimationFrame((t) => this._tick(mySeq, t));
   }

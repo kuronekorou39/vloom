@@ -1,8 +1,12 @@
 // Vloom PC PWA — エントリ (結線)。
 // Rust コア (fountain + vcode) を WASM で初期化し、送信 / 受信を UI に繋ぐ。
 
-import init, { FountainEncoder, FountainDecoder, vcodeWrapFile } from "./pkg/vloom_core_wasm.js";
-import { VcodeSender, VcodeReceiver, packetSizeFor, REFRESH_SAFE_FPS } from "./vcode.js";
+import init, {
+  FountainEncoder, FountainDecoder, vcodeWrapFile, VcodeBundle, vcodeUnbundle,
+} from "./pkg/vloom_core_wasm.js";
+import { VcodeSender, VcodeReceiver, REFRESH_SAFE_FPS } from "./vcode.js";
+import { estimate, theoryKbps } from "./estimate.js";
+import { fmtSize, fmtDuration, fmtStamp } from "./format.js";
 import { setupCalibration } from "./calibration.js";
 import { CameraPicker, streamDeviceId } from "./camera.js";
 
@@ -24,7 +28,8 @@ function selfTest() {
     recovered[0] === payload[0] && recovered[n - 1] === payload[n - 1];
   const el = $("coreStatus");
   el.className = ok ? "ok" : "ng";
-  el.textContent = ok ? `コア: OK (${total} pkt 往復)` : "コア異常";
+  el.textContent = ok ? "準備完了" : "コア異常";
+  el.title = ok ? `自己診断: ${total} パケットの往復に成功` : "";
   return ok;
 }
 
@@ -89,7 +94,7 @@ $("txCanvas").addEventListener("click", () => {
 // 大きさ / 静止。大きさは収まる最大に対する % で、1 セルは常に整数個の物理画素
 $("txSize").addEventListener("input", () => {
   sender.setSizePct(parseInt($("txSize").value) || 100);
-  $("txSizeVal").textContent = `${$("txSize").value}%`;
+  $("txSizeVal").value = `${$("txSize").value}%`;
 });
 $("txHold").addEventListener("change", () => sender.setHold($("txHold").checked));
 setInterval(() => {
@@ -108,6 +113,8 @@ function applyTxFilter() {
   const b = (parseInt($("txBright").value) || 100) / 100;
   const blur = parseFloat($("txBlur").value) || 0;
   $("txCanvas").style.filter = `brightness(${b}) blur(${blur}px)`;
+  $("txBrightVal").value = `${$("txBright").value}%`;
+  $("txBlurVal").value = blur ? `${blur}px` : "なし";
 }
 $("txBright").addEventListener("input", applyTxFilter);
 $("txBlur").addEventListener("input", applyTxFilter);
@@ -118,62 +125,222 @@ $("txStop").addEventListener("click", () => {
   $("txStage").style.display = "none";
 });
 
-// 設定の理論スループット (ブロック数 × packet_size × fps) を出す。実測との比較基準。
-function updateTheory() {
-  const [gw, gh] = $("txGrid").value.split("x").map(Number);
-  const bpc = parseInt($("txBpc").value) || 2;
-  const fps = Math.max(2, Math.min(60, parseInt($("txFps").value) || 12));
-  const kbps = (gw * gh * packetSizeFor(bpc) * fps) / 1024;
-  const warn = fps > REFRESH_SAFE_FPS ? `  ※${REFRESH_SAFE_FPS}fps 超は 120Hz 画面向け` : "";
-  $("txTheory").textContent =
-    `理論 ${kbps.toFixed(0)} KB/s  (${$("txGrid").value} · ${bpc}bit · ${fps}fps)${warn}`;
+// ---- 送るもの (ファイル / テキスト / 計測データ) ----
+// 送るのは常に 3 種類のうち選ばれている 1 つだけ。以前は欄が並んでいて
+// 「計測データ > ファイル > テキスト」の順で黙って採用され、負けた入力は無視された。
+const TX_MODES = { file: "txSrcFile", text: "txSrcText", test: "txSrcTest" };
+const TX_MODE_LABEL = { file: "ファイル", text: "テキスト", test: "計測データ" };
+let txMode = "file";
+/** 選択中のファイル (File の配列)。選び直しても置き換えず、足していく */
+let txFiles = [];
+
+function setTxMode(mode) {
+  txMode = mode;
+  for (const [k, id] of Object.entries(TX_MODES)) $(id).hidden = k !== mode;
+  for (const b of document.querySelectorAll("#txMode button")) {
+    b.classList.toggle("active", b.dataset.m === mode);
+  }
+  updateTxSummary();
 }
-for (const id of ["txGrid", "txBpc", "txFps"]) {
-  $(id).addEventListener("change", updateTheory);
-  $(id).addEventListener("input", updateTheory);
+for (const b of document.querySelectorAll("#txMode button")) {
+  b.addEventListener("click", () => setTxMode(b.dataset.m));
+}
+
+function addTxFiles(list) {
+  for (const f of list) {
+    // 同じものを 2 度選んだときは足さない (名前だけでは別ファイルと区別できない)
+    const dup = txFiles.some((g) =>
+      g.name === f.name && g.size === f.size && g.lastModified === f.lastModified);
+    if (!dup) txFiles.push(f);
+  }
+  renderTxFiles();
+}
+
+function renderTxFiles() {
+  const ul = $("txFiles");
+  ul.textContent = "";
+  txFiles.forEach((f, i) => {
+    const li = document.createElement("li");
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = f.name;
+    name.title = f.name;
+    const size = document.createElement("span");
+    size.className = "size";
+    size.textContent = fmtSize(f.size);
+    const del = document.createElement("button");
+    del.type = "button";
+    del.textContent = "✕";
+    del.setAttribute("aria-label", `${f.name} を外す`);
+    del.addEventListener("click", () => { txFiles.splice(i, 1); renderTxFiles(); });
+    li.append(name, size, del);
+    ul.append(li);
+  });
+  $("txFilesFoot").hidden = txFiles.length === 0;
+  $("txFilesNote").textContent = txFiles.length > 1
+    ? `${txFiles.length} 個を 1 つの ZIP にまとめて送ります`
+    : "";
+  updateTxSummary();
+}
+
+$("txFile").addEventListener("change", () => {
+  addTxFiles($("txFile").files);
+  $("txFile").value = ""; // 同じファイルを外してから選び直せるように
+});
+$("txFilesClear").addEventListener("click", () => { txFiles = []; renderTxFiles(); });
+
+// ドロップはページのどこに落としても受ける (枠を狙わせない)
+const hasFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files");
+window.addEventListener("dragover", (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  $("txDrop").classList.add("over");
+});
+window.addEventListener("dragleave", () => $("txDrop").classList.remove("over"));
+window.addEventListener("drop", (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  $("txDrop").classList.remove("over");
+  showPane("send");
+  setTxMode("file");
+  addTxFiles(e.dataTransfer.files);
+});
+
+const txTextBytes = () => new TextEncoder().encode($("txText").value).length;
+
+/** 今の選択で送るものの大きさと説明 (何も無ければ bytes = 0) */
+function txPlan() {
+  if (txMode === "file") {
+    const bytes = txFiles.reduce((a, f) => a + f.size, 0);
+    if (!txFiles.length) return { bytes: 0, text: "ファイルが選ばれていません" };
+    return {
+      bytes,
+      text: txFiles.length === 1
+        ? `${txFiles[0].name} · ${fmtSize(bytes)}`
+        : `ファイル ${txFiles.length} 個 (ZIP) · ${fmtSize(bytes)}`,
+    };
+  }
+  if (txMode === "text") {
+    const bytes = txTextBytes();
+    return { bytes, text: bytes ? `テキスト · ${fmtSize(bytes)}` : "テキストが入力されていません" };
+  }
+  const opt = $("txTest").selectedOptions[0];
+  const bytes = parseInt(opt.dataset.size) || 0;
+  return { bytes, text: `計測データ · ${opt.textContent} (${fmtSize(bytes)})` };
+}
+
+const txSettings = () => ({
+  grid: $("txGrid").value,
+  bpc: parseInt($("txBpc").value) || 1,
+  fps: Math.max(2, Math.min(60, parseInt($("txFps").value) || 20)),
+});
+
+// 送信内容・所要時間の目安・理論値をまとめて出す。
+// 目安は理論値ではなく実測の中央値から出す (理由と出どころは estimate.js)。
+function updateTxSummary() {
+  const plan = txPlan();
+  const { grid, bpc, fps } = txSettings();
+  $("txSummary").textContent = plan.text;
+  $("txSummary").classList.toggle("muted", !plan.bytes);
+  $("txStart").disabled = !plan.bytes;
+
+  // 選んでいない側に入力が残っていたら、それは送られないと明示する
+  const left = [];
+  if (txMode !== "file" && txFiles.length) left.push(`ファイル ${txFiles.length} 個`);
+  if (txMode !== "text" && txTextBytes()) left.push("入力済みのテキスト");
+  $("txOther").textContent = left.length
+    ? `${left.join("と")}は送られません (送るのは「${TX_MODE_LABEL[txMode]}」)`
+    : "";
+
+  const est = $("txEstimate");
+  est.textContent = "";
+  const rows = plan.bytes ? estimate(plan.bytes, grid, bpc, fps) : [];
+  for (const r of rows) {
+    const box = document.createElement("div");
+    box.className = "est";
+    for (const [cls, text] of [
+      ["who", r.label], ["time", fmtDuration(r.seconds)], ["rate", `実測 ${r.kbps.toFixed(0)} KB/s`],
+    ]) {
+      const d = document.createElement("div");
+      d.className = cls;
+      d.textContent = text;
+      box.append(d);
+    }
+    est.append(box);
+  }
+  const theory = `理論 ${theoryKbps(grid, bpc, fps).toFixed(0)} KB/s (${grid.replace("x", "×")} · ${bpc}bit · ${fps}fps)`;
+  const note = !plan.bytes ? ""
+    : rows.length ? "所要時間は実測の中央値からの目安 (三脚固定・Pixel 9a)。手持ちや距離で変わります。"
+    : "この設定は実測が無いため、所要時間の目安を出せません。";
+  const warn = fps > REFRESH_SAFE_FPS ? ` ※${REFRESH_SAFE_FPS}fps 超は 120Hz 画面向け` : "";
+  $("txTheory").textContent = `${note}
+${theory}${warn}`.trim();
+}
+for (const id of ["txGrid", "txBpc", "txFps", "txTest", "txText"]) {
+  $(id).addEventListener("change", updateTxSummary);
+  $(id).addEventListener("input", updateTxSummary);
 }
 // 既定 fps: スマホ (タッチ端末) は 30 (OLED は切り替わりが速く 60Hz の 2 書き換えごとが最速)。
 // PC モニタは LCD が多く、残像で 30fps は逆に遅いので 20 のまま
 if (navigator.maxTouchPoints > 0 && Math.min(screen.width, screen.height) < 900) {
   $("txFps").value = 30;
 }
-updateTheory();
+renderTxFiles();
 
-$("txStart").addEventListener("click", async () => {
-  const file = $("txFile").files[0];
-  const testAsset = $("txTest").value;
-  let bytes, name, mime;
-  if (testAsset) {
+/** 選ばれているものを、送る 1 本のバイト列 (と名前・種別) にする */
+async function buildTxPayload() {
+  const now = new Date();
+  if (txMode === "test") {
     // 同梱の計測用画像。サイズを焼き込んであるので、受信側で開けば
     // どの条件のデータが壊れずに届いたか一目で分かる。
-    bytes = new Uint8Array(await (await fetch(testAsset)).arrayBuffer());
-    name = testAsset.split("/").pop();
-    mime = "image/jpeg";
-  } else if (file) {
-    bytes = new Uint8Array(await file.arrayBuffer());
-    name = file.name;
-    mime = file.type || "";
-  } else {
-    // ファイル未選択ならテキストを送信
-    const text = $("txText").value;
-    if (!text) { $("txInfo").textContent = "ファイルを選択するかテキストを入力してください"; return; }
-    bytes = new TextEncoder().encode(text);
-    // 毎回 message.txt だと受信側で同名ファイルが積み重なるので、送信時刻を付ける
-    const t = new Date();
-    const pad = (n) => String(n).padStart(2, "0");
-    name = `message_${t.getFullYear()}${pad(t.getMonth() + 1)}${pad(t.getDate())}_${pad(t.getHours())}${pad(t.getMinutes())}${pad(t.getSeconds())}.txt`;
-    mime = "text/plain;charset=utf-8";
+    const asset = $("txTest").value;
+    const res = await fetch(asset);
+    if (!res.ok) throw new Error(`計測データを取得できません (${res.status})`);
+    return {
+      bytes: new Uint8Array(await res.arrayBuffer()),
+      name: asset.split("/").pop(),
+      mime: "image/jpeg",
+    };
   }
-  // 元のファイル名/MIME をヘッダに埋めて送る (受信側で元名・種別をそのまま復元)
-  const source = vcodeWrapFile(name, mime, bytes);
-  const grid = $("txGrid").value;
-  const bpc = parseInt($("txBpc").value) || 2;
-  const fps = Math.max(2, Math.min(60, parseInt($("txFps").value) || 12));
-  $("txInfo").textContent = "";
-  $("txStage").style.display = "flex";
-  fitTxCanvas();
-  showTxBar();
+  if (txMode === "text") {
+    // 毎回 message.txt だと受信側で同名ファイルが積み重なるので、送信時刻を付ける
+    return {
+      bytes: new TextEncoder().encode($("txText").value),
+      name: `message_${fmtStamp(now)}.txt`,
+      mime: "text/plain;charset=utf-8",
+    };
+  }
+  if (txFiles.length === 1) {
+    const f = txFiles[0];
+    return { bytes: new Uint8Array(await f.arrayBuffer()), name: f.name, mime: f.type || "" };
+  }
+  // 複数ファイルは無圧縮 ZIP にまとめる (形式は 1 本のバイト列しか運ばない)。
+  // 受信側がまとめを解けない古い版でも、ZIP としてそのまま開ける。
+  const bundle = new VcodeBundle();
   try {
+    for (const f of txFiles) bundle.add(f.name, new Uint8Array(await f.arrayBuffer()));
+    return {
+      bytes: bundle.finish(now.getFullYear(), now.getMonth() + 1, now.getDate(),
+        now.getHours(), now.getMinutes(), now.getSeconds()),
+      name: `vloom_${fmtStamp(now)}.zip`,
+      mime: "application/zip",
+    };
+  } finally {
+    bundle.free();
+  }
+}
+
+$("txStart").addEventListener("click", async () => {
+  if (!txPlan().bytes) return;
+  const { grid, bpc, fps } = txSettings();
+  $("txInfo").textContent = "";
+  try {
+    const { bytes, name, mime } = await buildTxPayload();
+    // 元のファイル名/MIME をヘッダに埋めて送る (受信側で元名・種別をそのまま復元)
+    const source = vcodeWrapFile(name, mime, bytes);
+    $("txStage").style.display = "flex";
+    fitTxCanvas();
+    showTxBar();
     await sender.start(source, grid, bpc, fps);
   } catch (e) {
     $("txStage").style.display = "none";
@@ -187,13 +354,6 @@ $("txStart").addEventListener("click", async () => {
 const escHtml = (t) =>
   String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const escAttr = (t) => escHtml(t).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-
-const fmtSize = (n) => {
-  if (n >= 1 << 30) return (n / (1 << 30)).toFixed(2) + "GB";
-  if (n >= 1 << 20) return (n / (1 << 20)).toFixed(1) + "MB";
-  if (n >= 1024) return (n / 1024).toFixed(1) + "KB";
-  return n + "B";
-};
 
 const rxPicker = new CameraPicker($("rxCamera"));
 
@@ -305,12 +465,31 @@ const receiver = new VcodeReceiver({
       ["パケット", s.needed ? `${s.distinct} 回収 / 必要 ${s.needed}` : `${s.distinct || 0} 回収`],
       ["格子指定", s.grid === "auto" ? "自動 (候補総当たり)" : s.grid],
     ];
+    // 複数ファイルをまとめて送られたものは、中身を 1 つずつ保存できるように並べる。
+    // 解けるのはこちらがまとめた無圧縮 ZIP だけ (一般の ZIP は ZIP のまま渡す)
+    let list = "";
+    const packed = type === "application/zip"
+      ? vcodeUnbundle(new Uint8Array(await blob.arrayBuffer()))
+      : undefined;
+    if (packed) {
+      const items = [];
+      for (let i = 0; i < packed.count; i++) {
+        const n = packed.name(i);
+        const d = packed.data(i);
+        const u = URL.createObjectURL(new Blob([d]));
+        items.push(`<li><span class="name">${escHtml(n)}</span>` +
+          `<span class="size">${fmtSize(d.length)}</span>` +
+          `<a href="${u}" download="${escAttr(n)}">保存</a></li>`);
+      }
+      packed.free();
+      list = `<ul class="files">${items.join("")}</ul>`;
+    }
     $("rxResult").innerHTML =
-      preview +
+      preview + list +
       `<table class="stats">${rows
         .map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`)
         .join("")}</table>` +
-      `<p><a href="${url}" download="${escAttr(name)}"><button>ダウンロード: ${safeName}</button></a></p>`;
+      `<p><a href="${url}" download="${escAttr(name)}"><button>${packed ? "まとめて保存" : "ダウンロード"}: ${safeName}</button></a></p>`;
     $("rxStart").disabled = false;
     $("rxStop").disabled = true;
   },

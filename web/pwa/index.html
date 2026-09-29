@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Vloom (PC)</title>
+  <title>Vloom</title>
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" href="./favicon.png" sizes="32x32" />
   <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
@@ -30,64 +30,137 @@
       --ok: #5ad17a; --ng: #f2777a; --radius: 8px;
     }
     * { box-sizing: border-box; }
+    /* display を指定した要素でも hidden 属性で確実に消す */
+    [hidden] { display: none !important; }
     body {
       margin: 0; font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
       background: var(--bg); color: var(--text); line-height: 1.5;
+      -webkit-text-size-adjust: 100%;
     }
-    header { padding: 0.7em 1.1em; background: var(--surface); border-bottom: 1px solid var(--line);
-      display: flex; align-items: center; gap: 0.7em 1.2em; flex-wrap: wrap; }
-    header h1 { margin: 0; font-size: 1.05em; font-weight: 600; }
-    nav { display: flex; gap: 0.35em; flex-wrap: wrap; }
+    /* ヘッダ: 狭い画面では 1 段目に名前と状態、2 段目にタブを等幅で並べる */
+    header { background: var(--surface); border-bottom: 1px solid var(--line);
+      padding: 0.6em 1em; padding-top: max(0.6em, env(safe-area-inset-top));
+      display: grid; grid-template-columns: 1fr auto; gap: 0.5em 1em; align-items: center; }
+    header h1 { margin: 0; font-size: 1.1em; font-weight: 600; letter-spacing: 0.02em; }
+    nav { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.35em; }
     nav button { background: var(--surface-2); color: var(--text); border: none; border-radius: 6px;
-      padding: 0.45em 1em; font-size: 0.95em; cursor: pointer; transition: background 0.12s; }
+      padding: 0.55em 0.5em; font-size: 0.95em; cursor: pointer; transition: background 0.12s; }
     nav button:hover { background: var(--hover); }
     nav button.active { background: var(--accent); color: #fff; }
-    #coreStatus { font-size: 0.85em; margin-left: auto; display: inline-flex; align-items: center; gap: 0.45em; }
+    #coreStatus { font-size: 0.8em; display: inline-flex; align-items: center; gap: 0.45em;
+      min-width: 0; overflow-wrap: anywhere; }
     #coreStatus::before { content: ""; width: 8px; height: 8px; border-radius: 50%;
       background: var(--muted); flex: none; }
     #coreStatus.ok::before { background: var(--ok); }
     #coreStatus.ng::before { background: var(--ng); }
-    main { padding: 1em; max-width: 860px; margin: 0 auto; }
+    @media (min-width: 640px) {
+      header { grid-template-columns: auto auto 1fr; gap: 1.2em; padding: 0.7em 1.1em; }
+      header h1 { order: 1; } nav { order: 2; } #coreStatus { order: 3; }
+      nav { grid-column: auto; grid-template-columns: repeat(3, auto); }
+      nav button { padding: 0.45em 1.1em; }
+      #coreStatus { justify-self: end; }
+    }
+    main { padding: 0.8em; max-width: 720px; margin: 0 auto;
+      padding-left: max(0.8em, env(safe-area-inset-left));
+      padding-right: max(0.8em, env(safe-area-inset-right)); }
     footer { margin-top: 2em; padding-top: 1em; border-top: 1px solid var(--line); font-size: 0.85em; }
     footer a { color: var(--accent); }
     .pane { display: none; }
     .pane.active { display: block; }
     .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
-      padding: 1em 1.1em; margin: 0.8em 0; }
+      padding: 1em; margin: 0.8em 0; }
+    .card h2 { margin: 0 0 0.7em; font-size: 0.8em; font-weight: 600; color: var(--muted);
+      letter-spacing: 0.06em; }
     .row { display: flex; gap: 0.8em; align-items: center; flex-wrap: wrap; margin: 0.6em 0; }
     .row:first-child { margin-top: 0; } .row:last-child { margin-bottom: 0; }
     .ok { color: var(--ok); } .ng { color: var(--ng); } .muted { color: var(--muted); }
+    .small { font-size: 0.85em; }
     button { background: var(--accent); color: #fff; border: none; border-radius: 6px;
-      padding: 0.55em 1.1em; font-size: 1em; cursor: pointer; transition: background 0.12s; }
+      padding: 0.55em 1.1em; font-size: 1em; cursor: pointer; transition: background 0.12s;
+      font-family: inherit; }
     button:hover:not(:disabled) { background: var(--accent-hover); }
     button.secondary { background: var(--surface-2); }
     button.secondary:hover:not(:disabled) { background: var(--hover); }
     button:disabled { background: #262a31; color: #6a707a; cursor: default; }
+    button.wide { width: 100%; padding: 0.8em 1em; font-size: 1.05em; font-weight: 600; }
     :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    /* 入力欄は 16px 以上にする (iOS Safari は 16px 未満の欄にフォーカスすると勝手に拡大する) */
     select, input[type="number"] { background: var(--field); color: var(--text); border: 1px solid var(--line);
-      border-radius: 6px; padding: 0.4em 0.5em; font-size: 1em; }
+      border-radius: 6px; padding: 0.5em 0.6em; font-size: 16px; font-family: inherit;
+      max-width: 100%; min-width: 0; }
     label { font-size: 0.9em; color: var(--label); display: inline-flex; align-items: center; gap: 0.4em; }
-    /* ファイル選択 (ネイティブ既定の不揃いな見た目を整える) */
-    input[type="file"] { color: var(--muted); font-size: 0.9em; max-width: 100%; }
-    input[type="file"]::file-selector-button { background: var(--surface-2); color: var(--text);
-      border: 1px solid var(--line); border-radius: 6px; padding: 0.45em 0.9em; margin-right: 0.7em;
-      font-size: 0.95em; cursor: pointer; transition: background 0.12s; }
-    input[type="file"]::file-selector-button:hover { background: var(--hover); }
+    /* 項目名を上、入力欄を下に置く。横に並べると狭い画面で項目名が 1 文字ずつ折り返す */
+    .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(9em, 1fr)); gap: 0.8em; }
+    .field { display: flex; flex-direction: column; align-items: stretch; gap: 0.3em; min-width: 0; }
+    .field > span { font-size: 0.9em; color: var(--label); }
+    details { margin-top: 0.9em; }
+    summary { cursor: pointer; color: var(--label); font-size: 0.9em; padding: 0.2em 0; }
+    details[open] summary { margin-bottom: 0.7em; }
+    /* 送るものの選択 (ファイル / テキスト / 計測データ) */
+    .src { margin-top: 0.9em; }
+    .drop { display: flex; flex-direction: column; align-items: center; gap: 0.2em;
+      padding: 1.2em 1em; border: 1.5px dashed #3a404c; border-radius: var(--radius);
+      background: var(--field); cursor: pointer; text-align: center; font-size: 1em;
+      position: relative; transition: border-color 0.12s, background 0.12s; }
+    .drop:hover, .drop.over { border-color: var(--accent); background: #131722; }
+    .drop strong { color: var(--text); font-weight: 600; }
+    /* 入力そのものは隠し、枠全体を押せるようにする (キーボード操作のため DOM には残す) */
+    .drop input[type="file"] { position: absolute; width: 1px; height: 1px; opacity: 0;
+      overflow: hidden; clip-path: inset(50%); }
+    .drop:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .files { list-style: none; margin: 0.7em 0 0; padding: 0; display: grid; gap: 0.35em; }
+    .files:empty { display: none; }
+    .files li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0.7em;
+      align-items: center; background: var(--surface-2); border-radius: 6px;
+      padding: 0.35em 0.35em 0.35em 0.75em; }
+    .files .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .files .size { color: var(--muted); font-size: 0.85em; white-space: nowrap;
+      font-variant-numeric: tabular-nums; }
+    .files button { background: transparent; color: var(--muted); padding: 0.3em 0.65em;
+      font-size: 1em; line-height: 1; }
+    .files button:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+    .filesfoot { display: flex; justify-content: space-between; align-items: center; gap: 0.8em;
+      margin-top: 0.6em; font-size: 0.85em; }
+    .filesfoot button { padding: 0.35em 0.8em; font-size: 1em; flex: none; }
+    /* 送信内容のまとめと所要時間の目安 */
+    #txSummary { font-weight: 600; overflow-wrap: anywhere; }
+    #txOther:empty, #txInfo:empty, #txEstimate:empty { display: none; }
+    #txOther { margin-top: 0.4em; padding: 0.45em 0.7em; border-radius: 6px;
+      background: rgba(180,83,9,0.22); color: #f3c98b; font-size: 0.85em; }
+    #txEstimate { display: grid; grid-template-columns: repeat(auto-fit, minmax(8.5em, 1fr));
+      gap: 0.6em; margin: 0.8em 0 0.3em; }
+    .est { background: var(--field); border: 1px solid var(--line); border-radius: 6px;
+      padding: 0.55em 0.75em; }
+    .est .who { font-size: 0.8em; color: var(--muted); }
+    .est .time { font-size: 1.25em; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .est .rate { font-size: 0.8em; color: var(--muted); font-variant-numeric: tabular-nums; }
+    #txTheory { margin: 0.5em 0 0.9em; white-space: pre-line; }
+    #txInfo { margin-top: 0.7em; font-size: 0.9em; }
     /* 送信ステージ: コードを白背景で大きく表示 */
     #txStage { display: none; position: fixed; inset: 0; background: #fff; z-index: 50;
       flex-direction: column; align-items: center; justify-content: center;
       box-sizing: border-box; }
     #txCanvas { image-rendering: pixelated; background: #fff; touch-action: manipulation; }
     #txBar { position: fixed; left: 0; right: 0; bottom: 0; box-sizing: border-box;
-      background: rgba(20,22,28,0.92); color: var(--text); padding: 0.4em 0.8em;
-      display: flex; gap: 0.4em 0.8em; align-items: center; flex-wrap: wrap; }
+      background: rgba(20,22,28,0.94); color: var(--text); padding: 0.6em 0.8em;
+      padding-bottom: max(0.6em, env(safe-area-inset-bottom));
+      display: grid; gap: 0.5em; }
     #txBar.hidden { display: none; }
-    #txBar .grow { flex: 1; font-size: 0.8em; min-width: 8em; }
+    /* 1 段目: 状態と停止。2 段目: 調整。狭い画面でも状態が 1 語ずつ折り返さない */
+    .txhead { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.8em; align-items: center; }
+    .txhead .grow { min-width: 0; font-size: 0.85em; line-height: 1.4; }
+    #txStatus { display: block; font-variant-numeric: tabular-nums; }
+    #txGeom { display: block; font-size: 0.9em; }
     #txWarn:empty { display: none; }
     #txWarn { margin-top: 0.35em; padding: 0.4em 0.6em; border-radius: 6px;
       background: rgba(180,83,9,0.92); color: #fff; font-size: 1.05em; line-height: 1.4; }
-    #txBar .txctl { font-size: 0.8em; white-space: nowrap; }
-    #txBar input[type="range"] { width: 5em; vertical-align: middle; }
+    .txctls { display: grid; grid-template-columns: repeat(auto-fit, minmax(9.5em, 1fr));
+      gap: 0.3em 1em; }
+    .txctl { display: grid; grid-template-columns: 3.2em minmax(0, 1fr) 2.8em; gap: 0.4em;
+      align-items: center; color: var(--text); font-size: 0.8em; white-space: nowrap; }
+    .txctl input[type="range"] { width: 100%; min-width: 0; }
+    .txctl.check { grid-template-columns: auto 1fr; justify-content: start; }
+    .txctl output { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
     /* 受信: カメラ映像。開始前後で高さが変わらないよう 4:3 の枠を確保し、映像は
        中身を歪めず枠内に収める (縦横比が違うカメラは上下に黒帯)。開始前は「停止中」。 */
     #calRxWrap { position: relative; background: #000;
@@ -107,17 +180,18 @@
        行数が増えても下の要素が飛ばないよう最小高さを確保する。 */
     .diag { white-space: pre-line; font-size: 0.8em; color: var(--muted); line-height: 1.6;
       margin-top: 0.5em; min-height: 2.6em; }
-    .camsel { max-width: 22em; }
+    .camsel { max-width: 100%; }
     /* 受信完了時の計測値 */
     .stats { border-collapse: collapse; margin: 0.6em 0; font-size: 0.9em; }
     .stats th { text-align: left; font-weight: 400; color: var(--muted); padding: 3px 12px 3px 0; }
     .stats td { font-weight: 600; padding: 3px 0; }
     textarea { width: 100%; box-sizing: border-box; background: var(--field); color: var(--text);
-      border: 1px solid var(--line); border-radius: 6px; padding: 0.5em; font-size: 1em;
-      font-family: inherit; resize: vertical; }
-    /* セグメント切替 (校正) */
+      border: 1px solid var(--line); border-radius: 6px; padding: 0.6em; font-size: 16px;
+      font-family: inherit; resize: vertical; display: block; }
+    /* セグメント切替 (送るものの選択 / 校正) */
     .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-    .seg button { background: #262a31; border: none; color: #cfd3da; padding: 0.45em 0.9em;
+    .seg.full { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; }
+    .seg button { background: #262a31; border: none; color: #cfd3da; padding: 0.55em 0.5em;
       font-size: 0.95em; cursor: pointer; border-radius: 0; transition: background 0.12s; }
     .seg button:hover { background: var(--hover); }
     .seg button.active { background: var(--accent); color: #fff; }
@@ -163,6 +237,8 @@
     #rxResult:not(:empty) { position: absolute; inset: 0; z-index: 4; overflow: auto; padding: 1.2em;
       background: rgba(8,10,14,0.94); display: flex; flex-direction: column;
       align-items: center; justify-content: center; gap: 0.5em; text-align: center; }
+    #rxResult .files { width: 100%; max-width: 30em; text-align: left; }
+    #rxResult .files a { color: var(--accent); text-decoration: none; padding: 0.3em 0.65em; }
     /* V受信ステージ下部: 露出コントロールと診断を縦に並べる */
     #rxBottom { flex-direction: column; align-items: stretch; gap: 0.4em; }
     #rxExpo { display: flex; align-items: center; gap: 0.6em; }
@@ -170,60 +246,98 @@
     #rxExpo input[type="range"] { flex: 1; min-width: 6em; }
     #rxExpoVal { min-width: 4em; text-align: right; }
     #rxExpoNote { font-size: 0.85em; }
-    /* 送信ステージの輝度/モアレ調整 */
-    .txctl { display: inline-flex; align-items: center; gap: 0.4em; color: var(--text); font-size: 0.9em; }
-    .txctl input[type="range"] { width: 6em; }
   </style>
 </head>
 <body>
   <header>
-    <h1>Vloom — PC 送受信</h1>
+    <h1>Vloom</h1>
+    <div id="coreStatus" class="muted">読み込み中…</div>
     <nav>
       <button id="tabSend" class="active">送信</button>
       <button id="tabRecv">受信</button>
       <button id="tabCal">校正</button>
     </nav>
-    <div id="coreStatus" class="muted">WASM 読み込み中...</div>
   </header>
   <main>
     <!-- ============ 送信 ============ -->
     <section id="paneSend" class="pane">
+      <!-- 送るものは 3 種類のうち 1 つ。以前はファイル欄とテキスト欄が並んでいて、両方に
+           入れるとテキストが黙って無視された。どれを送るのかを先に選ばせる。 -->
       <div class="card">
-        <div class="row">
-          <label>計測データ (条件を振って比べる用):
+        <h2>送るもの</h2>
+        <div class="seg full" id="txMode">
+          <button data-m="file" class="active">ファイル</button>
+          <button data-m="text">テキスト</button>
+          <button data-m="test">計測データ</button>
+        </div>
+
+        <div id="txSrcFile" class="src">
+          <label class="drop" id="txDrop">
+            <input type="file" id="txFile" multiple />
+            <strong>ファイルを選ぶ</strong>
+            <span class="muted small">複数選べます。ここへドロップしても追加できます</span>
+          </label>
+          <ul class="files" id="txFiles"></ul>
+          <div class="filesfoot" id="txFilesFoot" hidden>
+            <span class="muted" id="txFilesNote"></span>
+            <button class="secondary" id="txFilesClear">すべて外す</button>
+          </div>
+        </div>
+
+        <div id="txSrcText" class="src" hidden>
+          <textarea id="txText" rows="5" placeholder="送るテキストを入力"></textarea>
+          <div class="muted small" style="margin-top:0.4em">受信側にはテキストファイル (.txt) として届きます。</div>
+        </div>
+
+        <div id="txSrcTest" class="src" hidden>
+          <label class="field"><span>同梱の画像</span>
             <select id="txTest">
-              <option value="">使わない (ファイル/テキストを送る)</option>
-              <option value="./testdata/test-100KB.jpg">100KB の画像</option>
-              <option value="./testdata/test-500KB.jpg">500KB の画像</option>
-              <option value="./testdata/test-1MB.jpg">1MB の画像</option>
-              <option value="./testdata/test-2MB.jpg">2MB の画像</option>
+              <option value="./testdata/test-100KB.jpg" data-size="102431">100KB の画像</option>
+              <option value="./testdata/test-500KB.jpg" data-size="512781">500KB の画像</option>
+              <option value="./testdata/test-1MB.jpg" data-size="1048716" selected>1MB の画像</option>
+              <option value="./testdata/test-2MB.jpg" data-size="2091447">2MB の画像</option>
             </select></label>
+          <div class="muted small" style="margin-top:0.5em">条件を振って比べるための固定データです。
+            画像にサイズを焼き込んであるので、受信側で開けばどれが壊れずに届いたか分かります。</div>
         </div>
-        <div class="row"><input type="file" id="txFile" /></div>
-        <div class="row">
-          <textarea id="txText" rows="2" placeholder="または、ここにテキストを入力 (ファイル未選択時に送信)"></textarea>
-        </div>
-        <div class="row">
-          <label>格子:
+      </div>
+
+      <div class="card">
+        <h2>設定</h2>
+        <div class="fields">
+          <label class="field"><span>格子 (受信側と揃える)</span>
             <select id="txGrid">
-              <option value="7x6">7×6 (高密度)</option>
-              <option value="5x4">5×4 (標準)</option>
-              <option value="9x8">9×8 (超高密度)</option>
-              <option value="11x10">11×10 (最大)</option>
+              <option value="5x4">5×4 (確実)</option>
+              <option value="7x6">7×6 (標準)</option>
+              <option value="9x8">9×8 (高速)</option>
+              <option value="11x10">11×10 (限界)</option>
               <option value="11x14">11×14 (縦長)</option>
               <option value="13x18" selected>13×18 (超密)</option>
               <option value="18x13">18×13 (超密・横長)</option>
             </select></label>
-          <label>bit/セル:
-            <select id="txBpc">
-              <option value="1" selected>1 (白黒)</option>
-              <option value="2">2 (輝度4値)</option>
-            </select></label>
-          <label>FPS: <input type="number" id="txFps" value="20" min="2" max="60" style="width:4em" /></label>
-          <button id="txStart">送信開始</button>
         </div>
-        <div id="txTheory" class="muted"></div>
-        <div id="txInfo" class="muted">スマホアプリの「受信」でこの画面に向けてください。</div>
+        <details>
+          <summary>詳細設定 (通常は触らない)</summary>
+          <div class="fields">
+            <label class="field"><span>bit/セル</span>
+              <select id="txBpc">
+                <option value="1" selected>1 (白黒)</option>
+                <option value="2">2 (輝度4値・実験)</option>
+              </select></label>
+            <label class="field"><span>FPS</span>
+              <input type="number" id="txFps" value="20" min="2" max="60" inputmode="numeric" /></label>
+          </div>
+        </details>
+      </div>
+
+      <div class="card">
+        <h2>送信</h2>
+        <div id="txSummary"></div>
+        <div id="txOther"></div>
+        <div id="txEstimate"></div>
+        <div id="txTheory" class="muted small"></div>
+        <button id="txStart" class="wide">送信開始</button>
+        <div id="txInfo" class="muted"></div>
       </div>
     </section>
 
@@ -231,9 +345,9 @@
     <!-- 開始するとカメラを全画面表示 (#rxStage)。映像/枠/状態はそちらに置く。 -->
     <section id="paneRecv" class="pane">
       <div class="card">
-        <div class="row">
-          <label>カメラ: <select id="rxCamera" class="camsel"></select></label>
-          <label>格子:
+        <div class="fields">
+          <label class="field"><span>カメラ</span><select id="rxCamera" class="camsel"></select></label>
+          <label class="field"><span>格子</span>
             <select id="rxGrid">
               <option value="auto" selected>自動 (候補総当たり)</option>
               <option value="5x4">5×4</option>
@@ -245,9 +359,9 @@
               <option value="18x13">18×13</option>
             </select></label>
         </div>
-        <div class="row"><button id="rxStart">受信開始 (全画面)</button></div>
+        <div class="row" style="margin-top:1em"><button id="rxStart" class="wide">受信開始</button></div>
         <div id="rxError" class="ng"></div>
-        <div class="muted">カメラを全画面で開きます。送信側の vcode を中央のオレンジ枠に収めてください。</div>
+        <div class="muted small">カメラを全画面で開きます。送信側のコードを中央のオレンジ枠に収めてください。</div>
       </div>
     </section>
 
@@ -255,7 +369,7 @@
     <section id="paneCal" class="pane">
       <div class="card">
         <div class="row">
-          <div class="seg" id="calMode">
+          <div class="seg full" id="calMode" style="flex:1">
             <button data-m="send" class="active">送信(表示)</button>
             <button data-m="recv">受信(確認)</button>
           </div>
@@ -265,7 +379,7 @@
       <!-- 送信(表示) -->
       <div id="calSendView">
         <div class="card">
-          <div class="row"><button id="calShow">テストパターンを全画面表示</button></div>
+          <div class="row"><button id="calShow" class="wide">テストパターンを全画面表示</button></div>
           <div class="muted">受信側が読めたらそのレベルはOK。ゆるい→きつい と上げて限界を探す。
             もう一方の端末 (スマホアプリ / 別PC) の「校正 → 受信(確認)」で読み取ります。</div>
         </div>
@@ -280,7 +394,7 @@
             <button id="calRecvReset" class="secondary">リセット</button>
           </div>
           <div class="row">
-            <label>カメラ: <select id="calCamera" class="camsel"></select></label>
+            <label class="field" style="flex:1"><span>カメラ</span><select id="calCamera" class="camsel"></select></label>
           </div>
           <div id="calRxWrap"><video id="calVideo" autoplay playsinline muted></video></div>
           <div id="calBest" class="muted" style="margin-top:0.6em">送信側のテストパターンに向けてください</div>
@@ -300,14 +414,18 @@
   <div id="txStage">
     <canvas id="txCanvas" width="1080" height="1080"></canvas>
     <div id="txBar">
-      <label class="txctl">大きさ <input type="range" id="txSize" min="30" max="100" value="100" /> <span id="txSizeVal">100%</span></label>
-      <label class="txctl"><input type="checkbox" id="txHold" /> 静止</label>
-      <label class="txctl">輝度 <input type="range" id="txBright" min="30" max="100" value="100" /></label>
-      <label class="txctl">モアレ <input type="range" id="txBlur" min="0" max="3" step="0.5" value="0" /></label>
-      <div class="grow"><span id="txStatus"></span> <span id="txGeom" class="muted"></span>
-        <!-- 読めない大きさでしか描けていないときの警告。muted に混ぜると見落とすので分ける -->
-        <div id="txWarn"></div></div>
-      <button id="txStop" class="secondary">停止</button>
+      <div class="txhead">
+        <div class="grow"><span id="txStatus"></span><span id="txGeom" class="muted"></span>
+          <!-- 読めない大きさでしか描けていないときの警告。muted に混ぜると見落とすので分ける -->
+          <div id="txWarn"></div></div>
+        <button id="txStop" class="secondary">停止</button>
+      </div>
+      <div class="txctls">
+        <label class="txctl">大きさ <input type="range" id="txSize" min="30" max="100" value="100" /> <output id="txSizeVal">100%</output></label>
+        <label class="txctl">輝度 <input type="range" id="txBright" min="30" max="100" value="100" /> <output id="txBrightVal">100%</output></label>
+        <label class="txctl">モアレ <input type="range" id="txBlur" min="0" max="3" step="0.5" value="0" /> <output id="txBlurVal">0</output></label>
+        <label class="txctl check"><input type="checkbox" id="txHold" /> 静止 (同じフレームで止める)</label>
+      </div>
     </div>
   </div>
 
