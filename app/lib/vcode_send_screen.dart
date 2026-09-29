@@ -14,26 +14,33 @@ import 'test_payload.dart';
 import 'ui_common.dart';
 import 'src/rust/api/vcode.dart';
 
-/// vcode (独自フォーマット) 送信画面。研究用: 単一ブロック・生バイトを
-/// アニメーション vcode で送出する。
+/// 送るものの種類。送るのは常にこのうち選ばれている 1 つだけ。
+/// 以前はテキスト欄とファイル欄が並んでいて、両方に入れるとテキストが黙って無視された。
+enum TxSource { file, text, test }
+
+const _kSourceLabel = {
+  TxSource.file: 'ファイル',
+  TxSource.text: 'テキスト',
+  TxSource.test: '計測データ',
+};
+
+/// 選択中のファイル 1 件
+typedef _Picked = ({String path, String name, String mime, int size});
+
+/// vcode (独自フォーマット) 送信画面。ペイロードをアニメーション vcode で送出する。
 class VcodeSendScreen extends StatefulWidget {
   const VcodeSendScreen({super.key});
   @override
   State<VcodeSendScreen> createState() => _VcodeSendScreenState();
 }
 
-/// 1 フレームは最低 2 リフレッシュ周期表示しないとキャプチャが遷移を捉えるため、
-/// 60Hz 画面で安全に出せる fps の上限。120Hz 画面ならこの倍まで出せる。
-const kRefreshSafeFps = 30;
-
 class _VcodeSendScreenState extends State<VcodeSendScreen> {
   final _textCtrl = TextEditingController();
-  String? _pickedPath;
-  String? _pickedName;
-  String? _pickedMime; // 選択ファイルの MIME (受信側で元種別を復元する用)
-  int _pickedSize = 0;
-
-  String? _testAsset; // 計測用テスト画像のアセットパス (null = ファイル/テキストを送る)
+  TxSource _source = TxSource.file;
+  // 選択中のファイル。選び直しても置き換えず、足していく
+  final List<_Picked> _files = [];
+  // 計測用テスト画像 (毎回同じ内容で条件比較できる)。既定は定常が測れる 1MB
+  String _testAsset = kTestImages[2].$2;
   // 選択中のプリセット (-1 = 詳細設定を直接触ったカスタム)
   int _presetIndex = kDefaultPresetIndex;
   double _repairRate = 0.5; // リペアパケット比率 (source 比)
@@ -52,16 +59,66 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
   final Map<int, ui.Image> _cache = {};
   String _status = '';
 
-  Future<void> _pickFile() async {
-    final f = await openFile();
-    if (f == null) return;
-    final len = await f.length();
+  @override
+  void initState() {
+    super.initState();
+    // 入力のたびに送信内容のまとめ (サイズ・目安) を更新する
+    _textCtrl.addListener(() => setState(() {}));
+  }
+
+  Future<void> _pickFiles() async {
+    final picked = await openFiles();
+    if (picked.isEmpty) return;
+    final added = <_Picked>[];
+    for (final f in picked) {
+      added.add((
+        path: f.path,
+        name: f.name,
+        mime: f.mimeType ?? '',
+        size: await f.length(),
+      ));
+    }
+    if (!mounted) return;
     setState(() {
-      _pickedPath = f.path;
-      _pickedName = f.name;
-      _pickedMime = f.mimeType;
-      _pickedSize = len;
+      for (final f in added) {
+        // 同じものを 2 度選んだときは足さない
+        if (!_files.any((g) => g.path == f.path)) _files.add(f);
+      }
     });
+  }
+
+  int get _textBytes => utf8.encode(_textCtrl.text).length;
+
+  /// 今の選択で送るものの大きさ (何も無ければ 0)
+  int get _planBytes => switch (_source) {
+        TxSource.file => _files.fold(0, (a, f) => a + f.size),
+        TxSource.text => _textBytes,
+        TxSource.test =>
+          kTestImages.firstWhere((t) => t.$2 == _testAsset).$3,
+      };
+
+  /// 今の選択で送るものの説明
+  String get _planText => switch (_source) {
+        TxSource.file => _files.isEmpty
+            ? 'ファイルが選ばれていません'
+            : _files.length == 1
+                ? '${_files.first.name} · ${fmtSize(_planBytes)}'
+                : 'ファイル ${_files.length} 個 (ZIP) · ${fmtSize(_planBytes)}',
+        TxSource.text => _textBytes == 0
+            ? 'テキストが入力されていません'
+            : 'テキスト · ${fmtSize(_textBytes)}',
+        TxSource.test =>
+          '計測データ · ${testImageName(_testAsset)} (${fmtSize(_planBytes)})',
+      };
+
+  /// 選んでいない側に残っている入力 (送られないことを明示するため)
+  String? get _leftover {
+    final left = [
+      if (_source != TxSource.file && _files.isNotEmpty) 'ファイル ${_files.length} 個',
+      if (_source != TxSource.text && _textBytes > 0) '入力済みのテキスト',
+    ];
+    if (left.isEmpty) return null;
+    return '${left.join("と")}は送られません (送るのは「${_kSourceLabel[_source]}」)';
   }
 
   /// 送信開始からの経過
@@ -86,14 +143,56 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
     return blocks * packetSizeFor(_bpc) * _fps / 1024;
   }
 
-  Future<Uint8List?> _buildPayload() async {
-    // 計測用テスト画像が選ばれていれば最優先 (毎回同じ内容で条件比較できる)
-    if (_testAsset != null) return loadTestImage(_testAsset!);
-    if (_pickedPath != null) {
-      return XFile(_pickedPath!).readAsBytes();
+  /// 選ばれているものを、送る 1 本のバイト列 (と名前・種別) にする
+  Future<({Uint8List bytes, String name, String mime})> _buildPayload() async {
+    final now = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    final stamp = '${now.year}${two(now.month)}${two(now.day)}_'
+        '${two(now.hour)}${two(now.minute)}${two(now.second)}';
+    switch (_source) {
+      case TxSource.test:
+        return (
+          bytes: await loadTestImage(_testAsset),
+          name: testImageName(_testAsset),
+          mime: 'image/jpeg',
+        );
+      case TxSource.text:
+        // 毎回 message.txt だと受信側で同名が積み重なるので、送信時刻を付ける
+        return (
+          bytes: Uint8List.fromList(utf8.encode(_textCtrl.text)),
+          name: 'message_$stamp.txt',
+          mime: 'text/plain;charset=utf-8',
+        );
+      case TxSource.file:
+        if (_files.length == 1) {
+          final f = _files.first;
+          return (
+            bytes: await XFile(f.path).readAsBytes(),
+            name: f.name,
+            mime: f.mime,
+          );
+        }
+        // 複数ファイルは無圧縮 ZIP にまとめる (形式は 1 本のバイト列しか運ばない)。
+        // 受信側がまとめを解けない古い版でも、ZIP としてそのまま開ける。
+        final entries = <VcodeBundleFile>[
+          for (final f in _files)
+            VcodeBundleFile(
+                name: f.name, data: await XFile(f.path).readAsBytes()),
+        ];
+        return (
+          bytes: vcodeBundleFiles(
+            files: entries,
+            year: now.year,
+            month: now.month,
+            day: now.day,
+            hour: now.hour,
+            minute: now.minute,
+            second: now.second,
+          ),
+          name: 'vloom_$stamp.zip',
+          mime: 'application/zip',
+        );
     }
-    final body = Uint8List.fromList(utf8.encode(_textCtrl.text));
-    return body.isEmpty ? null : body;
   }
 
   /// グレースケール frame を ui.Image (RGBA) に変換する
@@ -122,24 +221,19 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
   }
 
   Future<void> _start() async {
-    final raw = await _buildPayload();
-    if (raw == null) {
-      setState(() => _status = 'ペイロードが空です');
+    if (_planBytes == 0) return;
+    final ({Uint8List bytes, String name, String mime}) src;
+    try {
+      src = await _buildPayload();
+    } catch (e) {
+      // 選んだ後で消された・権限が切れた等
+      if (mounted) setState(() => _status = '読み込めませんでした: $e');
       return;
     }
-    // 元のファイル名/MIME をヘッダに埋めて送る (受信側で元名・種別をそのまま復元)。
-    // テキスト送信の既定名は送信時刻入り (毎回 message.txt だと受信側で同名が積み重なる)
-    final now = DateTime.now();
-    String two(int v) => v.toString().padLeft(2, '0');
-    final stamp = '${now.year}${two(now.month)}${two(now.day)}_'
-        '${two(now.hour)}${two(now.minute)}${two(now.second)}';
-    final name = _testAsset != null
-        ? testImageName(_testAsset!)
-        : (_pickedName ?? 'message_$stamp.txt');
-    final mime = _testAsset != null
-        ? 'image/jpeg'
-        : (_pickedPath != null ? (_pickedMime ?? '') : 'text/plain;charset=utf-8');
-    final payload = vcodeWrapFile(name: name, mime: mime, data: raw);
+    final name = src.name;
+    final mime = src.mime;
+    // 元のファイル名/MIME をヘッダに埋めて送る (受信側で元名・種別をそのまま復元)
+    final payload = vcodeWrapFile(name: name, mime: mime, data: src.bytes);
     final sourcePackets = (payload.length / packetSizeFor(_bpc)).ceil();
     final gridParts = _grid.split('x');
     final tx = VcodeTx(
@@ -155,8 +249,7 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
       _frameCount = tx.frameCount();
       _cache.clear();
       _running = true;
-      _status =
-          '${payload.length} B → ${tx.packetCount()} pkt / $_frameCount frames';
+      _status = '';
     });
     debugPrint('[vcode-tx] start: ${payload.length} B, '
         '${tx.packetCount()} packets, $_frameCount frames, $_fps fps');
@@ -244,167 +337,335 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
         onTap: _stop,
         child: Container(
           color: Colors.white,
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            children: [
-              Expanded(
-                child: Center(
-                  child: _current == null
-                      ? const CircularProgressIndicator()
-                      : AspectRatio(
-                          aspectRatio: _current!.width / _current!.height,
-                          child: RawImage(
-                            image: _current,
-                            fit: BoxFit.contain,
-                            filterQuality: FilterQuality.none,
+          child: SafeArea(
+            minimum: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                Expanded(
+                  child: Center(
+                    child: _current == null
+                        ? const CircularProgressIndicator()
+                        : AspectRatio(
+                            aspectRatio: _current!.width / _current!.height,
+                            child: RawImage(
+                              image: _current,
+                              fit: BoxFit.contain,
+                              filterQuality: FilterQuality.none,
+                            ),
                           ),
-                        ),
+                  ),
                 ),
-              ),
-              // 一方向通信なので受信成功は送信側から分からないが、経過時間は測れる。
-              // 受信側の所要時間の目安になり、1 巡に何秒かかるかも分かる。
-              Text(
-                '${_fmtElapsed(_sendElapsed)}  ·  '
-                'frame ${_frameIdx % (_frameCount == 0 ? 1 : _frameCount)}/$_frameCount  ·  '
-                '${_frameCount == 0 ? 0 : _frameIdx ~/ _frameCount} 巡'
-                '${_loopSeconds > 0 ? " (1巡 ${_loopSeconds.toStringAsFixed(1)}秒)" : ""}',
-                style: const TextStyle(color: Colors.black54, fontSize: 12),
-              ),
-              const SizedBox(height: 8),
-              FilledButton.icon(
-                onPressed: _stop,
-                icon: const Icon(Icons.stop),
-                label: const Text('送信を終了'),
-              ),
-            ],
+                // 一方向通信なので受信成功は送信側から分からないが、経過時間は測れる。
+                // 受信側の所要時間の目安になり、1 巡に何秒かかるかも分かる。
+                Text(
+                  '${_sending == null ? "" : "${fmtSize(_sending!.size)}  ·  "}'
+                  '${_fmtElapsed(_sendElapsed)}  ·  '
+                  '${_frameCount == 0 ? 1 : _frameIdx ~/ _frameCount + 1} 巡目'
+                  '${_loopSeconds > 0 ? " (1 巡 ${_loopSeconds.toStringAsFixed(1)} 秒)" : ""}',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.black54, fontSize: 12),
+                ),
+                const SizedBox(height: 8),
+                FilledButton.icon(
+                  onPressed: _stop,
+                  icon: const Icon(Icons.stop),
+                  label: const Text('送信を終了'),
+                ),
+              ],
+            ),
           ),
         ),
       );
     }
 
+    // Scaffold が本文を AppBar とナビの下まで伸ばしている (extendBody) ので、
+    // その分を余白に足す。固定の余白だけだと上下の端が隠れる
+    final inset = MediaQuery.paddingOf(context);
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.fromLTRB(12, inset.top + 12, 12, inset.bottom + 16),
       children: [
-        Text('vcode 送信 (研究)', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        TextField(
-          controller: _textCtrl,
-          maxLines: 3,
-          decoration: const InputDecoration(
-            border: OutlineInputBorder(),
-            labelText: 'テキスト (ファイル未選択時に使用)',
+        _section(
+          context,
+          '送るもの',
+          [
+            SizedBox(
+              width: double.infinity,
+              child: SegmentedButton<TxSource>(
+                segments: [
+                  for (final e in _kSourceLabel.entries)
+                    ButtonSegment(value: e.key, label: Text(e.value)),
+                ],
+                selected: {_source},
+                showSelectedIcon: false,
+                onSelectionChanged: (s) => setState(() => _source = s.first),
+              ),
+            ),
+            const SizedBox(height: 12),
+            ...switch (_source) {
+              TxSource.file => _fileSource(context),
+              TxSource.text => _textSource(context),
+              TxSource.test => _testSource(context),
+            },
+          ],
+        ),
+        _section(
+          context,
+          '設定',
+          [
+            // プリセット: 格子・階調・fps をまとめて決める。個別に合わせると送受信で
+            // 食い違い、何が原因か分からなくなるため、まずこれを選ぶ。
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: [
+                for (var i = 0; i < kPresets.length; i++)
+                  ChoiceChip(
+                    label: Text(kPresets[i].name),
+                    selected: _presetIndex == i,
+                    onSelected: (_) => setState(() {
+                      _presetIndex = i;
+                      _grid = kPresets[i].grid;
+                      _bpc = kPresets[i].bpc;
+                      _fps = kPresets[i].fps;
+                    }),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              _presetIndex >= 0
+                  ? '${kPresets[_presetIndex].description}\n'
+                      '受信側は「${kPresets[_presetIndex].name}」を選ぶ'
+                  : 'カスタム ($_grid · ${_bpc}bit · ${_fps}fps)',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            ExpansionTile(
+              title: Text('詳細設定 (通常は触らない)',
+                  style: Theme.of(context).textTheme.bodySmall),
+              tilePadding: EdgeInsets.zero,
+              shape: const Border(),
+              children: _advanced(context),
+            ),
+          ],
+        ),
+        _section(
+          context,
+          '送信',
+          [
+            Text(
+              _planText,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: _planBytes == 0
+                        ? Theme.of(context).colorScheme.onSurfaceVariant
+                        : null,
+                  ),
+            ),
+            if (_leftover != null) _notice(context, _leftover!),
+            const SizedBox(height: 10),
+            ..._estimate(context),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: _planBytes == 0 ? null : _start,
+                icon: const Icon(Icons.play_arrow),
+                label: const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Text('送信開始'),
+                ),
+              ),
+            ),
+            if (_status.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(_status,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            ],
+          ],
+        ),
+      ],
+    );
+  }
+
+  /// 見出し付きのまとまり
+  Widget _section(BuildContext context, String title, List<Widget> children) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title,
+                style: Theme.of(context)
+                    .textTheme
+                    .labelMedium
+                    ?.copyWith(color: scheme.onSurfaceVariant)),
+            const SizedBox(height: 10),
+            ...children,
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 見落とされたくない注意 (送られない入力がある等)
+  Widget _notice(BuildContext context, String text) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0x38B45309),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(text,
+          style: const TextStyle(color: Color(0xFFF3C98B), fontSize: 12)),
+    );
+  }
+
+  List<Widget> _fileSource(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return [
+      SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          onPressed: _pickFiles,
+          icon: const Icon(Icons.attach_file),
+          label: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Text(_files.isEmpty ? 'ファイルを選ぶ (複数可)' : 'ファイルを追加'),
           ),
         ),
-        const SizedBox(height: 8),
+      ),
+      for (final f in _files)
+        Container(
+          margin: const EdgeInsets.only(top: 6),
+          padding: const EdgeInsets.only(left: 12),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              Expanded(child: Text(f.name, overflow: TextOverflow.ellipsis)),
+              const SizedBox(width: 8),
+              Text(fmtSize(f.size),
+                  style: TextStyle(
+                      fontSize: 12, color: scheme.onSurfaceVariant)),
+              IconButton(
+                icon: const Icon(Icons.close, size: 18),
+                tooltip: '${f.name} を外す',
+                visualDensity: VisualDensity.compact,
+                onPressed: () => setState(() => _files.remove(f)),
+              ),
+            ],
+          ),
+        ),
+      if (_files.isNotEmpty)
         Row(
           children: [
-            OutlinedButton.icon(
-              onPressed: _pickFile,
-              icon: const Icon(Icons.attach_file),
-              label: const Text('ファイル'),
-            ),
-            const SizedBox(width: 12),
             Expanded(
               child: Text(
-                _pickedName == null ? '未選択' : '$_pickedName ($_pickedSize B)',
-                overflow: TextOverflow.ellipsis,
+                _files.length > 1 ? '${_files.length} 個を 1 つの ZIP にまとめて送ります' : '',
+                style: Theme.of(context).textTheme.bodySmall,
               ),
             ),
-            if (_pickedName != null)
-              IconButton(
-                icon: const Icon(Icons.clear),
-                onPressed: () => setState(() {
-                  _pickedPath = null;
-                  _pickedName = null;
-                  _pickedMime = null;
-                  _pickedSize = 0;
-                }),
-              ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        // 計測用テストデータ。条件を振って比べるとき、毎回同じ内容を送れるようにする。
-        Row(
-          children: [
-            const Text('計測データ'),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Wrap(
-                spacing: 6,
-                children: [
-                  ChoiceChip(
-                    label: const Text('使わない'),
-                    selected: _testAsset == null,
-                    onSelected: (_) => setState(() => _testAsset = null),
-                  ),
-                  for (final (label, asset, _) in kTestImages)
-                    ChoiceChip(
-                      label: Text(label),
-                      selected: _testAsset == asset,
-                      onSelected: (_) => setState(() {
-                        _testAsset = asset;
-                        // 誤って古い選択が残らないよう、ファイル選択は解除する
-                        _pickedPath = null;
-                        _pickedName = null;
-                        _pickedMime = null;
-                        _pickedSize = 0;
-                      }),
-                    ),
-                ],
-              ),
+            TextButton(
+              onPressed: () => setState(_files.clear),
+              child: const Text('すべて外す'),
             ),
           ],
         ),
-        const SizedBox(height: 8),
-        // プリセット: 格子・階調・fps をまとめて決める。個別に合わせると送受信で
-        // 食い違い、何が原因か分からなくなるため、まずこれを選ぶ。
-        Row(
-          children: [
-            const Text('プリセット'),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Wrap(
-                spacing: 6,
-                children: [
-                  for (var i = 0; i < kPresets.length; i++)
-                    ChoiceChip(
-                      label: Text(kPresets[i].name),
-                      selected: _presetIndex == i,
-                      onSelected: (_) => setState(() {
-                        _presetIndex = i;
-                        _grid = kPresets[i].grid;
-                        _bpc = kPresets[i].bpc;
-                        _fps = kPresets[i].fps;
-                      }),
-                    ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          child: Text(
-            _presetIndex >= 0
-                ? '${kPresets[_presetIndex].description}\n'
-                    '理論 ${_theoreticalKbps.toStringAsFixed(0)} KB/s'
-                    '  ·  受信側は「${kPresets[_presetIndex].name}」を選ぶ'
-                : 'カスタム  ·  理論 ${_theoreticalKbps.toStringAsFixed(0)} KB/s'
-                    '  ($_grid · ${_bpc}bit · ${_fps}fps)',
-            style: Theme.of(context).textTheme.bodySmall,
+    ];
+  }
+
+  List<Widget> _textSource(BuildContext context) => [
+        TextField(
+          controller: _textCtrl,
+          maxLines: 5,
+          decoration: const InputDecoration(
+            border: OutlineInputBorder(),
+            hintText: '送るテキストを入力',
           ),
         ),
-        ExpansionTile(
-          title: Text('詳細設定 (通常は触らない)',
-              style: Theme.of(context).textTheme.bodySmall),
-          tilePadding: EdgeInsets.zero,
+        const SizedBox(height: 6),
+        Text('受信側にはテキストファイル (.txt) として届きます。',
+            style: Theme.of(context).textTheme.bodySmall),
+      ];
+
+  // 計測用テストデータ。条件を振って比べるとき、毎回同じ内容を送れるようにする。
+  List<Widget> _testSource(BuildContext context) => [
+        Wrap(
+          spacing: 6,
+          runSpacing: 4,
           children: [
+            for (final (label, asset, _) in kTestImages)
+              ChoiceChip(
+                label: Text(label),
+                selected: _testAsset == asset,
+                onSelected: (_) => setState(() => _testAsset = asset),
+              ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          '条件を振って比べるための固定画像です。サイズを焼き込んであるので、'
+          '受信側で開けばどれが壊れずに届いたか分かります。',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      ];
+
+  /// 所要時間の目安。理論値ではなく実測の中央値から出す (出どころは preset.dart)
+  List<Widget> _estimate(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final small = Theme.of(context).textTheme.bodySmall;
+    final theory = '理論 ${_theoreticalKbps.toStringAsFixed(0)} KB/s'
+        ' ($_grid · ${_bpc}bit · ${_fps}fps)'
+        '${_fps > kRefreshSafeFps ? "  ※${kRefreshSafeFps}fps 超は 120Hz 画面向け" : ""}';
+    final kbps = measuredKbps(_grid, _bpc, _fps);
+    if (_planBytes == 0) return [Text(theory, style: small)];
+    if (kbps == null) {
+      return [
+        Text('この設定は実測が無いため、所要時間の目安を出せません。\n$theory', style: small),
+      ];
+    }
+    return [
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerLowest,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: scheme.outlineVariant),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('所要時間の目安 (アプリで受信)', style: small),
+            Text(
+              fmtEstimate(_planBytes / 1024 / kbps),
+              style: Theme.of(context)
+                  .textTheme
+                  .headlineSmall
+                  ?.copyWith(fontWeight: FontWeight.w600),
+            ),
+            Text('実測 ${kbps.toStringAsFixed(0)} KB/s', style: small),
+          ],
+        ),
+      ),
+      const SizedBox(height: 6),
+      Text('実測の中央値からの目安 (三脚固定・Pixel 9a)。手持ちや距離で変わります。\n$theory',
+          style: small),
+    ];
+  }
+
+  List<Widget> _advanced(BuildContext context) => [
         Row(
           children: [
-            const Text('格子'),
-            const SizedBox(width: 12),
+            const SizedBox(width: 44, child: Text('格子')),
             // 6 つ並ぶと端末幅に入らないので横スクロールさせる
-            Flexible(
+            Expanded(
               child: SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: SegmentedButton<String>(
@@ -428,22 +689,29 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
         const SizedBox(height: 8),
         Row(
           children: [
-            const Text('階調'),
-            const SizedBox(width: 12),
-            SegmentedButton<int>(
-              segments: const [
-                ButtonSegment(value: 1, label: Text('白黒 1bit')),
-                ButtonSegment(value: 2, label: Text('4値 2bit')),
-              ],
-              selected: {_bpc},
-              onSelectionChanged: (s) => setState(() { _bpc = s.first; _presetIndex = -1; }),
+            const SizedBox(width: 44, child: Text('階調')),
+            Expanded(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SegmentedButton<int>(
+                  segments: const [
+                    ButtonSegment(value: 1, label: Text('白黒 1bit')),
+                    ButtonSegment(value: 2, label: Text('4値 2bit')),
+                  ],
+                  selected: {_bpc},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (s) =>
+                      setState(() { _bpc = s.first; _presetIndex = -1; }),
+                ),
+              ),
             ),
           ],
         ),
-        const SizedBox(height: 8),
+        // 1 フレームは最低 2 リフレッシュ周期表示しないとキャプチャが遷移を捉える。
+        // 60Hz 画面なら 30fps、120Hz 画面なら 60fps が上限の目安。
         Row(
           children: [
-            const Text('FPS'),
+            const SizedBox(width: 44, child: Text('FPS')),
             Expanded(
               child: Slider(
                 value: _fps.toDouble(),
@@ -451,23 +719,16 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
                 max: 60,
                 divisions: 57,
                 label: '$_fps',
-                onChanged: (v) => setState(() { _fps = v.round(); _presetIndex = -1; }),
+                onChanged: (v) =>
+                    setState(() { _fps = v.round(); _presetIndex = -1; }),
               ),
             ),
-            Text('$_fps'),
+            SizedBox(width: 44, child: Text('$_fps', textAlign: TextAlign.end)),
           ],
-        ),
-        // 1 フレームは最低 2 リフレッシュ周期表示しないとキャプチャが遷移を捉える。
-        // 60Hz 画面なら 30fps、120Hz 画面なら 60fps が上限の目安。
-        Text(
-          '理論 ${_theoreticalKbps.toStringAsFixed(0)} KB/s'
-          '  ($_grid · ${_bpc}bit · ${_fps}fps)'
-          '${_fps > kRefreshSafeFps ? "  ※${kRefreshSafeFps}fps 超は 120Hz 画面向け" : ""}',
-          style: Theme.of(context).textTheme.bodySmall,
         ),
         Row(
           children: [
-            const Text('repair'),
+            const SizedBox(width: 44, child: Text('repair')),
             Expanded(
               child: Slider(
                 value: _repairRate,
@@ -478,19 +739,11 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
                 onChanged: (v) => setState(() => _repairRate = v),
               ),
             ),
-            Text('${(_repairRate * 100).round()}%'),
+            SizedBox(
+                width: 44,
+                child: Text('${(_repairRate * 100).round()}%',
+                    textAlign: TextAlign.end)),
           ],
         ),
-        ]),
-        const SizedBox(height: 8),
-        FilledButton.icon(
-          onPressed: _start,
-          icon: const Icon(Icons.play_arrow),
-          label: const Text('送信開始'),
-        ),
-        const SizedBox(height: 8),
-        Text(_status),
-      ],
-    );
-  }
+      ];
 }

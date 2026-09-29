@@ -11,6 +11,13 @@ import 'package:flutter/material.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 
+/// バイト数を「1.2MB」の形にする
+String fmtSize(int n) {
+  if (n >= 1024 * 1024) return '${(n / 1024 / 1024).toStringAsFixed(1)}MB';
+  if (n >= 1024) return '${(n / 1024).toStringAsFixed(1)}KB';
+  return '${n}B';
+}
+
 /// トーストの種別。色とアイコンだけが変わる。
 enum ToastKind { info, success, error }
 

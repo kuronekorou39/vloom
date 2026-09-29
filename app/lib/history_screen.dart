@@ -78,12 +78,6 @@ String _fmtTime(DateTime t) {
   return '${t.month}/${t.day} ${two(t.hour)}:${two(t.minute)}';
 }
 
-String _fmtSize(int n) {
-  if (n >= 1024 * 1024) return '${(n / 1024 / 1024).toStringAsFixed(1)}MB';
-  if (n >= 1024) return '${(n / 1024).toStringAsFixed(1)}KB';
-  return '${n}B';
-}
-
 class _ReceivedList extends StatelessWidget {
   final List<HistoryItem> items;
   const _ReceivedList({required this.items});
@@ -101,7 +95,7 @@ class _ReceivedList extends StatelessWidget {
           leading: Icon(isImage ? Icons.image : Icons.insert_drive_file),
           title: Text(it.name, overflow: TextOverflow.ellipsis),
           subtitle: Text([
-            '${_fmtSize(it.size)}  ·  ${_fmtTime(it.time)}',
+            '${fmtSize(it.size)}  ·  ${_fmtTime(it.time)}',
             if (it.note != null) it.note!,
           ].join('\n')),
           isThreeLine: it.note != null,
@@ -145,7 +139,7 @@ class _SentList extends StatelessWidget {
           leading: const Icon(Icons.upload),
           title: Text(it.name, overflow: TextOverflow.ellipsis),
           subtitle: Text(
-              '${_fmtSize(it.size)}  ·  grid ${it.grid ?? "-"} / EC ${it.ec ?? "-"}  ·  ${_fmtTime(it.time)}'),
+              '${fmtSize(it.size)}  ·  grid ${it.grid ?? "-"} / EC ${it.ec ?? "-"}  ·  ${_fmtTime(it.time)}'),
         );
       },
     );
@@ -186,7 +180,7 @@ class _ViewerPage extends StatelessWidget {
             const Icon(Icons.check_circle, color: Colors.green, size: 48),
             const SizedBox(height: 8),
             Text(item.name),
-            Text('${item.type}  ${_fmtSize(item.size)}'),
+            Text('${item.type}  ${fmtSize(item.size)}'),
             const SizedBox(height: 8),
             const SizedBox(height: 16),
             FilledButton.icon(

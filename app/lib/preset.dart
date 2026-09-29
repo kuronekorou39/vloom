@@ -170,3 +170,58 @@ const kPresets = <VcodePreset>[
 /// 既定は「超密」(縦長 13×18 / 1bit)。スマホ縦持ちの視野を使い切る現行の最速構成。
 /// 送受信とも既定で揃うので、双方がそのまま起動すれば掴める
 const kDefaultPresetIndex = 5;
+
+// --- 所要時間の目安 ---
+//
+// 理論値 (ブロック数 × packet_size × fps) は取りこぼしも RaptorQ の冗長も含まないので、
+// そのまま時間に直すと必ず短く出る。送信側は受信できたかを知る手段がない (一方向通信)
+// ため、その場の実測も使えない。docs/ に記録してある計測の中央値から出す。
+//
+// 数字を更新するときは docs/experiments.md と docs/measurements/ の記録を先に足し、
+// PWA 側の写し (web/pwa/estimate.js の MEASURED) も揃えること。
+
+/// 実効スループットの実測 1 件 (KB/s は中央値、fps は測ったときの送信 fps)
+typedef MeasuredRun = ({int fps, double kbps});
+
+/// アプリ受信の実測 (1bit、Pixel 9a・三脚固定)。1 本ごとに ±15% ほどばらつく。
+///   5x4 / 7x6 / 9x8 / 11x10 — 2026-08-28 (BenQ, 各 2 本)
+///   11x14                   — 2026-08-30 格子の天井 (76.7 / 89.5 / 80.5)
+///   13x18 @20               — 2026-09-07 LCD 送信, 5 本 (143.6〜154.5)
+///   13x18 @30               — 2026-08-31 OLED 送信 (201〜207)
+const kMeasuredKbps = <String, List<MeasuredRun>>{
+  '5x4': [(fps: 20, kbps: 9.5)],
+  '7x6': [(fps: 20, kbps: 22.0)],
+  '9x8': [(fps: 20, kbps: 39.5)],
+  '11x10': [(fps: 20, kbps: 60.0)],
+  '11x14': [(fps: 20, kbps: 80.5)],
+  '13x18': [(fps: 20, kbps: 151.7), (fps: 30, kbps: 204)],
+};
+
+/// 1 フレームは最低 2 リフレッシュ周期表示しないとキャプチャが遷移を捉えるため、
+/// 60Hz 画面で安全に出せる fps の上限。120Hz 画面ならこの倍まで出せる。
+const kRefreshSafeFps = 30;
+
+/// その設定で見込める実効スループット (KB/s)。実測が無い組み合わせは null。
+/// fps が測ったときと違う場合は、最も近い実測から fps に比例させる。60Hz 画面の
+/// 上限を超えるぶんは伸びに数えない (40fps は 30fps より遅かった)。
+double? measuredKbps(String grid, int bpc, int fps) {
+  // 輝度 4 値は同じ格子の 1bit より遅く、密な格子では回収 0 になる。目安を出せない
+  if (bpc != 1) return null;
+  final runs = kMeasuredKbps[grid];
+  if (runs == null) return null;
+  final f = fps > kRefreshSafeFps ? kRefreshSafeFps : fps;
+  final near = runs.reduce(
+      (a, b) => (b.fps - f).abs() < (a.fps - f).abs() ? b : a);
+  return near.kbps * f / near.fps;
+}
+
+/// 見込みの秒数を「約 8 秒」「約 1 分 20 秒」の形にする (目安なので細かく出さない)
+String fmtEstimate(double sec) {
+  if (sec < 1) return '1 秒未満';
+  if (sec < 10) return '約 ${sec.toStringAsFixed(1)} 秒';
+  if (sec < 60) return '約 ${sec.round()} 秒';
+  final m = sec ~/ 60;
+  final s = ((sec - m * 60) / 10).round() * 10;
+  if (s == 60) return '約 ${m + 1} 分';
+  return s == 0 ? '約 $m 分' : '約 $m 分 $s 秒';
+}
