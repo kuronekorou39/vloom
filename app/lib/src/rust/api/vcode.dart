@@ -30,6 +30,31 @@ Uint8List vcodeWrapFile({
 VcodeFile? vcodeUnwrapFile({required List<int> buf}) =>
     RustLib.instance.api.crateApiVcodeVcodeUnwrapFile(buf: buf);
 
+/// 複数ファイルを 1 本のペイロード (無圧縮 ZIP) にまとめる。実装は vcode::bundle。
+/// 時刻はローカル時刻 (コアは時計を持たない)。
+Uint8List vcodeBundleFiles({
+  required List<VcodeBundleFile> files,
+  required int year,
+  required int month,
+  required int day,
+  required int hour,
+  required int minute,
+  required int second,
+}) => RustLib.instance.api.crateApiVcodeVcodeBundleFiles(
+  files: files,
+  year: year,
+  month: month,
+  day: day,
+  hour: hour,
+  minute: minute,
+  second: second,
+);
+
+/// vcode_bundle_files でまとめた ZIP を元のファイル列に戻す。
+/// 圧縮されたエントリを含む一般の ZIP は None (ZIP のまま扱う)。
+List<VcodeBundleFile>? vcodeUnbundleFiles({required List<int> buf}) =>
+    RustLib.instance.api.crateApiVcodeVcodeUnbundleFiles(buf: buf);
+
 /// 格子 (ブロック数) からコード全体のセル数 [幅, 高さ] を返す。
 /// ガイド枠の縦横比を選択中の格子に合わせるのに使う。上下ストリップの高さは
 /// Rust 側の定数で決まるので、Dart に写さずここで計算する。
@@ -60,8 +85,9 @@ abstract class VcodeRx implements RustOpaqueInterface {
 
   /// カメラの Y プレーンから vcode をスキャンする。
   /// トラッキング成功時は report.tracked = true。
-  /// 注: sync にしない。非同期 (Rust ワーカースレッド実行) にすることで
-  /// UI isolate をブロックせず、カメラプレビューのカクつきを防ぐ。
+  /// 注: アプリは同期版 scan_sync を使う。非同期だと完了通知が UI isolate の
+  /// 描画の空きを待ち、Rust の処理 31ms に対して往復 55ms になっていた (実測)。
+  /// 同期にしても、プレビューはネイティブのテクスチャなので止まらない。
   Future<VcodeScanReport> scan({
     required List<int> y,
     required int width,
@@ -72,10 +98,12 @@ abstract class VcodeRx implements RustOpaqueInterface {
     required bool debugDump,
   });
 
-  /// scan の同期版。実測で FRB の非同期呼び出しは Rust の処理 (約 31ms) に対して
-  /// 往復 55ms かかっており、完了通知が UI isolate の描画の空きを待つぶんが乗っていた。
-  /// 同期にすると UI isolate が処理中ブロックするが、カメラプレビューはネイティブの
-  /// テクスチャなので止まらない。効果は実機で測って決める。
+  /// scan の同期版 (アプリの受信はこちらを使う)。実測で FRB の非同期呼び出しは
+  /// Rust の処理 (約 31ms) に対して往復 55ms かかっており、完了通知が UI isolate の
+  /// 描画の空きを待つぶんが乗っていた。同期にすると往復 32〜37ms、Rust 側も
+  /// 18〜22ms に縮み (ワーカースレッドとの取り合いが消える)、1MB が 95 → 110 KB/s。
+  /// UI isolate は処理中ブロックするが、カメラプレビューはネイティブのテクスチャ
+  /// なので止まらない。
   VcodeScanReport scanSync({
     required List<int> y,
     required int width,
@@ -203,6 +231,25 @@ class VcodeAcquireReport {
           cellsW == other.cellsW &&
           cellsH == other.cellsH &&
           blockOk == other.blockOk;
+}
+
+/// まとめる / 取り出した 1 ファイル。
+class VcodeBundleFile {
+  final String name;
+  final Uint8List data;
+
+  const VcodeBundleFile({required this.name, required this.data});
+
+  @override
+  int get hashCode => name.hashCode ^ data.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is VcodeBundleFile &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          data == other.data;
 }
 
 /// unwrap_file の Flutter 向けミラー。ヘッダが無ければ None (旧形式=従来処理へフォールバック)。

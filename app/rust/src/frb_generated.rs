@@ -40,7 +40,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -941869109;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 364481387;
 
 // Section: executor
 
@@ -1034,6 +1034,45 @@ fn wire__crate__api__simple__init_app_impl(
         },
     )
 }
+fn wire__crate__api__vcode__vcode_bundle_files_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "vcode_bundle_files",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_files =
+                <Vec<crate::api::vcode::VcodeBundleFile>>::sse_decode(&mut deserializer);
+            let api_year = <u16>::sse_decode(&mut deserializer);
+            let api_month = <u8>::sse_decode(&mut deserializer);
+            let api_day = <u8>::sse_decode(&mut deserializer);
+            let api_hour = <u8>::sse_decode(&mut deserializer);
+            let api_minute = <u8>::sse_decode(&mut deserializer);
+            let api_second = <u8>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Result::<_, ()>::Ok(crate::api::vcode::vcode_bundle_files(
+                    api_files, api_year, api_month, api_day, api_hour, api_minute, api_second,
+                ))?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__vcode__vcode_layout_cells_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1062,6 +1101,37 @@ fn wire__crate__api__vcode__vcode_layout_cells_impl(
                 let output_ok = Result::<_, ()>::Ok(crate::api::vcode::vcode_layout_cells(
                     api_grid_w, api_grid_h,
                 ))?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__vcode__vcode_unbundle_files_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "vcode_unbundle_files",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_buf = <Vec<u8>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok =
+                    Result::<_, ()>::Ok(crate::api::vcode::vcode_unbundle_files(api_buf))?;
                 Ok(output_ok)
             })())
         },
@@ -1345,6 +1415,20 @@ impl SseDecode for Vec<u8> {
     }
 }
 
+impl SseDecode for Vec<crate::api::vcode::VcodeBundleFile> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::vcode::VcodeBundleFile>::sse_decode(
+                deserializer,
+            ));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Option<String> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1372,6 +1456,19 @@ impl SseDecode for Option<Vec<u8>> {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<Vec<u8>>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<Vec<crate::api::vcode::VcodeBundleFile>> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<Vec<crate::api::vcode::VcodeBundleFile>>::sse_decode(
+                deserializer,
+            ));
         } else {
             return None;
         }
@@ -1446,6 +1543,18 @@ impl SseDecode for crate::api::vcode::VcodeAcquireReport {
             cells_w: var_cellsW,
             cells_h: var_cellsH,
             block_ok: var_blockOk,
+        };
+    }
+}
+
+impl SseDecode for crate::api::vcode::VcodeBundleFile {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_name = <String>::sse_decode(deserializer);
+        let mut var_data = <Vec<u8>>::sse_decode(deserializer);
+        return crate::api::vcode::VcodeBundleFile {
+            name: var_name,
+            data: var_data,
         };
     }
 }
@@ -1591,10 +1700,12 @@ fn pde_ffi_dispatcher_sync_impl(
         18 => wire__crate__api__vcode__VcodeTx_new_impl(ptr, rust_vec_len, data_len),
         19 => wire__crate__api__vcode__VcodeTx_packet_count_impl(ptr, rust_vec_len, data_len),
         20 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__vcode__vcode_layout_cells_impl(ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__vcode__vcode_unwrap_file_impl(ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__vcode__vcode_unwrap_payload_impl(ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__vcode__vcode_wrap_file_impl(ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__vcode__vcode_bundle_files_impl(ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__vcode__vcode_layout_cells_impl(ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__vcode__vcode_unbundle_files_impl(ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__vcode__vcode_unwrap_file_impl(ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__vcode__vcode_unwrap_payload_impl(ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__vcode__vcode_wrap_file_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1689,6 +1800,27 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::vcode::VcodeAcquireReport>
     for crate::api::vcode::VcodeAcquireReport
 {
     fn into_into_dart(self) -> crate::api::vcode::VcodeAcquireReport {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::vcode::VcodeBundleFile {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.name.into_into_dart().into_dart(),
+            self.data.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::vcode::VcodeBundleFile
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::vcode::VcodeBundleFile>
+    for crate::api::vcode::VcodeBundleFile
+{
+    fn into_into_dart(self) -> crate::api::vcode::VcodeBundleFile {
         self
     }
 }
@@ -1919,6 +2051,16 @@ impl SseEncode for Vec<u8> {
     }
 }
 
+impl SseEncode for Vec<crate::api::vcode::VcodeBundleFile> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::vcode::VcodeBundleFile>::sse_encode(item, serializer);
+        }
+    }
+}
+
 impl SseEncode for Option<String> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1945,6 +2087,16 @@ impl SseEncode for Option<Vec<u8>> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <Vec<u8>>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<Vec<crate::api::vcode::VcodeBundleFile>> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <Vec<crate::api::vcode::VcodeBundleFile>>::sse_encode(value, serializer);
         }
     }
 }
@@ -2007,6 +2159,14 @@ impl SseEncode for crate::api::vcode::VcodeAcquireReport {
         <u32>::sse_encode(self.cells_w, serializer);
         <u32>::sse_encode(self.cells_h, serializer);
         <Vec<bool>>::sse_encode(self.block_ok, serializer);
+    }
+}
+
+impl SseEncode for crate::api::vcode::VcodeBundleFile {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.name, serializer);
+        <Vec<u8>>::sse_encode(self.data, serializer);
     }
 }
 

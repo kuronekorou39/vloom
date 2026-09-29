@@ -68,7 +68,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -941869109;
+  int get rustContentHash => 364481387;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -189,9 +189,23 @@ abstract class RustLibApi extends BaseApi {
 
   Future<void> crateApiSimpleInitApp();
 
+  Uint8List crateApiVcodeVcodeBundleFiles({
+    required List<VcodeBundleFile> files,
+    required int year,
+    required int month,
+    required int day,
+    required int hour,
+    required int minute,
+    required int second,
+  });
+
   Uint32List crateApiVcodeVcodeLayoutCells({
     required int gridW,
     required int gridH,
+  });
+
+  List<VcodeBundleFile>? crateApiVcodeVcodeUnbundleFiles({
+    required List<int> buf,
   });
 
   VcodeFile? crateApiVcodeVcodeUnwrapFile({required List<int> buf});
@@ -983,6 +997,46 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "init_app", argNames: []);
 
   @override
+  Uint8List crateApiVcodeVcodeBundleFiles({
+    required List<VcodeBundleFile> files,
+    required int year,
+    required int month,
+    required int day,
+    required int hour,
+    required int minute,
+    required int second,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_vcode_bundle_file(files, serializer);
+          sse_encode_u_16(year, serializer);
+          sse_encode_u_8(month, serializer);
+          sse_encode_u_8(day, serializer);
+          sse_encode_u_8(hour, serializer);
+          sse_encode_u_8(minute, serializer);
+          sse_encode_u_8(second, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 22)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_prim_u_8_strict,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiVcodeVcodeBundleFilesConstMeta,
+        argValues: [files, year, month, day, hour, minute, second],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiVcodeVcodeBundleFilesConstMeta =>
+      const TaskConstMeta(
+        debugName: "vcode_bundle_files",
+        argNames: ["files", "year", "month", "day", "hour", "minute", "second"],
+      );
+
+  @override
   Uint32List crateApiVcodeVcodeLayoutCells({
     required int gridW,
     required int gridH,
@@ -993,7 +1047,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_u_8(gridW, serializer);
           sse_encode_u_8(gridH, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 22)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 23)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_prim_u_32_strict,
@@ -1013,13 +1067,38 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  List<VcodeBundleFile>? crateApiVcodeVcodeUnbundleFiles({
+    required List<int> buf,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_prim_u_8_loose(buf, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 24)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_list_vcode_bundle_file,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiVcodeVcodeUnbundleFilesConstMeta,
+        argValues: [buf],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiVcodeVcodeUnbundleFilesConstMeta =>
+      const TaskConstMeta(debugName: "vcode_unbundle_files", argNames: ["buf"]);
+
+  @override
   VcodeFile? crateApiVcodeVcodeUnwrapFile({required List<int> buf}) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_list_prim_u_8_loose(buf, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 23)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 25)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_opt_box_autoadd_vcode_file,
@@ -1042,7 +1121,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_list_prim_u_8_loose(payload, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 24)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 26)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_opt_list_prim_u_8_strict,
@@ -1074,7 +1153,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(name, serializer);
           sse_encode_String(mime, serializer);
           sse_encode_list_prim_u_8_loose(data, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 25)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 27)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -1314,6 +1393,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<VcodeBundleFile> dco_decode_list_vcode_bundle_file(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_vcode_bundle_file).toList();
+  }
+
+  @protected
   String? dco_decode_opt_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_String(raw);
@@ -1329,6 +1414,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_list_prim_u_8_strict(raw);
+  }
+
+  @protected
+  List<VcodeBundleFile>? dco_decode_opt_list_vcode_bundle_file(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_list_vcode_bundle_file(raw);
   }
 
   @protected
@@ -1386,6 +1477,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       cellsW: dco_decode_u_32(arr[9]),
       cellsH: dco_decode_u_32(arr[10]),
       blockOk: dco_decode_list_bool(arr[11]),
+    );
+  }
+
+  @protected
+  VcodeBundleFile dco_decode_vcode_bundle_file(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return VcodeBundleFile(
+      name: dco_decode_String(arr[0]),
+      data: dco_decode_list_prim_u_8_strict(arr[1]),
     );
   }
 
@@ -1694,6 +1797,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<VcodeBundleFile> sse_decode_list_vcode_bundle_file(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <VcodeBundleFile>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_vcode_bundle_file(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -1723,6 +1840,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
     if (sse_decode_bool(deserializer)) {
       return (sse_decode_list_prim_u_8_strict(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  List<VcodeBundleFile>? sse_decode_opt_list_vcode_bundle_file(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_list_vcode_bundle_file(deserializer));
     } else {
       return null;
     }
@@ -1794,6 +1924,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       cellsH: var_cellsH,
       blockOk: var_blockOk,
     );
+  }
+
+  @protected
+  VcodeBundleFile sse_decode_vcode_bundle_file(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_name = sse_decode_String(deserializer);
+    var var_data = sse_decode_list_prim_u_8_strict(deserializer);
+    return VcodeBundleFile(name: var_name, data: var_data);
   }
 
   @protected
@@ -2149,6 +2287,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_vcode_bundle_file(
+    List<VcodeBundleFile> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_vcode_bundle_file(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -2181,6 +2331,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self != null, serializer);
     if (self != null) {
       sse_encode_list_prim_u_8_strict(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_opt_list_vcode_bundle_file(
+    List<VcodeBundleFile>? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_list_vcode_bundle_file(self, serializer);
     }
   }
 
@@ -2237,6 +2400,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_u_32(self.cellsW, serializer);
     sse_encode_u_32(self.cellsH, serializer);
     sse_encode_list_bool(self.blockOk, serializer);
+  }
+
+  @protected
+  void sse_encode_vcode_bundle_file(
+    VcodeBundleFile self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.name, serializer);
+    sse_encode_list_prim_u_8_strict(self.data, serializer);
   }
 
   @protected
@@ -2406,8 +2579,9 @@ class VcodeRxImpl extends RustOpaque implements VcodeRx {
 
   /// カメラの Y プレーンから vcode をスキャンする。
   /// トラッキング成功時は report.tracked = true。
-  /// 注: sync にしない。非同期 (Rust ワーカースレッド実行) にすることで
-  /// UI isolate をブロックせず、カメラプレビューのカクつきを防ぐ。
+  /// 注: アプリは同期版 scan_sync を使う。非同期だと完了通知が UI isolate の
+  /// 描画の空きを待ち、Rust の処理 31ms に対して往復 55ms になっていた (実測)。
+  /// 同期にしても、プレビューはネイティブのテクスチャなので止まらない。
   Future<VcodeScanReport> scan({
     required List<int> y,
     required int width,
@@ -2427,10 +2601,12 @@ class VcodeRxImpl extends RustOpaque implements VcodeRx {
     debugDump: debugDump,
   );
 
-  /// scan の同期版。実測で FRB の非同期呼び出しは Rust の処理 (約 31ms) に対して
-  /// 往復 55ms かかっており、完了通知が UI isolate の描画の空きを待つぶんが乗っていた。
-  /// 同期にすると UI isolate が処理中ブロックするが、カメラプレビューはネイティブの
-  /// テクスチャなので止まらない。効果は実機で測って決める。
+  /// scan の同期版 (アプリの受信はこちらを使う)。実測で FRB の非同期呼び出しは
+  /// Rust の処理 (約 31ms) に対して往復 55ms かかっており、完了通知が UI isolate の
+  /// 描画の空きを待つぶんが乗っていた。同期にすると往復 32〜37ms、Rust 側も
+  /// 18〜22ms に縮み (ワーカースレッドとの取り合いが消える)、1MB が 95 → 110 KB/s。
+  /// UI isolate は処理中ブロックするが、カメラプレビューはネイティブのテクスチャ
+  /// なので止まらない。
   VcodeScanReport scanSync({
     required List<int> y,
     required int width,

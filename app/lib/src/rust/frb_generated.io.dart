@@ -151,6 +151,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  List<VcodeBundleFile> dco_decode_list_vcode_bundle_file(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
@@ -158,6 +161,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw);
+
+  @protected
+  List<VcodeBundleFile>? dco_decode_opt_list_vcode_bundle_file(dynamic raw);
 
   @protected
   int dco_decode_u_16(dynamic raw);
@@ -179,6 +185,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   VcodeAcquireReport dco_decode_vcode_acquire_report(dynamic raw);
+
+  @protected
+  VcodeBundleFile dco_decode_vcode_bundle_file(dynamic raw);
 
   @protected
   VcodeFile dco_decode_vcode_file(dynamic raw);
@@ -306,6 +315,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
+  List<VcodeBundleFile> sse_decode_list_vcode_bundle_file(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
@@ -315,6 +329,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Uint8List? sse_decode_opt_list_prim_u_8_strict(SseDeserializer deserializer);
+
+  @protected
+  List<VcodeBundleFile>? sse_decode_opt_list_vcode_bundle_file(
+    SseDeserializer deserializer,
+  );
 
   @protected
   int sse_decode_u_16(SseDeserializer deserializer);
@@ -338,6 +357,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   VcodeAcquireReport sse_decode_vcode_acquire_report(
     SseDeserializer deserializer,
   );
+
+  @protected
+  VcodeBundleFile sse_decode_vcode_bundle_file(SseDeserializer deserializer);
 
   @protected
   VcodeFile sse_decode_vcode_file(SseDeserializer deserializer);
@@ -497,6 +519,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_vcode_bundle_file(
+    List<VcodeBundleFile> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
 
   @protected
@@ -508,6 +536,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_opt_list_prim_u_8_strict(
     Uint8List? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_list_vcode_bundle_file(
+    List<VcodeBundleFile>? self,
     SseSerializer serializer,
   );
 
@@ -532,6 +566,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_vcode_acquire_report(
     VcodeAcquireReport self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_vcode_bundle_file(
+    VcodeBundleFile self,
     SseSerializer serializer,
   );
 

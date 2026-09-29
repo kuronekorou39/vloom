@@ -126,6 +126,43 @@ pub fn vcode_unwrap_file(buf: Vec<u8>) -> Option<VcodeFile> {
     vcode::unwrap_file(&buf).map(|m| VcodeFile { name: m.name, mime: m.mime, data: m.data })
 }
 
+/// まとめる / 取り出した 1 ファイル。
+pub struct VcodeBundleFile {
+    pub name: String,
+    pub data: Vec<u8>,
+}
+
+/// 複数ファイルを 1 本のペイロード (無圧縮 ZIP) にまとめる。実装は vcode::bundle。
+/// 時刻はローカル時刻 (コアは時計を持たない)。
+#[flutter_rust_bridge::frb(sync)]
+pub fn vcode_bundle_files(
+    files: Vec<VcodeBundleFile>,
+    year: u16,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    second: u8,
+) -> Vec<u8> {
+    let entries: Vec<vcode::bundle::BundleEntry> = files
+        .into_iter()
+        .map(|f| vcode::bundle::BundleEntry { name: f.name, data: f.data })
+        .collect();
+    vcode::bundle::bundle_files(
+        &entries,
+        vcode::bundle::BundleTime { year, month, day, hour, minute, second },
+    )
+}
+
+/// vcode_bundle_files でまとめた ZIP を元のファイル列に戻す。
+/// 圧縮されたエントリを含む一般の ZIP は None (ZIP のまま扱う)。
+#[flutter_rust_bridge::frb(sync)]
+pub fn vcode_unbundle_files(buf: Vec<u8>) -> Option<Vec<VcodeBundleFile>> {
+    vcode::bundle::unbundle_files(&buf).map(|entries| {
+        entries.into_iter().map(|e| VcodeBundleFile { name: e.name, data: e.data }).collect()
+    })
+}
+
 /// スキャン結果。detected=false のとき error に理由 (デバッグログ用)。
 pub struct VcodeScanReport {
     pub detected: bool,

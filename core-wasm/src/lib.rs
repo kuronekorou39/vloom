@@ -440,3 +440,59 @@ impl VcodeRx {
         vcode_fail()
     }
 }
+
+// =============================================================
+// 複数ファイルのまとめ (無圧縮 ZIP)。実装は vcode::bundle
+// =============================================================
+use vloom_vcode::bundle::{bundle_files, unbundle_files, BundleEntry, BundleTime};
+
+/// 複数ファイルを 1 本のペイロードにまとめる。add で積んで finish で ZIP を得る
+/// (wasm-bindgen は「バイト列の配列」を引数に取れないので、1 つずつ積む形にしている)。
+#[wasm_bindgen]
+pub struct VcodeBundle {
+    entries: Vec<BundleEntry>,
+}
+
+#[wasm_bindgen]
+impl VcodeBundle {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> VcodeBundle {
+        VcodeBundle { entries: Vec::new() }
+    }
+
+    pub fn add(&mut self, name: &str, data: &[u8]) {
+        self.entries.push(BundleEntry { name: name.to_string(), data: data.to_vec() });
+    }
+
+    /// 積んだファイルを ZIP にする。時刻はローカル時刻 (コアは時計を持たない)。
+    pub fn finish(&self, year: u16, month: u8, day: u8, hour: u8, minute: u8, second: u8) -> Vec<u8> {
+        bundle_files(&self.entries, BundleTime { year, month, day, hour, minute, second })
+    }
+}
+
+/// vcodeUnbundle の戻り値。count 個のファイルを name(i) / data(i) で読む。
+#[wasm_bindgen]
+pub struct VcodeBundleFiles {
+    entries: Vec<BundleEntry>,
+}
+
+#[wasm_bindgen]
+impl VcodeBundleFiles {
+    #[wasm_bindgen(getter)]
+    pub fn count(&self) -> u32 {
+        self.entries.len() as u32
+    }
+    pub fn name(&self, i: u32) -> String {
+        self.entries[i as usize].name.clone()
+    }
+    pub fn data(&self, i: u32) -> Vec<u8> {
+        self.entries[i as usize].data.clone()
+    }
+}
+
+/// VcodeBundle でまとめた ZIP を元のファイル列に戻す。
+/// 圧縮されたエントリを含む一般の ZIP は undefined (ZIP のまま扱う)。
+#[wasm_bindgen(js_name = vcodeUnbundle)]
+pub fn vcode_unbundle(buf: &[u8]) -> Option<VcodeBundleFiles> {
+    unbundle_files(buf).map(|entries| VcodeBundleFiles { entries })
+}
