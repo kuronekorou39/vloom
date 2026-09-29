@@ -16,6 +16,9 @@ desktop = ["vloom-core", "pyside6>=6.6"]
 # tools/test_pwa_receive.py (擬似カメラで PWA の受信を端から端まで試す回帰テスト)。
 # playwright / numpy が無いと test_pwa_receive.py は import で落ちる。
 dev = ["pillow>=10", "cryptography>=42", "playwright>=1.44", "numpy>=1.26"]
+# tools/vcode_encode.py の単体テスト (tests/)。標準ライブラリだけで動く本体に対して
+# pytest だけ足す最小構成。
+test = ["pytest>=8"]
 
 [tool.uv]
 # リポジトリ自体はライブラリとして配布しないので、インストール対象にしない。
@@ -26,3 +29,11 @@ default-groups = []
 
 [tool.uv.sources]
 vloom-core = { path = "py", editable = true }
+
+[tool.pytest.ini_options]
+# tools/test_pwa_receive.py は同じ test_*.py 命名だが playwright/numpy 前提の手動回帰
+# スクリプトなので、pytest の収集対象は tests/ だけに絞る。
+testpaths = ["tests"]
+# tools/ 配下はパッケージ化していない (__init__.py 無し) ので、テストから
+# `import vcode_encode` できるようパスに足す。
+pythonpath = ["tools"]

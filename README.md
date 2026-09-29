@@ -58,6 +58,7 @@ OLED は表示の切り替わりが速く、ローリングシャッターと混
 
 ```bash
 cargo test --workspace                                       # Rust コア
+uv run --group test pytest                                   # tools/vcode_encode.py の単体テスト
 cd core-wasm && wasm-pack build --target web --release --out-dir ../web/pwa/pkg   # PWA
 cd app && flutter build apk --release                        # Android
 ```
