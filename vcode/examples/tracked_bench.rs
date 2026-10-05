@@ -9,20 +9,22 @@
 //!     adb pull /storage/emulated/0/Android/data/<pkg>/files/vcode_ok_1200x1600.gray
 //!
 //!     cargo run --release --features parallel -p vloom-vcode \
-//!         --example tracked_bench -- <path> <w> <h> [grid]
+//!         --example tracked_bench -- <path> <w> <h> [grid] [block_thr]
+//!
+//! block_thr は scan::set_block_threshold_mode の値 (新旧の閾値の速さを比べる用)。
 
 use std::env;
 use std::fs;
 use std::time::Instant;
 
 use vloom_vcode::markers::locate_markers;
-use vloom_vcode::scan::{scan_frame, scan_frame_tracked, GrayImage};
+use vloom_vcode::scan::{scan_frame, scan_frame_tracked, set_block_threshold_mode, GrayImage};
 use vloom_vcode::Layout;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 4 {
-        eprintln!("usage: tracked_bench <path> <w> <h> [grid]");
+        eprintln!("usage: tracked_bench <path> <w> <h> [grid] [block_thr]");
         std::process::exit(2);
     }
     let (path, w, h) = (&args[1], args[2].parse::<usize>().unwrap(), args[3].parse::<usize>().unwrap());
@@ -33,6 +35,9 @@ fn main() {
         }
         None => Layout::V6_XDENSE,
     };
+    if let Some(m) = args.get(5) {
+        set_block_threshold_mode(m.parse().expect("block_thr は 0 / 1 / 2"));
+    }
     let data = fs::read(path).expect("読めない");
     assert!(data.len() >= w * h, "画像が {}x{} に足りない ({} byte)", w, h, data.len());
     let img = GrayImage { w, h, data: &data };

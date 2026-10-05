@@ -231,7 +231,7 @@ fn refine_homography(
     img: &GrayImage,
     corners: &mut [(f32, f32); 4],
     layout: Layout,
-    thr: u8,
+    thr: Thr,
     coarse_half: i32,
     coarse_step: usize,
 ) -> Option<Homography> {
@@ -262,7 +262,7 @@ fn refine_homography(
             .iter()
             .filter(|&&(r, c, black)| {
                 let (x, y) = hm.map(c as f32 + 0.5, r as f32 + 0.5);
-                (img.bilinear(x, y) < thr as f32) == black
+                (img.bilinear(x, y) < thr.at(r)) == black
             })
             .count();
         Some((hm, n))
@@ -314,7 +314,7 @@ fn descend(
     img: &GrayImage,
     corners: &mut [(f32, f32); 4],
     layout: Layout,
-    thr: u8,
+    thr: Thr,
     steps: &[f32],
     subsample: usize,
 ) -> Option<Homography> {
@@ -337,7 +337,7 @@ fn descend(
             .iter()
             .filter(|&&(r, c, black)| {
                 let (x, y) = hm.map(c as f32 + 0.5, r as f32 + 0.5);
-                (img.bilinear(x, y) < thr as f32) == black
+                (img.bilinear(x, y) < thr.at(r)) == black
             })
             .count();
         Some((hm, n))
@@ -378,19 +378,77 @@ fn descend(
     best_h
 }
 
+/// 二値化の閾値。行 (セル) ごとに値を返す。
+///
+/// 上ストリップと下ストリップで別々に求めた値を行方向に線形補間する。
+/// `set_row_threshold(false)` のときは従来どおり全体で 1 つの値 (top == bot)。
+#[derive(Clone, Copy)]
+struct Thr {
+    top: f32,
+    bot: f32,
+    /// top / bot を測った行 (それぞれのストリップの中央)
+    r_top: f32,
+    r_bot: f32,
+}
+
+impl Thr {
+    fn at(&self, r: usize) -> f32 {
+        let t = (r as f32 - self.r_top) / (self.r_bot - self.r_top);
+        self.top + (self.bot - self.top) * t
+    }
+}
+
+/// 閾値を行方向に補間するか (既定は補間する)。false にすると従来の「全体で 1 つ」に戻る。
+/// 新旧を同じ画像で比べるための切り替えで、通常の受信では触らない。
+///
+/// 視野角で輝度が落ちるパネル (湾曲した VA 等) を正面より上や下から撮ると、白のレベルが
+/// コードの上端と下端で 2 倍違うことがある (実機: 上 95 / 下 195)。全体で 1 つの閾値だと
+/// 暗い側の白が丸ごと黒と読まれ、四隅の照合もヘッダも通らない。上下のストリップは
+/// どちらも既知の白黒を含むので、それぞれで閾値を求めて間を補間すれば勾配に追従できる。
+/// 平面モニターでも回収ブロックが 1〜2% 増える (docs/measurements/2026-10-05-block-errors.md)。
+static ROW_THRESHOLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub fn set_row_threshold(on: bool) {
+    ROW_THRESHOLD.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// データブロックの二値化にどの閾値を使うか (既定は 2)。
+///   0 = 行方向に補間した閾値だけ
+///   1 = ブロック自身の 400 セルから求めた Otsu 閾値だけ
+///   2 = 0 で CRC が通らなければ 1 でも試す
+/// 輝度の勾配は行方向の線形から外れる (白が途中で飽和する、横方向にも落ちる、ピントの
+/// 甘い側で黒が浮く) ので、落ちたブロックはそのブロックだけで決めた閾値で読み直す。
+/// データは RaptorQ のパケットで白黒がほぼ半々なので、400 セルあれば Otsu が安定する。
+/// 同じ画像での比較で、回収ブロックが平面 +2〜3 ポイント、湾曲 +14 ポイント。処理時間は
+/// 変わらない (docs/measurements/2026-10-05-block-errors.md)。1bit 専用。
+/// 新旧を同じ画像で比べるための切り替えで、通常の受信では触らない。
+static BLOCK_THR_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
+
+pub fn set_block_threshold_mode(mode: u8) {
+    BLOCK_THR_MODE.store(mode, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// 構造セル (上下ストリップ = コーナー/ヘッダ/較正) のサンプル値から Otsu 閾値を求める。
 /// データ領域は輝度多値 (2bit) の場合に中間グレーを含むため、二値化閾値の推定には使わない。
-fn threshold_for(img: &GrayImage, hm: &Homography, layout: Layout) -> u8 {
+fn threshold_for(img: &GrayImage, hm: &Homography, layout: Layout) -> Thr {
     let (w, h) = (layout.width(), layout.height());
-    let rows = (0..STRIP_H).chain(h - STRIP_H..h);
-    let values: Vec<u8> = rows
-        .flat_map(|r| (0..w).map(move |c| (r, c)))
-        .map(|(r, c)| {
-            let (x, y) = hm.map(c as f32 + 0.5, r as f32 + 0.5);
-            img.bilinear(x, y).round().clamp(0.0, 255.0) as u8
-        })
-        .collect();
-    otsu(values.iter().copied())
+    let strip = |rows: std::ops::Range<usize>| -> Vec<u8> {
+        rows.flat_map(|r| (0..w).map(move |c| (r, c)))
+            .map(|(r, c)| {
+                let (x, y) = hm.map(c as f32 + 0.5, r as f32 + 0.5);
+                img.bilinear(x, y).round().clamp(0.0, 255.0) as u8
+            })
+            .collect()
+    };
+    let (top, bot) = (strip(0..STRIP_H), strip(h - STRIP_H..h));
+    let (r_top, r_bot) = (STRIP_H as f32 / 2.0, h as f32 - STRIP_H as f32 / 2.0);
+    if ROW_THRESHOLD.load(std::sync::atomic::Ordering::Relaxed) {
+        let (top, bot) = (otsu(top.iter().copied()) as f32, otsu(bot.iter().copied()) as f32);
+        Thr { top, bot, r_top, r_bot }
+    } else {
+        let all = otsu(top.iter().chain(bot.iter()).copied()) as f32;
+        Thr { top: all, bot: all, r_top, r_bot }
+    }
 }
 
 /// ガイド枠 (おおよその 4 隅) を頼りに、グレースケール画像から vcode フレームをスキャンする。
@@ -450,7 +508,7 @@ const TRACK_SKIP_REFINE: f32 = 0.97;
 
 /// 与えたホモグラフィで、既知セル (コーナー + 較正) がどれだけ一致するかの割合。
 /// descend の採点と同じものを 1 回だけ回す。
-fn known_match(img: &GrayImage, hm: &Homography, layout: Layout, thr: u8) -> f32 {
+fn known_match(img: &GrayImage, hm: &Homography, layout: Layout, thr: Thr) -> f32 {
     let cells = known_cells(layout);
     if cells.is_empty() {
         return 0.0;
@@ -464,7 +522,7 @@ fn known_match(img: &GrayImage, hm: &Homography, layout: Layout, thr: u8) -> f32
         }
         let (x, y) = hm.map(c as f32 + 0.5, r as f32 + 0.5);
         n += 1;
-        if (img.bilinear(x, y) < thr as f32) == black {
+        if (img.bilinear(x, y) < thr.at(r)) == black {
             ok += 1;
         }
     }
@@ -536,14 +594,15 @@ fn decode_at(
     prior: OffsetPrior,
 ) -> Result<ScanResult, FrameError> {
     let (w, h) = (layout.width(), layout.height());
-    let thr = threshold_for(img, &hmat, layout) as f32;
+    let thr = threshold_for(img, &hmat, layout);
 
     // セル (row+dy, col+dx) の生グレー値 / 二値 (dx, dy はサブセルオフセット)
     let sample_raw = |r: usize, c: usize, dx: f32, dy: f32| -> f32 {
         let (x, y) = hmat.map(c as f32 + 0.5 + dx, r as f32 + 0.5 + dy);
         img.bilinear(x, y)
     };
-    let sample = |r: usize, c: usize, dx: f32, dy: f32| -> bool { sample_raw(r, c, dx, dy) < thr };
+    let sample =
+        |r: usize, c: usize, dx: f32, dy: f32| -> bool { sample_raw(r, c, dx, dy) < thr.at(r) };
 
     // 四隅マーカーの照合 (オフセットなし)
     let mut matched = 0usize;
@@ -741,7 +800,7 @@ fn decode_at(
         let mut i = 0;
         while i < n {
             let (r, c) = (or + i / layout.block, oc + i % layout.block);
-            sum += (sample_raw(r, c, dx, dy) - thr).abs();
+            sum += (sample_raw(r, c, dx, dy) - thr.at(r)).abs();
             i += MARGIN_STRIDE;
         }
         sum
@@ -766,21 +825,46 @@ fn decode_at(
             // 先頭 (線形) 以外のカーブは中央寄りの 5 オフセットだけ試す (コスト抑制)
             let offs_slice: &[(f32, f32)] = if k == 0 { cands } else { &cands[..cands.len().min(5)] };
             for &(dx, dy) in offs_slice.iter() {
-                let mut bits = Vec::with_capacity(layout.block * layout.block * bpc as usize);
-                for i in 0..layout.block * layout.block {
-                    let (r, c) = (or + i / layout.block, oc + i % layout.block);
-                    if bpc == 1 {
-                        bits.push(sample(r, c, dx, dy));
-                    } else {
+                let n_cells = layout.block * layout.block;
+                let crc_ok = |bits: &[bool]| -> Option<Vec<u8>> {
+                    let bytes = bits_to_bytes(bits);
+                    let (payload, crc) = bytes.split_at(layout.block_payload_len(bpc));
+                    (crate::crc32(payload) == u32::from_be_bytes([crc[0], crc[1], crc[2], crc[3]]))
+                        .then(|| payload.to_vec())
+                };
+                if bpc == 1 {
+                    let raw: Vec<f32> = (0..n_cells)
+                        .map(|i| sample_raw(or + i / layout.block, oc + i % layout.block, dx, dy))
+                        .collect();
+                    let mode = BLOCK_THR_MODE.load(std::sync::atomic::Ordering::Relaxed);
+                    if mode != 1 {
+                        let bits: Vec<bool> = raw
+                            .iter()
+                            .enumerate()
+                            .map(|(i, &v)| v < thr.at(or + i / layout.block))
+                            .collect();
+                        if let Some(p) = crc_ok(&bits) {
+                            return Some((p, (dx, dy)));
+                        }
+                    }
+                    if mode != 0 {
+                        let t = otsu(raw.iter().map(|&v| v.round().clamp(0.0, 255.0) as u8)) as f32;
+                        let bits: Vec<bool> = raw.iter().map(|&v| v < t).collect();
+                        if let Some(p) = crc_ok(&bits) {
+                            return Some((p, (dx, dy)));
+                        }
+                    }
+                } else {
+                    let mut bits = Vec::with_capacity(n_cells * 2);
+                    for i in 0..n_cells {
+                        let (r, c) = (or + i / layout.block, oc + i % layout.block);
                         let level = quantize(r, c, dx, dy, gamma);
                         bits.push(level & 2 != 0);
                         bits.push(level & 1 != 0);
                     }
-                }
-                let bytes = bits_to_bytes(&bits);
-                let (payload, crc) = bytes.split_at(layout.block_payload_len(bpc));
-                if crate::crc32(payload) == u32::from_be_bytes([crc[0], crc[1], crc[2], crc[3]]) {
-                    return Some((payload.to_vec(), (dx, dy)));
+                    if let Some(p) = crc_ok(&bits) {
+                        return Some((p, (dx, dy)));
+                    }
                 }
             }
         }
@@ -965,10 +1049,10 @@ pub fn block_offset_field(
     hmat: &Homography,
     layout: Layout,
 ) -> Vec<Option<(f32, f32)>> {
-    let thr = threshold_for(img, hmat, layout) as f32;
+    let thr = threshold_for(img, hmat, layout);
     let sample = |r: usize, c: usize, dx: f32, dy: f32| -> bool {
         let (x, y) = hmat.map(c as f32 + 0.5 + dx, r as f32 + 0.5 + dy);
-        img.bilinear(x, y) < thr
+        img.bilinear(x, y) < thr.at(r)
     };
     // 中心から近い順
     let mut offs: Vec<(f32, f32)> = Vec::new();
@@ -991,6 +1075,86 @@ pub fn block_offset_field(
             })
         })
         .collect()
+}
+
+/// 調査用: ブロック bi の各セルに復号が使う二値化閾値 (`block_samples` と同じ並び)。
+pub fn block_thresholds(img: &GrayImage, hmat: &Homography, layout: Layout, bi: usize) -> Vec<f32> {
+    let thr = threshold_for(img, hmat, layout);
+    let (or, _) = layout.block_origin(bi);
+    (0..layout.block * layout.block).map(|i| thr.at(or + i / layout.block)).collect()
+}
+
+/// 調査用: ブロック bi の全セルの生グレー値 (行優先、block × block 個) を、
+/// サブセルオフセット (dx, dy) で読む。復号 (decode_at) と同じ位置をサンプルするので、
+/// 正解のビット列と突き合わせれば「CRC に落ちたブロックが何ビット外していたか」が分かる。
+pub fn block_samples(
+    img: &GrayImage,
+    hmat: &Homography,
+    layout: Layout,
+    bi: usize,
+    dx: f32,
+    dy: f32,
+) -> Vec<f32> {
+    let (or, oc) = layout.block_origin(bi);
+    (0..layout.block * layout.block)
+        .map(|i| {
+            let (r, c) = (or + i / layout.block, oc + i % layout.block);
+            let (x, y) = hmat.map(c as f32 + 0.5 + dx, r as f32 + 0.5 + dy);
+            img.bilinear(x, y)
+        })
+        .collect()
+}
+
+/// 調査用: 上端タイミング行と下ストリップの較正パターン (どちらも幅いっぱいの既知の
+/// 白黒) を横に `segs` 区間へ分け、区間ごとに一致が最大になるサブセルオフセットを探す。
+/// 戻りは区間順の [上, 下] で、各要素は (dx, dy, 一致率)。
+///
+/// 送信面が平面なら 4 隅の射影変換でどの区間も (0, 0) 付近に揃う。湾曲した画面では
+/// 区間ごとに系統的にずれるので、その形 (横方向にどう曲がっているか) がここに出る。
+/// 上は 1 行しかなく縦ずれの手がかりが弱いので、一致率とあわせて読むこと。
+pub fn strip_offset_field(
+    img: &GrayImage,
+    hmat: &Homography,
+    layout: Layout,
+    segs: usize,
+    half_cells: f32,
+) -> Vec<[(f32, f32, f32); 2]> {
+    let (w, h) = (layout.width(), layout.height());
+    let thr = threshold_for(img, hmat, layout);
+    let cols = crate::strip_cols(w);
+    let (c0, span) = (cols.start, cols.end - cols.start);
+    let n = (half_cells * 4.0).round() as i32;
+    let best = |rows: &[usize], seg: usize| -> (f32, f32, f32) {
+        let cells: Vec<(usize, usize)> = rows
+            .iter()
+            .flat_map(|&r| cols.clone().map(move |c| (r, c)))
+            .filter(|&(_, c)| ((c - c0) * segs / span).min(segs - 1) == seg)
+            .collect();
+        let mut out = (0.0f32, 0.0f32, -1.0f32);
+        let mut out_d2 = f32::MAX;
+        for iy in -n..=n {
+            for ix in -n..=n {
+                let (dx, dy) = (ix as f32 * 0.25, iy as f32 * 0.25);
+                let ok = cells
+                    .iter()
+                    .filter(|&&(r, c)| {
+                        let (x, y) = hmat.map(c as f32 + 0.5 + dx, r as f32 + 0.5 + dy);
+                        (img.bilinear(x, y) < thr.at(r)) == crate::calib_black(r, c)
+                    })
+                    .count();
+                let score = ok as f32 / cells.len().max(1) as f32;
+                // 同点なら原点に近いほう
+                let d2 = dx * dx + dy * dy;
+                if score > out.2 || (score == out.2 && d2 < out_d2) {
+                    out = (dx, dy, score);
+                    out_d2 = d2;
+                }
+            }
+        }
+        out
+    };
+    let bot_rows: Vec<usize> = (h - crate::BAND_ROWS..h).collect();
+    (0..segs).map(|s| [best(&[0], s), best(&bot_rows, s)]).collect()
 }
 
 /// 画像内から「コードらしい市松テクスチャ」の外接矩形を推定する。
