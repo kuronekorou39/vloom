@@ -49,6 +49,7 @@ adb shell am start -n app.vloom.vloom.lab/app.vloom.vloom.MainActivity \
   # --es camlock none|ae|both         # 追従安定後のカメラロック
   # --ei afhunt 0                     # ピントの探り直しを見て AF を固定する挙動を切る
   # --ei dump 4                       # 70% 未満しか読めなかったフレームを N 枚保存
+  # --ei dumpall 20                   # 検出の成否・成績に関係なく 10 枚おきに N 枚保存 (誤りの統計用)
 ```
 
 統計は `adb logcat` の `[vloom-stats]` (完了時) と `[vcode-rx] seq=` (フレームごと) に出ます。

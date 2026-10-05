@@ -20,6 +20,7 @@ class LaunchArgs {
       this.ev,
       this.aePoint,
       this.dumpLow = 0,
+      this.dumpAll = 0,
       this.exposureUs,
       this.iso});
 
@@ -56,6 +57,11 @@ class LaunchArgs {
   /// 保存中は毎フレーム画像のコピーが乗るので、計測では 0 にしておく
   final int dumpLow;
 
+  /// 検出できたかどうか・成績に関係なく、一定間隔でこの枚数までフレームを保存する (調査用)。
+  /// [dumpLow] は読めなかった枚だけを拾うので、誤りの出方の統計には偏る。
+  /// こちらは受信の全体像をそのまま標本にする (vcode の example block_errors にかける)
+  final int dumpAll;
+
   /// 露光時間 (µs) とゲイン (ISO) の直接指定 (Camera2、AE を切る)。指定がなければ null
   /// (= プラグインの AE のまま)。iso だけ省略すると 10ms/ISO 86 (Pixel 9a の AE が選ぶ値)
   /// と同じ明るさになるように露光時間から決める
@@ -88,6 +94,7 @@ class LaunchArgs {
         ev: (ev is String) ? double.tryParse(ev) : null,
         aePoint: (ap is String && ap.isNotEmpty) ? ap : null,
         dumpLow: pick('dump') ?? 0,
+        dumpAll: pick('dumpall') ?? 0,
         exposureUs: pick('exp'),
         iso: pick('iso'),
         tab: pick('tab'),

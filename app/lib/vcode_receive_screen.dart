@@ -194,6 +194,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   bool _needOkDump = true;
   bool _needNgDump = true;
   int _lowDumps = 0;
+  int _allDumps = 0;
 
   bool _busy = false;
   bool _active = false;
@@ -490,6 +491,10 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
               _framesSeen > 0 &&
               _framesSeen % 20 == 0) ||
           _lowDumps < LaunchArgs.cached.dumpLow;
+      // 成績に関係なく等間隔で保存する標本。間隔は 1MB の受信 (約 200 枚) から
+      // 20 枚ほど取れる幅
+      final wantAllDump =
+          _allDumps < LaunchArgs.cached.dumpAll && _framesSeen % 10 == 0;
       final rx = _rx;
       if (rx == null) return;
       // 位置検出 (acquire): 画面全体を sweep して実際の 4 隅を取得し、ポップアップで確認 →
@@ -548,12 +553,15 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         stride: y.bytesPerRow,
         rotationDeg: rotation,
         guideFrac: kVcodeGuideFrac,
-        debugDump: wantDump,
+        debugDump: wantDump || wantAllDump,
       );
       sw.stop();
       if (!_active || _payload != null) return;
       if (report.debugGray != null) {
-        if (report.detected &&
+        if (wantAllDump) {
+          _allDumps++;
+          _saveDump(report, 'all$_allDumps');
+        } else if (report.detected &&
             report.blocksTotal > 0 &&
             report.blocksOk * 100 < report.blocksTotal * 70 &&
             _lowDumps < LaunchArgs.cached.dumpLow) {

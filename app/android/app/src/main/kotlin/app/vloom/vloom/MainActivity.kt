@@ -38,6 +38,7 @@ class MainActivity : FlutterActivity() {
                             "ev" to intent.getStringExtra("ev"),
                             "aepoint" to intent.getStringExtra("aepoint"),
                             "dump" to intent.getIntExtra("dump", -1),
+                            "dumpall" to intent.getIntExtra("dumpall", -1),
                             "exp" to intent.getIntExtra("exp", -1),
                             "iso" to intent.getIntExtra("iso", -1),
                         )
