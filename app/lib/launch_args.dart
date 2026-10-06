@@ -21,6 +21,7 @@ class LaunchArgs {
       this.aePoint,
       this.dumpLow = 0,
       this.dumpAll = 0,
+      this.dumpEvery = 10,
       this.exposureUs,
       this.iso});
 
@@ -62,6 +63,10 @@ class LaunchArgs {
   /// こちらは受信の全体像をそのまま標本にする (vcode の example block_errors にかける)
   final int dumpAll;
 
+  /// [dumpAll] の間隔 (何枚おきに保存するか)。1 にすると連続した枚が取れる
+  /// (切り替わりの混ざりが前後の枚でどう写るかを見るため)。保存のぶん処理は遅くなる
+  final int dumpEvery;
+
   /// 露光時間 (µs) とゲイン (ISO) の直接指定 (Camera2、AE を切る)。指定がなければ null
   /// (= プラグインの AE のまま)。iso だけ省略すると 10ms/ISO 86 (Pixel 9a の AE が選ぶ値)
   /// と同じ明るさになるように露光時間から決める
@@ -95,6 +100,7 @@ class LaunchArgs {
         aePoint: (ap is String && ap.isNotEmpty) ? ap : null,
         dumpLow: pick('dump') ?? 0,
         dumpAll: pick('dumpall') ?? 0,
+        dumpEvery: (pick('dumpevery') ?? 10).clamp(1, 1000),
         exposureUs: pick('exp'),
         iso: pick('iso'),
         tab: pick('tab'),

@@ -125,11 +125,40 @@ fn packet_size(bits_per_cell: u8) -> u32 {
     vcode::Layout::V0.packet_size(bpc) as u32
 }
 
+/// 「さがす」モードの試験フレーム (グレースケール画素、0=黒 / 255=白、行優先)。
+/// 中身は vcode::probe が作る。frame は送信開始からの通し番号。
+#[pyfunction]
+#[pyo3(signature = (grid_w, grid_h, setting, settings, fps, dwell_ds, frame))]
+#[allow(clippy::too_many_arguments)]
+fn probe_frame_gray<'py>(
+    py: Python<'py>,
+    grid_w: u8,
+    grid_h: u8,
+    setting: u8,
+    settings: u8,
+    fps: u8,
+    dwell_ds: u8,
+    frame: u32,
+) -> Bound<'py, PyBytes> {
+    let layout = vcode::Layout::from_grid(grid_w.clamp(2, 20) as usize, grid_h.clamp(2, 20) as usize);
+    let tag = vcode::probe::ProbeTag { setting, settings, fps, dwell_ds };
+    PyBytes::new(py, &vcode::probe::probe_frame(layout, tag, frame).data)
+}
+
+/// 格子のセル数 (幅, 高さ)。フレームの画素数と同じ (scale=1 で描くため)。
+#[pyfunction]
+fn layout_cells(grid_w: u8, grid_h: u8) -> (u32, u32) {
+    let l = vcode::Layout::from_grid(grid_w.clamp(2, 20) as usize, grid_h.clamp(2, 20) as usize);
+    (l.width() as u32, l.height() as u32)
+}
+
 #[pymodule]
 fn vloom_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<VcodeTx>()?;
     m.add_function(wrap_pyfunction!(wrap_file, m)?)?;
     m.add_function(wrap_pyfunction!(packet_size, m)?)?;
+    m.add_function(wrap_pyfunction!(probe_frame_gray, m)?)?;
+    m.add_function(wrap_pyfunction!(layout_cells, m)?)?;
     m.add("VCODE_VERSION", vcode::VERSION)?;
     Ok(())
 }

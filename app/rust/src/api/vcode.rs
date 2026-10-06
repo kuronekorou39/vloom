@@ -7,7 +7,7 @@
 
 use vloom_fountain as fountain;
 use vloom_vcode as vcode;
-use vloom_vcode::markers::locate_markers;
+use vloom_vcode::markers::{locate_markers, locate_markers_layout};
 use vloom_vcode::scan::{
     locate_code, scan_frame, scan_frame_tracked_with, scan_frame_wide, GrayImage, Quad,
 };
@@ -512,6 +512,31 @@ impl VcodeRx {
         let fracs = [0.85f32, 0.95, 0.72, 0.58];
         let cands = self.candidates();
         let mut errors = Vec::new();
+
+        // 格子が固定されていなければ、マーカーから四隅と格子の候補を出して掴む。
+        // 格子を知らされずに済むので、送信側が格子を切り替えても数枚で付いていける
+        // (「さがす」モードはこれに頼る)。候補の先頭は実機の標本 239 枚すべてで正解
+        // だったが、外したときの保険に 2 つ目まで試す。
+        if self.forced.is_none() {
+            let rot = self.last_ok.map(|(r, _)| r).unwrap_or(rotation_deg % 360);
+            let t_rot = std::time::Instant::now();
+            let (gray, rw, rh) = rotate_y_plane(&y, w, h, stride, rot);
+            let rotate_us = t_rot.elapsed().as_micros() as u32;
+            let img = GrayImage { w: rw, h: rh, data: &gray };
+            let t_dec = std::time::Instant::now();
+            if let Some((q, layouts)) = locate_markers_layout(&img) {
+                for layout in layouts.into_iter().take(2) {
+                    if let Ok(result) = scan_frame(&img, &q, layout) {
+                        let decode_us = t_dec.elapsed().as_micros() as u32;
+                        self.track_misses = 0;
+                        self.last = Some((rot, layout, result.corners));
+                        self.last_ok = Some((rot, layout));
+                        self.last_offsets = Some(result.block_offsets.clone());
+                        return success(result, false, layout, rot, rw, rh, rotate_us, decode_us);
+                    }
+                }
+            }
+        }
 
         // マーカー直接検出: 前フレームにも縮尺の仮定にも依存しない (数 ms)。
         // 追従が切れた直後や初回はまずこれで掴む。テクスチャ推定は縦長のコードを

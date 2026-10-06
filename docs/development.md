@@ -50,9 +50,26 @@ adb shell am start -n app.vloom.vloom.lab/app.vloom.vloom.MainActivity \
   # --ei afhunt 0                     # ピントの探り直しを見て AF を固定する挙動を切る
   # --ei dump 4                       # 70% 未満しか読めなかったフレームを N 枚保存
   # --ei dumpall 20                   # 検出の成否・成績に関係なく 10 枚おきに N 枚保存 (誤りの統計用)
+  # --ei dumpall 60 --ei dumpevery 1  # 間隔を変える (1 = 連続した枚)
 ```
 
 統計は `adb logcat` の `[vloom-stats]` (完了時) と `[vcode-rx] seq=` (フレームごと) に出ます。
+
+### さがす: その環境で一番速い設定を探す
+
+カメラを据えたまま、送信側が格子と fps の組を数秒ずつ切り替えて試験フレームを流し、
+受信側が設定ごとの実効スループットを出し続けます。ファイルは運びません。
+
+```bash
+uv run python -m desktop --sweep                       # fps の候補は画面の書き換え周期から決まる
+uv run python -m desktop --sweep 13x18@20,15x20@30 --dwell 5   # 組と 1 設定の秒数を自分で決める
+adb shell am start -n app.vloom.vloom.lab/app.vloom.vloom.MainActivity --ei tab 1 --es grid auto
+```
+
+受信側に操作は要りません (試験フレームかどうかはヘッダで分かり、格子は写りから判別します)。
+受信画面の中央に一覧が出て、同じ内容が logcat の `[vloom-probe]` に 1 秒ごとに出ます
+(`格子@fps=平均[最小-最大](読めた割合,巡回数)`)。送信アプリの設定画面の「さがす」ボタンでも
+始められます。いまは PC の送信アプリ → Android アプリの組だけに入っています。
 
 ### 条件を振って自動集計する
 

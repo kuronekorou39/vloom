@@ -19,6 +19,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'history_screen.dart' show shareReceived, saveReceivedToFile;
 import 'history_store.dart';
 import 'preset.dart';
+import 'probe_stats.dart';
 import 'rx_prefs.dart';
 import 'launch_args.dart';
 import 'scan_worker.dart';
@@ -195,6 +196,10 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   bool _needNgDump = true;
   int _lowDumps = 0;
   int _allDumps = 0;
+
+  /// 「さがす」モードの集計。送信側が試験フレームを流していると気付いた時点で作る
+  /// (受信側に切り替えの操作は無い。試験フレームかどうかはヘッダで分かる)
+  ProbeStats? _probe;
 
   bool _busy = false;
   bool _active = false;
@@ -494,7 +499,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       // 成績に関係なく等間隔で保存する標本。間隔は 1MB の受信 (約 200 枚) から
       // 20 枚ほど取れる幅
       final wantAllDump =
-          _allDumps < LaunchArgs.cached.dumpAll && _framesSeen % 10 == 0;
+          _allDumps < LaunchArgs.cached.dumpAll &&
+          _framesSeen % LaunchArgs.cached.dumpEvery == 0;
       final rx = _rx;
       if (rx == null) return;
       // 位置検出 (acquire): 画面全体を sweep して実際の 4 隅を取得し、ポップアップで確認 →
@@ -594,13 +600,20 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         _blocksOk += report.blocksOk;
         _blocksTotalSum += report.blocksTotal;
         _blockHist[_histBucket(report.blocksOk, report.blocksTotal)]++;
-        _dec ??= FountainDecoder(otiBytes: report.oti);
-        if (_packetSize == null && report.packets.isNotEmpty) {
-          _packetSize = report.packets.first.length - 4;
+        // 試験フレーム (「さがす」モード) はファイルを運んでいない。デコーダには入れず、
+        // 設定ごとの速さを数えるだけにする
+        final probeTag = ProbeTag.parse(report.oti);
+        if (probeTag != null) _onProbeFrame(probeTag, report);
+        final packets = probeTag == null ? report.packets : const <Uint8List>[];
+        if (probeTag == null) {
+          _dec ??= FountainDecoder(otiBytes: report.oti);
+          if (_packetSize == null && report.packets.isNotEmpty) {
+            _packetSize = report.packets.first.length - 4;
+          }
         }
         var done = false;
         final swDec = Stopwatch()..start();
-        for (final p in report.packets) {
+        for (final p in packets) {
           _packetsAdded++;
           if (p.length >= 4) {
             // RaptorQ payload ID = SBN(1 byte) + ESI(3 byte, big-endian)。
@@ -891,6 +904,121 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     await _stopCamera();
   }
 
+  /// 試験フレームが写った 1 枚ぶんを集計に足す。
+  void _onProbeFrame(ProbeTag tag, VcodeScanReport report) {
+    final probe = _probe ??= ProbeStats();
+    // 送信側は格子を切り替えていくので、固定したままだと最初の格子しか読めない。
+    // 格子はスキャナに写りから判別させる
+    if (_forcedGrid != kGridAuto) {
+      _presetIndex = -1;
+      _forcedGrid = kGridAuto;
+      _applyForcedGrid();
+    }
+    probe.add(
+      tag,
+      report.packets,
+      report.cellsW ~/ 20,
+      (report.cellsH - 56) ~/ 20, // 上下のストリップ (28 セル × 2) を除いた段数
+    );
+    if (_framesSeen % 30 == 0) {
+      debugPrint('[vloom-probe] ${probe.summary()}');
+    }
+  }
+
+  /// 「さがす」モードの一覧。設定ごとの実効スループットを出し続ける。
+  Widget _probePanel() {
+    final probe = _probe!;
+    final best = probe.best;
+    const head = TextStyle(color: Colors.white70, fontSize: 11);
+    TextStyle cell(ProbeSetting s) => TextStyle(
+      color: identical(s, best) ? const Color(0xFF7CFFB2) : Colors.white,
+      fontSize: 13,
+      fontWeight: identical(s, best) ? FontWeight.w700 : FontWeight.w500,
+      fontFeatures: const [FontFeature.tabularFigures()],
+    );
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.7),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            best == null
+                ? 'さがす: 計測中… (${probe.settingCount} 通り × '
+                      '${probe.dwellSec.toStringAsFixed(0)} 秒)'
+                : 'おすすめ: ${best.grid} / ${best.fps}fps '
+                      '(悪いときで ${best.minKbps!.toStringAsFixed(0)} KB/s)',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Table(
+            columnWidths: const {
+              0: FixedColumnWidth(14),
+              1: FlexColumnWidth(1.25),
+              2: FlexColumnWidth(0.7),
+              3: FlexColumnWidth(0.95),
+              4: FlexColumnWidth(1.0),
+              5: FlexColumnWidth(1.9),
+            },
+            defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+            children: [
+              const TableRow(
+                children: [
+                  SizedBox.shrink(),
+                  Text('格子', style: head),
+                  Text('fps', style: head),
+                  Text('KB/s', style: head, textAlign: TextAlign.right),
+                  Text('読めた', style: head, textAlign: TextAlign.right),
+                  Text('悪い〜良い', style: head, textAlign: TextAlign.right),
+                ],
+              ),
+              for (final s in probe.settings)
+                TableRow(
+                  children: [
+                    Text(
+                      identical(s, probe.current) ? '▶' : '',
+                      style: const TextStyle(color: Colors.white, fontSize: 11),
+                    ),
+                    Text(s.grid, style: cell(s)),
+                    Text('${s.fps}', style: cell(s)),
+                    Text(
+                      s.kbps.toStringAsFixed(0),
+                      style: cell(s),
+                      textAlign: TextAlign.right,
+                    ),
+                    Text(
+                      '${(s.recovery * 100).toStringAsFixed(0)}%',
+                      style: cell(s),
+                      textAlign: TextAlign.right,
+                    ),
+                    Text(
+                      s.visits == 0
+                          ? '-'
+                          : '${s.minKbps!.toStringAsFixed(0)}〜'
+                                '${s.maxKbps!.toStringAsFixed(0)}',
+                      style: cell(s),
+                      textAlign: TextAlign.right,
+                    ),
+                  ],
+                ),
+            ],
+          ),
+          // 構図の読み上げ (充填率・余白・px/セル) もここにまとめる
+          const SizedBox(height: 6),
+          _alignPanel(),
+        ],
+      ),
+    );
+  }
+
   /// 探索する格子をスキャナに反映する。送信側の格子が分かっているなら固定するほど
   /// 初回検出と acquire が速い (候補数に比例したコストが 1 候補分になる)。
   void _applyForcedGrid() {
@@ -1032,6 +1160,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     _resetFocusState();
     setState(() {
       _dec = null;
+      _probe = null;
       _packetSize = null;
       _seenEsi.clear();
       _packetsAdded = 0;
@@ -1106,6 +1235,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     await _stopCamera();
     setState(() {
       _dec = null;
+      _probe = null;
       _packetSize = null;
       _payload = null;
       _savedItem = null;
@@ -1799,9 +1929,27 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           child: SafeArea(
             top: !_panelAtTop,
             bottom: _panelAtTop,
-            child: _alignPanel(),
+            // 「さがす」の間は一覧の中に出す (ここは映像の上端で、コードの隅に被る)
+            child: _probe != null ? const SizedBox.shrink() : _alignPanel(),
           ),
         ),
+        // 「さがす」の一覧はカメラ映像の中央に、幅を絞って重ねる。コードの四隅は
+        // はみ出していないかを目で確かめる場所なので、そこには被せない
+        if (_probe != null)
+          IgnorePointer(
+            child: Align(
+              // カメラ映像は操作パネルの反対側へ 0.3 寄せてある。一覧は縦に長いので、
+              // 同じ 0.3 だと上端がコードの上の隅に掛かる (実機で確認)。寄せを半分にして
+              // 映像の中ほどに置く
+              alignment: _panelAtTop
+                  ? const Alignment(0, 0.12)
+                  : const Alignment(0, -0.12),
+              child: FractionallySizedBox(
+                widthFactor: 0.74,
+                child: _probePanel(),
+              ),
+            ),
+          ),
         if (_restoring)
           Container(
             color: Colors.black54,

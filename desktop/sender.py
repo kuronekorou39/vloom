@@ -331,11 +331,19 @@ class SenderWindow(QWidget):
         elapsed = now - self.started
         loop_sec = self.frame_count / self.fps
         z, dx, dy = self.view.placement
-        self.status.setText(
+        # 「さがす」モード (sweep.SweepTx) は設定を切り替えていくので、いまの設定を
+        # 自分で名乗る。枚数や巡回の表示は意味を持たない
+        sweep_status = getattr(self.tx, "status", None)
+        head = (
+            f"{sweep_status} · 実測 {measured:.1f}fps · {elapsed:.0f} 秒経過"
+            if sweep_status is not None else
             f"{self.label} · {self.payload_len:,} B · "
             f"{self.fps}fps 要求 / 実測 {measured:.1f}fps · "
             f"frame {self.index + 1}/{self.frame_count} · {self.pass_no} 巡目 · "
-            f"{elapsed:.0f} 秒経過 (1 巡 {loop_sec:.1f} 秒) · "
+            f"{elapsed:.0f} 秒経過 (1 巡 {loop_sec:.1f} 秒)"
+        )
+        self.status.setText(
+            head + " · "
             f"配置 --zoom {z:.2f} --dx {dx:+.3f} --dy {dy:+.3f} "
             f"({self.view.cell_px:.2f}px/セル)"
             + ("  [静止中]" if self.hold else "")
@@ -348,11 +356,13 @@ class SenderWindow(QWidget):
 
         # デッドラインを積み上げてドリフトを消す。描画が遅れて過去になった場合だけ
         # 基準を取り直す (取り戻そうとして連続発火し、表示が 1 リフレッシュを割るのを防ぐ)。
-        self._deadline += self.interval
+        # 表示し続ける長さは、いま描いたフレームのもの (「さがす」モードは設定ごとに違う)
+        interval = getattr(self.tx, "frame_interval", self.interval)
+        self._deadline += interval
         delay = self._deadline - time.perf_counter()
         if delay < 0:
-            self._deadline = time.perf_counter() + self.interval
-            delay = self.interval
+            self._deadline = time.perf_counter() + interval
+            delay = interval
         self.timer.start(int(delay * 1000))
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt の命名)

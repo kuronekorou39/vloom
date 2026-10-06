@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from .sender import SenderWindow
+from .sweep import DEFAULT_DWELL_SEC, SweepTx, default_sweep, parse_sweep
 
 # 受信側の総当たり候補に入っている格子だけを既定で出す。11×10 は候補外なので
 # 受信側で格子を明示指定しない限り検出されない (選べるようにはしておく)。
@@ -49,9 +50,18 @@ DEFAULT_MARGIN_CELLS = 8
 DEFAULT_FPS = 20
 
 
+# 格子の一辺の上限。Rust 側 (VcodeTx) がこの範囲に丸めるので、超える指定をそのまま
+# 渡すと「指定と違う格子が黙って送られる」ことになる (実際に 16x22 を指定して 16x20 が
+# 出て、受信側の格子と食い違ったまま計測した)。ここで止める
+GRID_SIDE_RANGE = (2, 20)
+
+
 def parse_grid(text: str) -> tuple[int, int]:
-    gw, gh = text.split(" ")[0].split("x")
-    return int(gw), int(gh)
+    gw, gh = (int(v) for v in text.split(" ")[0].split("x"))
+    lo, hi = GRID_SIDE_RANGE
+    if not (lo <= gw <= hi and lo <= gh <= hi):
+        raise ValueError(f"格子 {gw}x{gh} は範囲外です (縦横とも {lo}〜{hi})")
+    return gw, gh
 
 
 class MainWindow(QWidget):
@@ -162,6 +172,10 @@ class MainWindow(QWidget):
         start = QPushButton("送信開始")
         start.setDefault(True)
         start.clicked.connect(self._start)
+        # ファイルは送らず、格子と fps を自動で切り替えながら試験フレームを流す。
+        # 受信側に設定ごとの速さが出続けるので、その環境で一番速い組が分かる
+        sweep = QPushButton("さがす (設定を自動で切り替えて速さを測る)")
+        sweep.clicked.connect(lambda: self.start_sweep())
 
         root = QVBoxLayout(self)
         root.addLayout(file_row)
@@ -169,6 +183,7 @@ class MainWindow(QWidget):
         root.addLayout(form)
         root.addWidget(self.theory)
         root.addWidget(start)
+        root.addWidget(sweep)
         root.addWidget(self.info)
 
         for w in (self.grid, self.bpc):
@@ -273,6 +288,36 @@ class MainWindow(QWidget):
         self.info.setText(
             f"送信中: {tx.frame_count} フレーム / {tx.packet_count} パケット "
             f"(うちリペア {extra_repair})  ·  1 巡 {tx.frame_count / fps:.1f} 秒")
+
+    def start_sweep(self, spec: str | None = None,
+                    dwell_sec: float = DEFAULT_DWELL_SEC) -> None:
+        """「さがす」モードで送信ウィンドウを開く。spec は "13x18@20,15x20@30" の形。
+
+        spec を省くと、送信ウィンドウが乗る画面の書き換え周期から fps の候補を決める。
+        """
+        rect = self.stage_geometry or self._stage_rect()
+        screen = QGuiApplication.screenAt(rect.center()) or QGuiApplication.primaryScreen()
+        refresh_hz = screen.refreshRate() if screen is not None else 0.0
+        try:
+            settings = parse_sweep(spec or default_sweep(refresh_hz), GRID_SIDE_RANGE)
+        except ValueError as e:
+            QMessageBox.warning(self, "Vloom", str(e))
+            return
+        tx = SweepTx(settings, dwell_sec)
+        # 配置 (余白・倍率・位置) は通常の送信と同じものを使う。格子ごとに窓いっぱいへ
+        # 合わせ直されるので、どの格子もほぼ同じ大きさで写る (= 同じ距離での比較になる)
+        self.stage = SenderWindow(tx, settings[0].fps, 0, "さがす", self.margin.value(),
+                                  self.zoom.value(), self.snap_cells,
+                                  self.dx.value(), self.dy.value(),
+                                  hold=self.hold_at_start)
+        self.stage.closed.connect(self._on_stage_closed)
+        self.stage.setGeometry(rect)
+        self.stage.start()
+        print(f"さがす: 画面 {refresh_hz:.0f}Hz / " + ", ".join(s.label for s in settings),
+              flush=True)
+        self.info.setText(
+            "さがす: " + " → ".join(s.label for s in settings)
+            + f"  (1 設定 {dwell_sec:g} 秒)。受信側に設定ごとの KB/s が出続けます。")
 
     def _stage_rect(self) -> QRect:
         """送信ウィンドウの初期位置。選んだモニタの作業領域に収まる正方形を中央に置く。

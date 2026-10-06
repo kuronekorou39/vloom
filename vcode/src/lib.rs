@@ -30,6 +30,7 @@
 
 pub mod bundle;
 pub mod markers;
+pub mod probe;
 pub mod scan;
 
 /// コーナーマーカーの一辺 (セル)。

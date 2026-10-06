@@ -39,6 +39,7 @@ class MainActivity : FlutterActivity() {
                             "aepoint" to intent.getStringExtra("aepoint"),
                             "dump" to intent.getIntExtra("dump", -1),
                             "dumpall" to intent.getIntExtra("dumpall", -1),
+                            "dumpevery" to intent.getIntExtra("dumpevery", -1),
                             "exp" to intent.getIntExtra("exp", -1),
                             "iso" to intent.getIntExtra("iso", -1),
                         )
