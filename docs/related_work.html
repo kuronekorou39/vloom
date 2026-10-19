@@ -2,8 +2,8 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>画面-カメラ間光学データ伝送 — 関連研究・先行事例まとめ</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>画面→カメラ転送 関連研究・先行事例</title>
 <style>
   :root {
     --bg: #fafafa;
@@ -13,6 +13,25 @@
     --accent: #2563eb;
     --border: #e5e7eb;
     --highlight: #eff6ff;
+    --ours: #fefce8;
+    --warn-bg: #fef2f2;
+    --warn: #b91c1c;
+    --ok: #15803d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111318;
+      --card: #1a1d24;
+      --text: #e5e7eb;
+      --sub: #9ca3af;
+      --accent: #60a5fa;
+      --border: #2d3340;
+      --highlight: #1e2a3d;
+      --ours: #2d2a14;
+      --warn-bg: #2f1a1a;
+      --warn: #fca5a5;
+      --ok: #86efac;
+    }
   }
   * { box-sizing: border-box; }
   body {
@@ -22,9 +41,9 @@
     color: var(--text);
     line-height: 1.8;
   }
-  .container { max-width: 900px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+  .container { max-width: 1040px; margin: 0 auto; padding: 2rem 1rem 4rem; }
   header { border-bottom: 3px solid var(--accent); padding-bottom: 1rem; margin-bottom: 2rem; }
-  h1 { font-size: 1.6rem; margin: 0 0 .5rem; }
+  h1 { font-size: 1.6rem; margin: 0 0 .5rem; line-height: 1.4; }
   .lead { color: var(--sub); font-size: .95rem; }
   h2 {
     font-size: 1.25rem;
@@ -32,43 +51,43 @@
     padding-left: .6rem;
     margin-top: 3rem;
   }
+  h3 { font-size: 1.05rem; margin: 1.8rem 0 .5rem; }
   .card {
     background: var(--card);
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 1.25rem 1.5rem;
-    margin: 1.25rem 0;
-    box-shadow: 0 1px 3px rgba(0,0,0,.05);
+    padding: 1.1rem 1.4rem;
+    margin: 1.1rem 0;
   }
-  .card h3 { margin: 0 0 .25rem; font-size: 1.1rem; }
-  .meta { color: var(--sub); font-size: .85rem; margin-bottom: .75rem; }
+  .card h4 { margin: 0 0 .25rem; font-size: 1.05rem; }
+  .meta { color: var(--sub); font-size: .85rem; margin-bottom: .5rem; }
   .badge {
     display: inline-block;
-    font-size: .75rem;
-    padding: .1rem .55rem;
+    font-size: .72rem;
+    padding: .05rem .5rem;
     border-radius: 999px;
     background: var(--highlight);
     color: var(--accent);
-    border: 1px solid #bfdbfe;
-    margin-right: .35rem;
+    border: 1px solid var(--border);
+    margin-right: .3rem;
     vertical-align: middle;
+    white-space: nowrap;
   }
-  .speed {
-    font-weight: bold;
-    color: var(--accent);
-  }
+  .scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   table {
     width: 100%;
     border-collapse: collapse;
     background: var(--card);
-    font-size: .9rem;
+    font-size: .86rem;
+    line-height: 1.6;
   }
-  th, td { border: 1px solid var(--border); padding: .55rem .7rem; text-align: left; }
-  th { background: var(--highlight); }
-  tr.ours { background: #fefce8; font-weight: bold; }
+  th, td { border: 1px solid var(--border); padding: .45rem .6rem; text-align: left; vertical-align: top; }
+  th { background: var(--highlight); white-space: nowrap; }
+  td.num { white-space: nowrap; font-weight: bold; }
+  tr.ours { background: var(--ours); }
   ul { padding-left: 1.4rem; }
-  li { margin: .3rem 0; }
-  a { color: var(--accent); }
+  li { margin: .25rem 0; }
+  a { color: var(--accent); word-break: break-all; }
   .note {
     background: var(--highlight);
     border-left: 4px solid var(--accent);
@@ -77,6 +96,18 @@
     font-size: .9rem;
     margin: 1rem 0;
   }
+  .warn {
+    background: var(--warn-bg);
+    border-left: 4px solid var(--warn);
+    padding: .75rem 1rem;
+    border-radius: 0 8px 8px 0;
+    font-size: .9rem;
+    margin: 1rem 0;
+  }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+  .yes { color: var(--ok); font-weight: bold; }
+  .no { color: var(--warn); font-weight: bold; }
   footer { margin-top: 3rem; color: var(--sub); font-size: .8rem; border-top: 1px solid var(--border); padding-top: 1rem; }
 </style>
 </head>
@@ -84,163 +115,392 @@
 <div class="container">
 
 <header>
-  <h1>画面-カメラ間 光学データ伝送 — 関連研究・先行事例まとめ</h1>
+  <h1>画面→カメラのデータ転送 — 関連研究・先行事例</h1>
   <div class="lead">
-    Vloom プロジェクト(アニメーション QR + fountain code による PC→スマホ画像転送)の
-    位置づけを確認するための先行事例サーベイ。2026-07-02 時点の調査。
+    Vloom の位置づけを確かめるための調査。2026-10-19 時点 (前回は 2026-07-02、QR 経路の頃)。<br>
+    方針どおり<strong>第三者のソースコードは読まず</strong>、README・性能ドキュメント・論文・記事・ストアページの
+    公開情報だけを参照した。数値は各者の自己申告で、<strong>測定条件はそろっていない</strong>。
   </div>
 </header>
 
-<h2>スループット比較(実測値)</h2>
+<h2>要点</h2>
+<div class="card">
+  <ul>
+    <li><strong>2026 年 7 月以降、同じ発想の OSS が相次いで出ている。</strong>
+      火付け役の Decimen は Tom's Hardware に取り上げられ (★6.9k)、謳い文句「no network, no pairing」が Vloom とほぼ同じ。</li>
+    <li><strong>公表値で Vloom より速いものがある。</strong>
+      Decimen 418 KB/s (49 型モニタ・60fps・最良 1 回の記録)、LIZARD 3.8 MB/s (未検証)。
+      「世界最速」は書けない。</li>
+    <li><strong>学術研究と比べると上。</strong>
+      市販スマホでリアルタイム受信した報告は、誤り訂正後で数百 kbps 止まり。
+      Vloom の 1.1〜1.7 Mbps (ファイルを最後まで転送した値) はそれを上回る。
+      ただし端末の世代差 (先行研究は 2013〜2016 年の端末) が大きい。</li>
+    <li><strong>設計が一番近いのは FOCUS (MobiSys 2016)。</strong>
+      グレースケール + Fountain 符号 + 断片ごとの誤り訂正。
+      「fountain 符号を初めて使った」「部分回収が新しい」とは言えない。</li>
+    <li><strong>iPhone で受信できることは、もう前提になっている。</strong>
+      Decimen・RaptorQR・cimbar は、どれもブラウザで iPhone 受信に対応している。</li>
+  </ul>
+</div>
+
+<h2>Vloom の実測値 (比較の基準)</h2>
+<div class="scroll">
+<table>
+  <thead><tr><th>送信</th><th>受信</th><th>格子</th><th>実効</th><th>条件</th></tr></thead>
+  <tbody>
+    <tr class="ours"><td>BenQ 平面モニタ (LCD) @20fps</td><td>Pixel 9a</td><td>13×18 / 1bit</td><td class="num">131〜147 KB/s</td><td>1MB を最後まで転送、繰り返し計測、三脚固定</td></tr>
+    <tr class="ours"><td>同上 @20fps / 走査 2 本</td><td>Pixel 9a</td><td>13×18 / 1bit</td><td class="num">162〜170 KB/s</td><td>2MB、3 回 (中央値 166)</td></tr>
+    <tr class="ours"><td>同上 @30fps / 走査 2 本</td><td>Pixel 9a</td><td>13×18 / 1bit</td><td class="num">204〜220 KB/s</td><td>2MB、3 回 (中央値 217)</td></tr>
+    <tr class="ours"><td>iPhone 12 Pro (OLED) @30fps</td><td>Pixel 9a</td><td>13×18 / 1bit</td><td class="num">201〜207 KB/s</td><td>1MB、走査 1 本</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="meta">KB/s × 8 ≒ kbps。131 KB/s ≈ 1.05 Mbps、207 KB/s ≈ 1.66 Mbps。
+値は「ファイルの大きさ ÷ 受信開始から復元までの全時間」で、初回の位置検出と fountain の冗長分も含む。
+詳細は <a href="experiments.md">experiments.md</a> と <a href="measurements/">measurements/</a>。</p>
+
+<h2>実用ツール・OSS・製品</h2>
+<div class="scroll">
 <table>
   <thead>
-    <tr><th>システム</th><th>方式</th><th>実測スループット</th><th>備考</th></tr>
+    <tr><th>名前</th><th>方式</th><th>公表スループット</th><th>測定条件</th><th>iOS 受信</th><th>ライセンス</th><th>状況</th></tr>
   </thead>
   <tbody>
     <tr class="ours">
-      <td>Vloom(本プロジェクト)</td>
-      <td>標準 QR + fountain code</td>
-      <td>~6.7 KB/s(53 kbps)</td>
-      <td>200KB / 30秒。MLKit デコード、Flutter 実機</td>
+      <td><strong>Vloom</strong></td>
+      <td>独自の輝度格子 vcode (1bit/2bit)、RaptorQ、ブロック CRC で部分回収</td>
+      <td class="num">131〜220 KB/s</td>
+      <td>上の表のとおり。繰り返し計測</td>
+      <td>Web 版 (要確認)・アプリ準備中</td>
+      <td>MIT</td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td><strong>LIZARD</strong></td>
+      <td><strong>輝度のみ</strong>。空間周波数に QPSK を載せる OFDM 風、LDPC + CRC32、wirehair、角検出に CNN、GPU (Vulkan)</td>
+      <td class="num">3.8 MB/s (中央値)</td>
+      <td>Galaxy S26 Ultra のネイティブ受信、1080p モニタに 2 コード、60fps、13 分間。同じ端末の Chrome では 0.55〜0.8 MB/s。第三者の検証なし</td>
+      <td>記載なし</td>
+      <td>Apache-2.0</td>
+      <td>2026-10-04 公開、★29、Show HN は反応なし</td>
+    </tr>
+    <tr>
+      <td><strong>Decimen Optical Transfer</strong></td>
+      <td>標準 QR (V40, EC-L) を 2/4/6 個並べる、LT fountain、60fps</td>
+      <td class="num">418.5 KB/s (ピーク 601.5)<br>スマホ同士 199.2</td>
+      <td>1MiB。Odyssey G9 49″ → iPhone 17 Pro Max (4 コード)。<strong>各組の最良 1 回だけを記録</strong></td>
+      <td class="yes">可 (PWA)</td>
+      <td>AGPL-3.0+ (v0.3.0 までは MIT)</td>
+      <td>2026-07-30 作成、★6.9k、Tom's Hardware が記事化</td>
+    </tr>
+    <tr>
+      <td><strong>RaptorQR</strong></td>
+      <td>QR (V20/V30) を 4 個並べる、<strong>RaptorQ</strong> (WASM)</td>
+      <td class="num">183.6 KB/s (6.5MB)<br>瞬間 254</td>
+      <td>V30-L ×4 @30fps、iPhone 16 の Safari で受信</td>
+      <td class="yes">可 (Safari)</td>
+      <td>MIT</td>
+      <td>2026-07、★176</td>
+    </tr>
+    <tr>
+      <td><strong>libcimbar / cimbar.org</strong></td>
+      <td>4 色 + 形状のタイル (6bit/タイル)、Reed-Solomon、wirehair、zstd</td>
+      <td class="num">106 KB/s</td>
+      <td>4.69MB を 44 秒、mode B。受信は Snapdragon 625 の Android。fps・距離・測定日の記載なし</td>
+      <td>Web 受信 β のみ (作者の体感で「約 80 kb/s」、単位があいまい)</td>
+      <td>MPL-2.0</td>
+      <td>v0.6.8 (2026-08)、★6.5k、開発が続いている</td>
+    </tr>
+    <tr>
+      <td>cuttldrop</td>
+      <td><strong>RaptorQ</strong> + CRC + BLAKE3</td>
+      <td>不明</td>
+      <td>—</td>
+      <td>不明</td>
+      <td>Apache-2.0</td>
+      <td>謳い文句「by light, no network, no pairing」</td>
+    </tr>
+    <tr>
+      <td>qrfiletransfer.app</td>
+      <td>QR、systematic LT、CRC32、BLAKE3</td>
+      <td class="num">安定時 51.4 KB/s</td>
+      <td>生の光学ペイロードの理論値。Turbo 102.8 / Lab 176 は実機で検証していないと明記</td>
+      <td class="yes">可</td>
+      <td>MIT</td>
+      <td>2026-08</td>
     </tr>
     <tr>
       <td>TXQR</td>
-      <td>標準 QR + LT fountain code</td>
-      <td>最良 ~9 KB/s / 実用 1〜2 KB/s</td>
-      <td>iPhone、近距離・静止の最良条件</td>
+      <td>QR、LT fountain</td>
+      <td class="num">最良 ~9 KB/s<br>fountain 版は 13KB を 0.5 秒</td>
+      <td>三脚に固定した iPhone、12fps</td>
+      <td>試作のみ</td>
+      <td>MIT</td>
+      <td>2024 年で停止、★3.3k</td>
     </tr>
     <tr>
-      <td>InFrame++(学術)</td>
-      <td>可視動画への埋め込み</td>
-      <td>50.4 kbps</td>
-      <td>動画に不可視で埋め込むという別制約下</td>
+      <td>ShadowCat</td>
+      <td>QR、fountain なし (欠けたチャンクを再送)</td>
+      <td>~1 KB/s</td>
+      <td>—</td>
+      <td class="yes">可</td>
+      <td>記載なし</td>
+      <td>2026-05、HN 168pt</td>
     </tr>
     <tr>
-      <td>MAMBA(学術)</td>
-      <td>適応型バーコード(双方向)</td>
-      <td>69.1 kbps</td>
-      <td>スマホ画面 ↔ スマホカメラ</td>
+      <td>BC-UR (Keystone / SeedSigner / Passport / Sparrow)</td>
+      <td>UR マルチパート + fountain のアニメ QR</td>
+      <td>公表値なし</td>
+      <td>PSBT や鍵など数 KB 用途</td>
+      <td class="yes">可</td>
+      <td>BSD 系</td>
+      <td>ハードウェアウォレット業界の標準</td>
     </tr>
     <tr>
-      <td>RDCode(MobiCom 2014)</td>
-      <td>専用動的バーコード</td>
-      <td>COBRA 比 約2倍</td>
-      <td>3階層(packet-frame-block)の独自誤り訂正</td>
+      <td>AirQR / AirGap QR</td>
+      <td>アニメ QR</td>
+      <td>記載なし</td>
+      <td>—</td>
+      <td class="yes">可</td>
+      <td>プロプライエタリ</td>
+      <td>App Store / Web</td>
     </tr>
     <tr>
-      <td>libcimbar</td>
-      <td>独自カラータイルコード</td>
-      <td>852 kbps(~106 KB/s)</td>
-      <td>4.69MB を 44秒。QR 非互換の全面カスタム</td>
+      <td>JABCode Studio</td>
+      <td>多色 2D コード (ISO/IEC 23634)。静止コードを順番に読む</td>
+      <td>2KB 超/コード</td>
+      <td>動画転送ではない</td>
+      <td class="yes">iOS アプリ</td>
+      <td>—</td>
+      <td>2025-11</td>
+    </tr>
+    <tr>
+      <td>ggwave (音響)</td>
+      <td>マルチ周波数 FSK + RS</td>
+      <td>8〜16 B/s</td>
+      <td>約 1m</td>
+      <td class="yes">可</td>
+      <td>MIT</td>
+      <td>比較用</td>
     </tr>
   </tbody>
 </table>
+</div>
+<p class="meta">ほかにも 2026 年に出た小規模な類似プロジェクトがある (★0〜数十)。
+optical-transfer、rvQR、QRShare、meow-decoder、airgap-protocol、Airhop、QR-Stream。
+ほとんどが「QR + fountain + PWA」の構成。<br>
+画面とカメラを使う商用のエアギャップ製品は見当たらなかった。
+商用のデータダイオード (OPSWAT 等) は光ファイバの一方向ハードウェアで、5 Mbps〜10 Gbps。</p>
+
+<h3>主な相手の詳細</h3>
+<div class="grid2">
+  <div class="card">
+    <h4>Decimen Optical Transfer</h4>
+    <div class="meta"><span class="badge">QR × 最大 6</span><span class="badge">60fps</span><span class="badge">PWA</span></div>
+    <ul>
+      <li>2026-07-30 に r/ClaudeAI で話題になった。Claude Code で一晩で作ったという触れ込み。Tom's Hardware の記事は「60fps で約 190 KB/s」</li>
+      <li>標準 QR を大型・120Hz の画面に並べて、表示面積と fps で速度を稼ぐ設計</li>
+      <li>計測は各組の最良 1 回。Vloom の繰り返し計測とは性格が違う</li>
+      <li>Vloom と謳い文句が重なるので、公開時に先行事例として挙げておくべき相手</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>LIZARD</h4>
+    <div class="meta"><span class="badge">輝度のみ</span><span class="badge">OFDM 風</span><span class="badge">GPU</span></div>
+    <ul>
+      <li>色を使わず輝度に載せる点が Vloom と同じ方向。差は、空間ブロックではなく周波数領域で多値化していること</li>
+      <li>3.8 MB/s は開発者 1 人の自己申告。動画デモはある (YouTube)</li>
+      <li>ブラウザ受信では 0.55〜0.8 MB/s。ネイティブ + GPU が前提の数字</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>libcimbar</h4>
+    <div class="meta"><span class="badge">色 + 形状</span><span class="badge">wirehair</span></div>
+    <ul>
+      <li>この分野の定番。v0.6.x で次の改良が入った
+        <ul>
+          <li>mode B と、互換性を重視した Bm / Bu を追加</li>
+          <li>Web 受信 β (re.cimbar.org) を公開</li>
+          <li>送信 fps のスライダーを追加 (既定 15fps)</li>
+          <li>光過敏性の警告を表示</li>
+        </ul>
+      </li>
+      <li>性能表は古い端末 (Snapdragon 625) のまま更新されていない</li>
+      <li>iOS ネイティブの受信アプリはない</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>RaptorQR / cuttldrop</h4>
+    <div class="meta"><span class="badge">RaptorQ</span></div>
+    <ul>
+      <li>RaptorQ を光転送に使う例。RaptorQ を使うこと自体は Vloom の差別化にならない</li>
+      <li>RaptorQR は QR を 4 個並べて Safari 受信で 184 KB/s (6.5MB)。条件は違うが LCD 送信の Vloom と同程度</li>
+    </ul>
+  </div>
+</div>
+
+<h2>学術研究 (screen-camera communication)</h2>
+<p>確度の表記:
+<span class="badge">本</span>原典の本文で確認 /
+<span class="badge">ア</span>アブストラクトのみ /
+<span class="badge">二</span>他の論文・サーベイ経由。<br>
+速度の意味は論文によって違う。raw (ビットの総量)、goodput (誤り訂正後に正しく届いた量)、
+換算値 (1 枚あたりの平均 × fps)、理論値がある。</p>
+<div class="scroll">
+<table>
+  <thead>
+    <tr><th>名前</th><th>会議・年</th><th>方式</th><th>報告値</th><th>条件</th><th>誤り訂正</th><th>確度</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>PixNet</td><td>MobiCom 2010</td><td>空間 2D-OFDM、緑チャネルのみ</td><td class="num">4.3〜15 Mb/s</td><td>30 型 LCD、Nokia N82 / 一眼。<strong>1 枚あたりの換算 × 30、オフライン処理</strong></td><td>RS を 3 段階</td><td>本</td></tr>
+    <tr><td>COBRA</td><td>MobiSys 2012</td><td>4 色 2bit/ブロック、角マーカー</td><td class="num">最大 225 kbps</td><td>Nexus S → HTC、15/30fps、固定、録画してから復号</td><td>CRC のみ</td><td>本</td></tr>
+    <tr><td>Smooth Codes</td><td>CoNEXT 2012</td><td>rateless、混ざったフレームも使う</td><td>数値なし</td><td>オフライン</td><td>rateless</td><td>本</td></tr>
+    <tr><td>LightSync</td><td>MobiCom 2013</td><td>白黒、混ざったフレームを分離</td><td>COBRA の 2.3 倍</td><td>LCD、約 10cm</td><td>フレーム間の消失符号</td><td>本</td></tr>
+    <tr><td>RDCode</td><td>MobiCom 2014</td><td>packet-frame-block の 3 層</td><td class="num">68 kbps (追試)</td><td>Nexus 5、約 20cm</td><td>RS + パリティ</td><td>ア/二</td></tr>
+    <tr><td>Styrofoam</td><td>VLCS 2014</td><td>RGB 多値、空白フレームを挟む</td><td class="num">69.1 kbps</td><td>不明</td><td>不明</td><td>ア</td></tr>
+    <tr><td>InFrame++</td><td>MobiSys 2015</td><td>120Hz の相補フレームで不可視化</td><td class="num">goodput 70〜85 kbps</td><td>24 型 120Hz、60cm、オフライン</td><td>RS(7,3)</td><td>本</td></tr>
+    <tr><td>HiLight</td><td>MobiSys 2015</td><td>α 値の変化で不可視化 (<strong>OLED 送信</strong>)</td><td class="num">1.1〜4 kbps</td><td>Galaxy Tab S、iPhone 5s 120fps</td><td>なし</td><td>本</td></tr>
+    <tr><td>SoftLight</td><td>INFOCOM 2016</td><td>YUV の U/V に 1bit ずつ</td><td class="num">goodput 317 kbps</td><td>Nexus 5、約 20cm、静止</td><td>ビット単位の rateless 符号</td><td>本</td></tr>
+    <tr style="background: var(--ours)"><td><strong>FOCUS</strong></td><td>MobiSys 2016</td><td><strong>グレースケール</strong>の OFDM (位相 QPSK)</td><td class="num">240 kbps (75cm)</td><td>LCD、Galaxy S6、三脚 (手持ちでも差は小さい)</td><td>断片ごとの RS + <strong>Fountain</strong></td><td>本</td></tr>
+    <tr><td>TextureCode</td><td>INFOCOM 2016</td><td>テクスチャの強い領域に埋め込む</td><td class="num">15〜22 kbps</td><td>120Hz、三脚</td><td>—</td><td>本</td></tr>
+    <tr><td>DaViD</td><td>NEM 2016</td><td>半可視の時間差分</td><td class="num">4.5 Mb/s</td><td><strong>産業用カメラ、MATLAB でオフライン処理</strong></td><td>なし</td><td>二</td></tr>
+    <tr><td>ChromaCode</td><td>MobiCom 2018</td><td>CIELAB の明度で不可視化</td><td class="num">goodput 120 kbps</td><td>27 型 120Hz、Nexus 6P、50cm</td><td>RS + 畳み込み</td><td>本</td></tr>
+    <tr><td>FareQR</td><td>SEC 2020</td><td>QR、混ざったフレームを Viterbi で分離</td><td class="num">804 kbps</td><td>24 型 LCD、45cm、30/60fps</td><td>QR 標準</td><td>二</td></tr>
+    <tr><td>AirCode</td><td>NSDI 2021</td><td>不可視の映像 + 非可聴音</td><td class="num">goodput 140〜182 kbps</td><td>120Hz、Nexus 6P</td><td>RS + 畳み込み</td><td>本</td></tr>
+    <tr><td>DeepLight</td><td>IPSN 2021</td><td>Manchester 符号 + CNN で一括復号</td><td class="num">0.95〜4.7 kbps</td><td>iPhone X 120fps、手持ち / 三脚</td><td>RS</td><td>本</td></tr>
+    <tr><td>RescQR</td><td>TMC 2023</td><td>標準 QR、混ざったフレームを分離</td><td class="num">goodput 400 kbps 超</td><td>不明</td><td>QR 標準</td><td>ア</td></tr>
+    <tr><td>Event camera OCC</td><td>RA-L 2025</td><td>イベントカメラで受信</td><td class="num">114 kbps</td><td>60Hz、1.25m、固定 (手持ちは 7.7 kbps)</td><td>RS</td><td>本</td></tr>
+    <tr class="ours"><td><strong>Vloom</strong></td><td>2026</td><td>輝度ブロック格子、ブロック CRC</td><td class="num">1.05〜1.76 Mbps</td><td>Pixel 9a のリアルタイム受信、三脚、ファイルを最後まで転送</td><td>CRC で検出 + RaptorQ</td><td>—</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="meta">ほかに、モデルからの推定値 (Ashok ほか PerCom 2014 の 31 Mbps)、サーベイが挙げる理論値 (7.67 Mbps)、
+2026 年の外挿値 (Gb/s 級) がある。いずれも実測ではないので比較に使わない。
+RainBar の「958 kbps」は信頼性の低い二次情報なので載せていない。</p>
+
+<h3>技術の系統</h3>
+<div class="grid2">
+  <div class="card">
+    <h4>見えるコードの高容量化</h4>
+    PixNet → COBRA → LightSync / RDCode → SoftLight / FOCUS → FareQR / RescQR。
+    多値化の手段は色・周波数領域 (OFDM)・色差。2016 年以降は主要会議での研究が減り、QR ストリームの改良が中心になった。
+  </div>
+  <div class="card">
+    <h4>人の目に見えない埋め込み</h4>
+    InFrame++、ChromaCode、AirCode。120Hz 表示が前提で、誤り訂正後は約 120〜180 kbps。
+    見出しの raw 値 (777〜1069 kbps) と取り違えないこと。Vloom とは比べる相手が違う。
+  </div>
+  <div class="card">
+    <h4>同期・ローリングシャッターの扱い</h4>
+    考え方は 3 つに分かれる。
+    <ul>
+      <li>避ける: 表示 fps を撮影の半分にする (PixNet、COBRA)</li>
+      <li>分ける: 混ざりを推定して分離する (LightSync、FareQR、RescQR)</li>
+      <li>捨てる: 消失として扱う (InFrame++、SoftLight、Peng 2025)</li>
+    </ul>
+    Vloom は「捨てる」側。混ざったブロックは CRC で落とす。救済を試したが +0.6〜1.5% だった (experiments.md の 2026-10-06)。
+  </div>
+  <div class="card">
+    <h4>誤り訂正と rateless 符号</h4>
+    主流は RS と、RS + 畳み込み符号。rateless 系には Smooth Codes (2012)、SoftLight (2016)、FOCUS (2016)、CCRCode (2025) がある。
+    <strong>RaptorQ で実測スループットを報告した査読論文は見つからなかった。</strong>
+    学習ベース (2019〜) の主眼は、人の目に見えないことと崩れにくさで、速さではない (1〜5 kbps)。
+  </div>
+</div>
+
+<h2>Vloom の位置づけ</h2>
+<div class="grid2">
+  <div class="card">
+    <h4 style="color: var(--ok)">言えること</h4>
+    <ul>
+      <li><strong>市販スマホのリアルタイム受信で、ファイルを最後まで転送した実測値が 1.1〜1.7 Mbps。</strong>
+        調べた範囲の学術報告 (スマホ受信、リアルタイム) より上。「調べた範囲で」と限定し、定義・端末・距離を添える</li>
+      <li><strong>条件を明記した繰り返し計測であること。</strong>競合の多くは「最良 1 回」か理論値</li>
+      <li>同じ Rust コアを WASM・ネイティブ・Python で共有し、Web・Android・Windows で実装が分かれていない</li>
+      <li>OLED 送信と LCD 送信を同じ受信端末で比べた実測と、そこから得た知見 (60Hz では 30fps が上限、律速は受信の処理枚数)</li>
+      <li>RaptorQ + ブロック単位の部分回収の組み合わせで実測した例として (「RaptorQ で」と限定する)</li>
+      <li>MIT ライセンス (Decimen は AGPL に移った)</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4 style="color: var(--warn)">負けている・重なっている点</h4>
+    <ul>
+      <li>速度: Decimen 418 KB/s、LIZARD 3.8 MB/s (いずれも自己申告)</li>
+      <li>「輝度のみ」は LIZARD と FOCUS、「QR を使わない独自コード」は cimbar と LIZARD と重なる</li>
+      <li>RaptorQ の採用は RaptorQR と cuttldrop と重なる</li>
+      <li>iPhone での受信を前面に出していない。競合はブラウザでの iPhone 受信を前提にしている</li>
+      <li>先行研究との差のかなりの部分は、端末世代 (センサ・ISP・CPU) の進歩による可能性がある</li>
+    </ul>
+  </div>
+</div>
+
+<div class="warn">
+  <strong>書かないほうがいい表現</strong>
+  <ul>
+    <li>「世界最速」「最速クラス」: LIZARD・Decimen が上の値を公表している</li>
+    <li>「ネットワークなしで光だけで転送する初めてのツール」: TXQR (2018) 以降、先行例が多数ある</li>
+    <li>「fountain / rateless 符号を初めて使った」: Smooth Codes 2012、SoftLight 2016、FOCUS 2016 が先</li>
+    <li>「部分回収・ブロック単位の誤り処理が新しい」: RDCode 2014、FOCUS 2016 が先</li>
+    <li>「ローリングシャッターの混ざりへの対処が新しい」: LightSync 2013 以降、多数ある</li>
+    <li>定義の違う数値 (PixNet の換算値、ChromaCode の raw 値など) を、断りなく並べること</li>
+  </ul>
+</div>
 
 <div class="note">
-  <strong>読み方:</strong> 「標準 QR + 汎用デコーダ」という同一条件では、実用システムは概ね
-  <strong>50〜70 kbps 帯</strong>に集中しており、本プロジェクトはそのゾーンの中央にいる。
-  桁が変わる(300 kbps〜1 Mbps 級)のは QR を捨てて専用コード + 専用デコーダに移行した
-  システムのみ。
+  <strong>公開時に先行事例として挙げておくもの:</strong>
+  libcimbar、TXQR、Decimen、BC-UR (アニメ QR + fountain の業界標準)、FOCUS (学術で最も近い設計)。
+  RaptorQ を使う例として RaptorQR と cuttldrop。
 </div>
 
-<h2>各ソースの詳細</h2>
-
-<div class="card">
-  <h3>TXQR — Animated QR data transfer</h3>
-  <div class="meta">
-    <span class="badge">OSS</span><span class="badge">Go</span><span class="badge">最も近い先行例</span>
-    Ivan Daniluk (divan)、2018–2019
-  </div>
-  <ul>
-    <li><strong>動機:</strong> 政府検閲などでネットワークが使えない状況を想定し、アニメーション QR だけでデバイス間データ転送を実現する。</li>
-    <li><strong>プロトコル:</strong> 各フレームに <code>NUM/TOTAL|</code> プリフィックス + Base64 ペイロード。当初は単純な繰り返し(ループ)方式。</li>
-    <li><strong>課題と解決:</strong> 繰り返し方式では 1 フレーム見逃すと 1 周待ちになる。これを LT 符号(fountain code、Google の gofountain を使用)で解決し、「どのフレームから受けても K 個+α 集まれば復元できる」構造に変更。Soliton 分布により XOR するブロック数のバランスを取るのが鍵。</li>
-    <li><strong>実測:</strong> 最良で <span class="speed">約 9 KB/s</span>(11 FPS・チャンク 850 バイト・EC レベル M)。fountain code 導入後は約 13KB を 501ms で転送する記録も。ただし実用的には 1〜2 KB/s、安定動作は 6〜7 FPS・550〜900 バイトチャンク。</li>
-    <li><strong>本プロジェクトとの関係:</strong> 「QR + fountain code + 動画ループ」という構成がほぼ同一。チャンクサイズ・FPS・EC レベルのチューニングが支配的という結論も一致する。</li>
-  </ul>
-  <div class="meta">
-    出典: <a href="https://divan.dev/posts/animatedqr/">Animated QR data transfer with Gomobile and Gopherjs</a> /
-    <a href="https://divan.dev/posts/fountaincodes/">Fountain codes and animated QR</a> /
-    <a href="https://github.com/divan/txqr">GitHub: divan/txqr</a>
-  </div>
-</div>
-
-<div class="card">
-  <h3>libcimbar — Color Icon Matrix Barcodes</h3>
-  <div class="meta">
-    <span class="badge">OSS</span><span class="badge">C++/WASM</span><span class="badge">最速クラス</span>
-    sz3
-  </div>
-  <ul>
-    <li><strong>概要:</strong> QR とは非互換の独自 2D コード「cimbar」。エアギャップ転送(モニター → スマホカメラのみ)を目的とし、<span class="speed">852 kbps(~106 KB/s)</span> を実測。4,689,084 バイト(zstd 圧縮後)を 44 秒で転送。</li>
-    <li><strong>エンコード方式:</strong> 8×8 ピクセルのタイルシンボル(形状で 4 bit)+ 4 色(色で 2 bit)= 6 bit/タイル。1 画像あたり理論 9,300 バイト、Reed-Solomon(155 バイト中 30 バイト訂正)適用後の実効 7,500 バイト。</li>
-    <li><strong>fountain code:</strong> wirehair を使用。フレームの欠落・順序入れ替わり・部分破損に耐える。zstd 圧縮込みで最大 33MB のファイルに対応。</li>
-    <li><strong>実測環境:</strong> 送信は cimbar.org(WASM、ブラウザで動作)、受信は Android アプリ(Snapdragon 625、自動露出/AF)。OpenCV ベースの専用デコーダ。</li>
-    <li><strong>本プロジェクトへの示唆:</strong> 「4 色 + タイル形状の併用」で色キャリブレーション問題を回避しており、Phase 0 のカラー方式で直面したクリッピング/較正問題への一つの答えになっている。10 倍級の高速化を目指す場合の参照実装。</li>
-  </ul>
-  <div class="meta">
-    出典: <a href="https://github.com/sz3/libcimbar">GitHub: sz3/libcimbar</a> /
-    <a href="https://github.com/sz3/libcimbar/blob/master/PERFORMANCE.md">PERFORMANCE.md</a>
-  </div>
-</div>
-
-<div class="card">
-  <h3>COBRA — Color Barcode Streaming for Smartphone Systems</h3>
-  <div class="meta">
-    <span class="badge">学術</span><span class="badge">MobiSys 2012</span>
-    Tian Hao, Ruogu Zhou, Guoliang Xing
-  </div>
-  <ul>
-    <li><strong>概要:</strong> 画面-カメラ間ストリーミング(screen-camera link)研究の草分け。スマホの小型画面・低速カメラ向けに最適化した独自 2D カラーバーコードを設計し、スマホ間でリアルタイムに動くコードをストリーミングする。</li>
-    <li><strong>特徴:</strong> 手持ちによるブレ(モーションブラー)に対応するため、コードブロックのサイズと配置を動的に適応させる。可視光の指向性・短距離性により、近距離データ交換でのプライバシー保護が利点であることを明示的に主張している(本プロジェクトの「通信を使わない=傍受されにくい」という動機と同じ)。</li>
-    <li><strong>位置づけ:</strong> 後続研究(RDCode 等)のベースライン。RDCode は COBRA 比で約 2 倍のスループットを報告している。</li>
-  </ul>
-  <div class="meta">
-    出典: <a href="https://dl.acm.org/doi/10.1145/2307636.2307645">ACM DL: COBRA</a>
-    (論文本文は有料のため、スループットの詳細数値は本ページでは省略)
-  </div>
-</div>
-
-<div class="card">
-  <h3>RDCode — Enhancing Reliability to Boost the Throughput over Screen-Camera Links</h3>
-  <div class="meta">
-    <span class="badge">学術</span><span class="badge">MobiCom 2014</span>
-  </div>
-  <ul>
-    <li><strong>概要:</strong> 画面-カメラ間リンクの信頼性を上げることでスループットを引き上げる、という本プロジェクトと同じ問題意識の研究。</li>
-    <li><strong>方式:</strong> packet-frame-block の 3 階層構造を持つ動的バーコードを設計し、階層ごとに異なる誤り訂正方式を適用(ブロック内訂正 / フレーム内のブロック消失訂正 / フレーム消失訂正)。フレーム消失への対処という点で fountain code と同じ役割を階層 EC で実現している。</li>
-    <li><strong>結果:</strong> COBRA 比で約 2 倍の伝送レート。近距離・大画面条件では 300 kbps 超級の報告もある。</li>
-  </ul>
-  <div class="meta">
-    出典: <a href="https://dl.acm.org/doi/pdf/10.1145/2639108.2639135">ACM DL: RDCode (PDF)</a>
-  </div>
-</div>
-
-<div class="card">
-  <h3>MAMBA / InFrame++ — その他の学術システム</h3>
-  <div class="meta"><span class="badge">学術</span></div>
-  <ul>
-    <li><strong>MAMBA:</strong> チャネル状態に応じてコード密度を適応させる双方向型のカメラ-ディスプレイ通信。スマホ実機で <span class="speed">69.1 kbps</span> を報告。「実機スマホ + 動的バーコード」の実用上限の目安になる数字。</li>
-    <li><strong>InFrame++:</strong> 人間には普通の動画に見える映像の中に不可視データを埋め込む方式(視認性と伝送の両立という別の制約付き)で <span class="speed">50.4 kbps</span>。制約があっても 50 kbps 出るという意味で、このレンジが「スマホカメラ受信の現実的な帯域」であることの傍証。</li>
-  </ul>
-  <div class="meta">
-    出典: <a href="https://www.researchgate.net/publication/344948226_MAMBA_Adaptive_and_Bi-directional_Data_Transfer_for_Reliable_Camera-display_Communication">MAMBA (ResearchGate)</a> /
-    <a href="https://www.researchgate.net/publication/300656401_InFrame">InFrame++ (ResearchGate)</a>
-  </div>
-</div>
-
-<h2>結論 — 本プロジェクトの位置づけ</h2>
-<div class="card">
-  <ul>
-    <li><strong>200KB / 30秒(53 kbps)は同条件の先行例と比べて遅くない。</strong> 標準 QR + 汎用デコーダ(MLKit)の構成では TXQR の最良値(~9 KB/s)に近く、学術系スマホ実機システム(50〜70 kbps)の中央値レベル。</li>
-    <li><strong>技術的な合法性・正当性にも問題はない。</strong> エアギャップ転送は COBRA が論文でプライバシー上の利点として主張し、暗号資産ハードウェアウォレット(BC-UR 規格: Keystone、AirGap Vault、SeedSigner 等)が商用実運用している確立された用途。ただし組織内で DLP を回避する使い方は利用者側の規程違反になり得る。</li>
-    <li><strong>10 倍級の高速化を目指すなら</strong> libcimbar 路線(限定色 + タイルシンボル + 専用 RS 訂正 + 自前デコーダ)への設計変更が必要で、MLKit を捨てる規模の話になる。現要件(200KB/1分)には現状で 2 倍のマージンがあるため不要。</li>
-  </ul>
-</div>
+<h2>出典</h2>
+<h3>実用ツール・OSS</h3>
+<ul>
+  <li>libcimbar: <a href="https://github.com/sz3/libcimbar">github.com/sz3/libcimbar</a> /
+    <a href="https://github.com/sz3/libcimbar/blob/master/PERFORMANCE.md">PERFORMANCE.md</a> /
+    <a href="https://github.com/sz3/libcimbar/releases">Releases</a> / <a href="https://cimbar.org">cimbar.org</a></li>
+  <li>Decimen: <a href="https://github.com/bashalarmistalt/decimen-optical-transfer">github.com/bashalarmistalt/decimen-optical-transfer</a> /
+    <a href="https://www.tomshardware.com/networking/streaming-qr-codes-at-60-fps-achieves-nearly-190-kb-s-data-rate-in-phone-to-phone-tests-browser-based-method-requires-no-app-no-networking-no-pairing-and-no-permissions-beyond-camera-access">Tom's Hardware</a> /
+    <a href="https://news.ycombinator.com/item?id=49157792">HN</a></li>
+  <li>LIZARD: <a href="https://github.com/FNWTalon/lizard">github.com/FNWTalon/lizard</a> /
+    <a href="https://news.ycombinator.com/item?id=49966423">Show HN</a> /
+    <a href="https://www.youtube.com/watch?v=F-Mie4m9gBQ">デモ動画</a></li>
+  <li>RaptorQR: <a href="https://github.com/infrost/RaptorQR">github.com/infrost/RaptorQR</a></li>
+  <li>cuttldrop: <a href="https://github.com/emdiple/cuttldrop">github.com/emdiple/cuttldrop</a></li>
+  <li>qrfiletransfer.app: <a href="https://qrfiletransfer.app/docs">qrfiletransfer.app/docs</a></li>
+  <li>TXQR: <a href="https://github.com/divan/txqr">github.com/divan/txqr</a> /
+    <a href="https://divan.dev/posts/animatedqr/">animatedqr</a> /
+    <a href="https://divan.dev/posts/fountaincodes/">fountaincodes</a></li>
+  <li>ShadowCat: <a href="https://github.com/unprovable/ShadowCat">github.com/unprovable/ShadowCat</a></li>
+  <li>BC-UR: <a href="https://developer.blockchaincommons.com/animated-qrs/">developer.blockchaincommons.com/animated-qrs</a></li>
+  <li>JABCode Studio: <a href="https://apps.apple.com/app/id6749924342">App Store</a> / AirQR: <a href="https://apps.apple.com/us/app/airqr-qr-code-file-transfer/id6803713861">App Store</a></li>
+  <li>ggwave: <a href="https://github.com/ggerganov/ggwave">github.com/ggerganov/ggwave</a> /
+    OPSWAT: <a href="https://www.opswat.com/products/metadefender/optical-diode">optical-diode</a></li>
+</ul>
+<h3>学術</h3>
+<ul>
+  <li>PixNet — Perli, Ahmed, Katabi, MobiCom 2010, DOI 10.1145/1859995.1860012 (<a href="http://people.csail.mit.edu/nabeel/pixnet-mobicom10.pdf">PDF</a>)</li>
+  <li>COBRA — Hao, Zhou, Xing, MobiSys 2012, DOI 10.1145/2307636.2307645</li>
+  <li>Smooth Codes — Pu, Hu, CoNEXT 2012 Student (<a href="https://conferences.sigcomm.org/co-next/2012/eproceedings/student/p51.pdf">PDF</a>)</li>
+  <li>LightSync — Hu, Gu, Pu, MobiCom 2013, DOI 10.1145/2500423.2500437</li>
+  <li>RDCode — Wang ほか, MobiCom 2014, DOI 10.1145/2639108.2639135</li>
+  <li>Styrofoam — LiKamWa ほか, VLCS 2014, DOI 10.1145/2643164.2643169</li>
+  <li>InFrame++ — MobiSys 2015, DOI 10.1145/2742647.2742652 (<a href="https://www.cs.purdue.edu/homes/chunyi/pubs/mobisys15-inframe++.pdf">PDF</a>)</li>
+  <li>HiLight — MobiSys 2015, DOI 10.1145/2742647.2742667</li>
+  <li>SoftLight — Du, Liando, Li, INFOCOM 2016, DOI 10.1109/INFOCOM.2016.7524510</li>
+  <li>FOCUS — Hermans ほか, MobiSys 2016, DOI 10.1145/2906388.2906399 (<a href="https://vs.inf.ethz.ch/publ/papers/soeroesg-mobisys2016-Focus.pdf">PDF</a>)</li>
+  <li>TextureCode — INFOCOM 2016, DOI 10.1109/INFOCOM.2016.7524512</li>
+  <li>ChromaCode — MobiCom 2018, DOI 10.1145/3241539.3241543</li>
+  <li>AirCode — NSDI 2021 (<a href="https://www.usenix.org/system/files/nsdi21-qian-kun.pdf">PDF</a>)</li>
+  <li>DeepLight — IPSN 2021, DOI 10.1145/3412382.3458269</li>
+  <li>RescQR — IEEE TMC 2023, DOI 10.1109/TMC.2023.3277212</li>
+  <li>Streaming QR Codes — A Survey, IEEE Access 2024, DOI 10.1109/ACCESS.2024.3461970</li>
+  <li>Event camera OCC — Su ほか, IEEE RA-L 2025, DOI 10.1109/LRA.2024.3517292</li>
+</ul>
 
 <footer>
-  Vloom プロジェクト調査資料 / 作成: 2026-07-02 /
-  数値は各出典の自己申告・論文報告値であり、測定条件(距離・カメラ・照明)は統一されていない点に注意。
+  2026-10-19 調査。GitHub のスター数と最終更新は同日の値。
+  数値はすべて各者の公表値で、本プロジェクトでは追試していない。
+  前回版 (2026-07-02) は git の履歴にある。
 </footer>
 
 </div>
