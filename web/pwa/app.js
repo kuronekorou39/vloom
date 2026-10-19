@@ -434,7 +434,7 @@ const receiver = new VcodeReceiver({
     $("rxBar").style.width = "100%";
     $("rxStall").textContent = "";
     covCanvas.classList.remove("on");
-    const url = URL.createObjectURL(blob);
+    const url = rxUrl(blob);
     const isImage = type.startsWith("image/");
     const isVideo = type.startsWith("video/");
     const isAudio = type.startsWith("audio/");
@@ -454,7 +454,7 @@ const receiver = new VcodeReceiver({
       if (cut) text = text.slice(0, 4000);
       preview = `<pre style="max-height:16em;overflow:auto;white-space:pre-wrap;background:rgba(0,0,0,0.25);padding:0.8em;border-radius:8px">${esc(text)}${cut ? "\n… (以下略。全文はダウンロードで)" : ""}</pre>`;
     }
-    // 条件を振って比べられるよう、計測値を一緒に出す (所要時間は初検出→完了)
+    // 計測値は折りたたむ (アプリの結果画面と同じ)。条件を振って比べるときに開く
     const s = stats || {};
     const rows = [
       ["実効スループット", `${(s.kbps || 0).toFixed(1)} KB/s`],
@@ -465,6 +465,7 @@ const receiver = new VcodeReceiver({
       ["パケット", s.needed ? `${s.distinct} 回収 / 必要 ${s.needed}` : `${s.distinct || 0} 回収`],
       ["格子指定", s.grid === "auto" ? "自動 (候補総当たり)" : s.grid],
     ];
+    const summary = `${fmtSize(size)} · ${((s.ms || 0) / 1000).toFixed(1)} 秒 · ${(s.kbps || 0).toFixed(1)} KB/s`;
     // 複数ファイルをまとめて送られたものは、中身を 1 つずつ保存できるように並べる。
     // 解けるのはこちらがまとめた無圧縮 ZIP だけ (一般の ZIP は ZIP のまま渡す)
     let list = "";
@@ -476,7 +477,7 @@ const receiver = new VcodeReceiver({
       for (let i = 0; i < packed.count; i++) {
         const n = packed.name(i);
         const d = packed.data(i);
-        const u = URL.createObjectURL(new Blob([d]));
+        const u = rxUrl(new Blob([d]));
         items.push(`<li><span class="name">${escHtml(n)}</span>` +
           `<span class="size">${fmtSize(d.length)}</span>` +
           `<a href="${u}" download="${escAttr(n)}">保存</a></li>`);
@@ -484,18 +485,51 @@ const receiver = new VcodeReceiver({
       packed.free();
       list = `<ul class="files">${items.join("")}</ul>`;
     }
+    // 共有シート (iOS Safari / Android Chrome)。ファイルを渡せる環境だけボタンを出す
+    const file = new File([blob], name, { type: type || "application/octet-stream" });
+    const canShare = !!(navigator.canShare && navigator.canShare({ files: [file] }));
     $("rxResult").innerHTML =
+      `<div class="rxcard">` +
+      `<h2 class="ok">✅ 受け取りました</h2>` +
+      `<div class="rxname">${safeName}</div>` +
+      `<div class="muted">${summary}</div>` +
       preview + list +
-      `<table class="stats">${rows
+      `<div class="rxactions">` +
+      `<a class="btn" href="${url}" download="${escAttr(name)}">${packed ? "まとめて保存" : "保存"}</a>` +
+      (canShare ? `<button id="rxShare" class="secondary">共有</button>` : "") +
+      `</div>` +
+      `<div class="rxactions">` +
+      `<button id="rxAgain" class="secondary">続けて受信</button>` +
+      `<button id="rxClose" class="secondary">閉じる</button>` +
+      `</div>` +
+      `<details class="rxstats"><summary>計測値</summary><table class="stats">${rows
         .map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`)
-        .join("")}</table>` +
-      `<p><a href="${url}" download="${escAttr(name)}"><button>${packed ? "まとめて保存" : "ダウンロード"}: ${safeName}</button></a></p>`;
-    $("rxStart").disabled = false;
-    $("rxStop").disabled = true;
+        .join("")}</table></details>` +
+      `</div>`;
+    if (canShare) {
+      $("rxShare").addEventListener("click", () => {
+        // 共有シートを閉じただけでも reject になるので、エラーは出さない
+        navigator.share({ files: [file] }).catch(() => {});
+      });
+    }
+    $("rxAgain").addEventListener("click", () => startReceive());
+    $("rxClose").addEventListener("click", () => closeReceive());
   },
 });
-$("rxStart").addEventListener("click", async () => {
+// 完了画面で作った object URL。次の受信や閉じるときに解放する
+let rxUrls = [];
+function rxUrl(blob) {
+  const u = URL.createObjectURL(blob);
+  rxUrls.push(u);
+  return u;
+}
+function clearResult() {
   $("rxResult").innerHTML = "";
+  for (const u of rxUrls) URL.revokeObjectURL(u);
+  rxUrls = [];
+}
+async function startReceive() {
+  clearResult();
   $("rxError").textContent = "";
   $("rxStall").textContent = "";
   $("rxBar").style.width = "0%";
@@ -513,15 +547,19 @@ $("rxStart").addEventListener("click", async () => {
     $("rxStage").classList.remove("active");
     $("rxError").textContent = "カメラ起動失敗: " + (e && e.message ? e.message : e);
   }
-});
-// 受信中でも格子指定を切り替えられる (総当たり→固定で初回検出が速くなる)
-$("rxGrid").addEventListener("change", () => receiver.setGrid($("rxGrid").value));
-$("rxStop").addEventListener("click", () => {
+}
+// 受信画面を閉じて設定の画面に戻る (完了後も、途中で止めたときも)
+function closeReceive() {
   receiver.stop();
+  clearResult();
   $("rxStage").classList.remove("active");
   $("rxStart").disabled = false;
   $("rxStop").disabled = true;
-});
+}
+$("rxStart").addEventListener("click", () => startReceive());
+// 受信中でも格子指定を切り替えられる (総当たり→固定で初回検出が速くなる)
+$("rxGrid").addEventListener("change", () => receiver.setGrid($("rxGrid").value));
+$("rxStop").addEventListener("click", () => closeReceive());
 
 // 受信の手動露出。露出制御対応カメラでのみスライダーを出す (スマホ Chrome は非対応が
 // 多く、その場合は非対応の注記を出す)。手動中は自動制御 (白飛び対策) を止める。

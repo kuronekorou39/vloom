@@ -234,10 +234,23 @@
       font-size: 0.9em; line-height: 1.45; }
     #rxStage .diag { margin: 0; min-height: 0; color: #e6e9ef; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
     #rxResult:empty { display: none; }
-    #rxResult:not(:empty) { position: absolute; inset: 0; z-index: 4; overflow: auto; padding: 1.2em;
-      background: rgba(8,10,14,0.94); display: flex; flex-direction: column;
-      align-items: center; justify-content: center; gap: 0.5em; text-align: center; }
-    #rxResult .files { width: 100%; max-width: 30em; text-align: left; }
+    /* 完了画面。上下のバー (z-index 5) より上に重ねる。中身が長いときは上から
+       スクロールできるよう、中央寄せはカードの margin: auto で行う
+       (justify-content: center だと上側がはみ出して届かなくなる) */
+    #rxResult:not(:empty) { position: absolute; inset: 0; z-index: 10; overflow-y: auto;
+      -webkit-overflow-scrolling: touch; background: rgba(8,10,14,0.97); display: flex;
+      padding: max(1.2em, env(safe-area-inset-top)) 1.2em max(1.2em, env(safe-area-inset-bottom)); }
+    #rxResult .rxcard { margin: auto; width: 100%; max-width: 30em; display: flex;
+      flex-direction: column; align-items: center; gap: 0.6em; text-align: center; color: #e6e9ef; }
+    #rxResult h2 { margin: 0; font-size: 1.2em; }
+    #rxResult .rxname { font-weight: 600; word-break: break-all; }
+    #rxResult .rxactions { display: flex; gap: 0.6em; width: 100%; }
+    #rxResult .rxactions > * { flex: 1; text-align: center; padding: 0.75em 0.5em; font-size: 1em; }
+    #rxResult a.btn { background: var(--accent); color: #fff; border-radius: 6px; text-decoration: none; }
+    #rxResult .rxstats { width: 100%; text-align: left; }
+    #rxResult .rxstats summary { color: #9ca3af; cursor: pointer; }
+    #rxResult .files { width: 100%; text-align: left; }
+    #rxResult pre { width: 100%; text-align: left; }
     #rxResult .files a { color: var(--accent); text-decoration: none; padding: 0.3em 0.65em; }
     /* V受信ステージ下部: 露出コントロールと診断を縦に並べる */
     #rxBottom { flex-direction: column; align-items: stretch; gap: 0.4em; }
