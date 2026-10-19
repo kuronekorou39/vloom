@@ -22,7 +22,7 @@ class LaunchArgs {
       this.dumpLow = 0,
       this.dumpAll = 0,
       this.dumpEvery = 10,
-      this.workers = 1,
+      this.workers = 2,
       this.exposureUs,
       this.iso});
 
@@ -68,7 +68,9 @@ class LaunchArgs {
   /// (切り替わりの混ざりが前後の枚でどう写るかを見るため)。保存のぶん処理は遅くなる
   final int dumpEvery;
 
-  /// スキャンを並行に回す本数 (実験用。既定は 1 本)。scan_worker.dart の ScanPool
+  /// スキャンを並行に回す本数 (既定は 2 本)。scan_worker.dart の ScanPool。
+  /// 2 本で処理できる枚数が 21 → 26 枚/秒に増え、熱制限が掛かった長い転送でも
+  /// 1 本より速い (docs/measurements/2026-10-19-workers-heat.md)。3 本は 2 本と変わらない
   final int workers;
 
   /// 露光時間 (µs) とゲイン (ISO) の直接指定 (Camera2、AE を切る)。指定がなければ null
@@ -105,7 +107,7 @@ class LaunchArgs {
         dumpLow: pick('dump') ?? 0,
         dumpAll: pick('dumpall') ?? 0,
         dumpEvery: (pick('dumpevery') ?? 10).clamp(1, 1000),
-        workers: (pick('workers') ?? 1).clamp(1, 4),
+        workers: (pick('workers') ?? 2).clamp(1, 4),
         exposureUs: pick('exp'),
         iso: pick('iso'),
         tab: pick('tab'),
