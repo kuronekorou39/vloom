@@ -40,6 +40,7 @@ class MainActivity : FlutterActivity() {
                             "dump" to intent.getIntExtra("dump", -1),
                             "dumpall" to intent.getIntExtra("dumpall", -1),
                             "dumpevery" to intent.getIntExtra("dumpevery", -1),
+                            "workers" to intent.getIntExtra("workers", -1),
                             "exp" to intent.getIntExtra("exp", -1),
                             "iso" to intent.getIntExtra("iso", -1),
                         )

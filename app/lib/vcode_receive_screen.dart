@@ -201,7 +201,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   /// (受信側に切り替えの操作は無い。試験フレームかどうかはヘッダで分かる)
   ProbeStats? _probe;
 
-  bool _busy = false;
+  /// いま処理中の枚数 (走査の本数が上限)
+  int _inFlight = 0;
   bool _active = false;
   bool _camBusy = false; // カメラ初期化/再初期化の多重実行ガード
   bool _acquireRequested = false; // 次フレームで acquire (位置検出) を実行する
@@ -227,7 +228,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   int _detCellsW = 0, _detCellsH = 0; // 検出したコードのセル数 (充填率・px/セル の計算用)
   Timer? _watchdog; // プレビューが灰色 (フレーム途絶) になったら作り直す
   // スキャンは別 isolate (ScanWorker) で回す。理由は scan_worker.dart を参照
-  ScanWorker? _rx;
+  ScanPool? _rx;
   // ワーカーが処理中に届いたフレーム。捨てずに 1 枚だけ持ち、処理が終わり次第すぐ回す
   // (受け取りと処理を重ねてカメラの供給速度まで処理するため)
   CameraImage? _pendingImg;
@@ -420,7 +421,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           }
         }
         _rx?.dispose();
-        _rx = await ScanWorker.spawn();
+        _rx = await ScanPool.spawn(LaunchArgs.cached.workers);
         _applyForcedGrid();
         _lastPreviewSize = cam.value.previewSize;
         _camStarted = DateTime.now();
@@ -462,11 +463,12 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     _camCallbacks++;
     _lastCallbackAt = DateTime.now();
     if (!_active || _payload != null) return;
-    if (_busy) {
-      _pendingImg = img; // 最新の 1 枚だけ持つ (古いものは捨てる)
+    // 走査の本数ぶんまでは並行に処理する。それを超えたら最新の 1 枚だけ持つ
+    if (_inFlight >= (_rx?.size ?? 1)) {
+      _pendingImg = img; // 古いものは捨てる
       return;
     }
-    _busy = true;
+    _inFlight++;
     try {
       final sw = Stopwatch()..start();
       final y = img.planes[0];
@@ -753,7 +755,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         _tMissN = 0;
       }
     } finally {
-      _busy = false;
+      _inFlight--;
       final next = _pendingImg;
       _pendingImg = null;
       if (next != null && _active && _payload == null) {
@@ -1292,7 +1294,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   }
 
   /// acquire 結果を中央ポップアップで確認。確定なら seed して受信継続、やり直しなら再取得。
-  Future<void> _showAcquireDialog(VcodeAcquireReport rep, ScanWorker rx) async {
+  Future<void> _showAcquireDialog(VcodeAcquireReport rep, ScanPool rx) async {
     if (!mounted) return;
     if (!rep.detected) {
       await showDialog<void>(

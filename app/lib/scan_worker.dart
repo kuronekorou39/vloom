@@ -106,6 +106,103 @@ class ScanWorker {
   }
 }
 
+/// ScanWorker を複数本まとめて、空いているものに 1 枚ずつ配る。
+///
+/// 1 枚の処理 (37〜47ms) はカメラの間隔 (約 31ms) より長いので、1 本だと 3 枚に 1 枚は
+/// 捨てている。実機の連続 80 枚では、処理した 1 枚が平均 217/234 ブロックを新しく
+/// 持ち帰っており、実効スループットは 1 秒に処理した枚数でほぼ決まる
+/// (docs/measurements/2026-10-05-block-errors.md の結果 7)。
+///
+/// 追従の状態 (前の枚の四隅) は本ごとに持つ。本ごとに「自分が前に見た枚」から追うので、
+/// 2 本なら 1 枚飛ばしの追従になる。格子の指定・位置の種・やり直しは全部の本に配る。
+class ScanPool {
+  ScanPool._(this._workers) : _inFlight = List.filled(_workers.length, 0);
+
+  final List<ScanWorker> _workers;
+  final List<int> _inFlight;
+
+  static Future<ScanPool> spawn(int count) async {
+    final workers = <ScanWorker>[];
+    for (var i = 0; i < count; i++) {
+      workers.add(await ScanWorker.spawn());
+    }
+    return ScanPool._(workers);
+  }
+
+  int get size => _workers.length;
+
+  /// いま処理中の枚数 (全部の本の合計)
+  int get busy => _inFlight.fold(0, (a, b) => a + b);
+
+  Future<VcodeScanReport> scan({
+    required TransferableTypedData y,
+    required int width,
+    required int height,
+    required int stride,
+    required int rotationDeg,
+    required double guideFrac,
+    required bool debugDump,
+  }) async {
+    // いちばん空いている本へ
+    var k = 0;
+    for (var i = 1; i < _workers.length; i++) {
+      if (_inFlight[i] < _inFlight[k]) k = i;
+    }
+    _inFlight[k]++;
+    try {
+      return await _workers[k].scan(
+        y: y,
+        width: width,
+        height: height,
+        stride: stride,
+        rotationDeg: rotationDeg,
+        guideFrac: guideFrac,
+        debugDump: debugDump,
+      );
+    } finally {
+      _inFlight[k]--;
+    }
+  }
+
+  /// 位置の検出は重い一度きりの処理なので 1 本目だけで行う (結果は seed で全部に配る)
+  Future<VcodeAcquireReport> acquire({
+    required TransferableTypedData y,
+    required int width,
+    required int height,
+    required int stride,
+    required int rotationDeg,
+    required bool thorough,
+  }) => _workers.first.acquire(
+    y: y,
+    width: width,
+    height: height,
+    stride: stride,
+    rotationDeg: rotationDeg,
+    thorough: thorough,
+  );
+
+  Future<void> setLayout({required int gridW, required int gridH}) =>
+      Future.wait([for (final w in _workers) w.setLayout(gridW: gridW, gridH: gridH)]);
+
+  Future<void> seed({
+    required int rot,
+    required int gridW,
+    required int gridH,
+    required List<double> corners,
+  }) => Future.wait([
+    for (final w in _workers)
+      w.seed(rot: rot, gridW: gridW, gridH: gridH, corners: corners),
+  ]);
+
+  Future<void> reset() => Future.wait([for (final w in _workers) w.reset()]);
+
+  void dispose() {
+    for (final w in _workers) {
+      w.dispose();
+    }
+  }
+}
+
 Future<void> _workerMain(SendPort ready) async {
   final inbox = ReceivePort();
   ready.send(inbox.sendPort);
