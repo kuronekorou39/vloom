@@ -42,6 +42,9 @@ QR とほぼ同じですが、**ブロック単位の CRC による部分回収 
 | BenQ 平面モニタ (LCD) @20fps | 131〜147 KB/s |
 | iPhone 12 Pro (OLED) @30fps | **201〜207 KB/s** |
 
+受信のスキャンを 2 本で並行に回すと (実験中、`--ei workers 2`)、LCD @30fps でも
+**204〜220 KB/s** (2MB、3 回) まで伸びます。既定は発熱を確かめてから切り替えます。
+
 OLED は表示の切り替わりが速く、ローリングシャッターと混ざらないぶん fps を上げられます
 (60Hz パネルの上限は 30fps)。何を試してこの数字に至ったかの通史は
 [docs/experiments.md](docs/experiments.md)、全試行の生ログは
@@ -53,6 +56,20 @@ OLED は表示の切り替わりが速く、ローリングシャッターと混
 - 密な格子ほど速いが、カメラ解像度が要る (安定の目安 3px/セル以上、2bit は 6px/セル)
 - 1 フレームは画面の 2 リフレッシュ周期以上表示する (60Hz → 30fps まで)
 - 短いファイルの計測値は瞬間風速。定常は 1MB 以上・端末が冷えた状態で測る
+
+## 先行事例
+
+画面とカメラでデータを渡す試みは Vloom が初めてではありません。アニメーション QR + fountain 符号の
+[TXQR](https://github.com/divan/txqr) やハードウェアウォレットの
+[BC-UR](https://developer.blockchaincommons.com/animated-qrs/)、色と形状のタイルを使う
+[libcimbar](https://github.com/sz3/libcimbar)、QR を並べて 60fps で流す
+[Decimen](https://github.com/bashalarmistalt/decimen-optical-transfer) などがあり、学術では
+グレースケール + Fountain 符号の FOCUS (MobiSys 2016) が設計として最も近いものです。
+各方式の公表値と測定条件の比較は [docs/related_work.html](docs/related_work.html) にまとめています
+(数値は各者の自己申告で、条件はそろっていません)。
+
+Vloom が重視しているのは、同じ Rust コアをブラウザ・Android・Windows で共有することと、
+条件を明記した繰り返し計測で速度を示すことです。
 
 ## 開発
 
@@ -90,6 +107,7 @@ Rust コアは WASM と FFI の両方から使うので、ブラウザ版・ネ�
 - [docs/vcode_format.md](docs/vcode_format.md) — vcode フレームフォーマット仕様
 - [docs/tech_stack.md](docs/tech_stack.md) — 技術選定の理由と経緯 (QR 経路の削除など)
 - [docs/experiments.md](docs/experiments.md) — 効果検証の時系列まとめ
+- [docs/related_work.html](docs/related_work.html) — 関連研究・先行事例との比較
 - [docs/measurements/](docs/measurements/) — 日別の全試行ログ
 
 ## ライセンス
