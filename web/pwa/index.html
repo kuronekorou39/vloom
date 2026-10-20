@@ -42,9 +42,14 @@
       padding: 0.6em 1em; padding-top: max(0.6em, env(safe-area-inset-top));
       display: grid; grid-template-columns: 1fr auto; gap: 0.5em 1em; align-items: center; }
     header h1 { margin: 0; font-size: 1.1em; font-weight: 600; letter-spacing: 0.02em; }
-    nav { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.35em; }
+    /* 送信・受信が主、校正は補助なので幅を詰めて並べる (3 つが同格に見えないように) */
+    nav { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.35em; }
     nav button { background: var(--surface-2); color: var(--text); border: none; border-radius: 6px;
-      padding: 0.55em 0.5em; font-size: 0.95em; cursor: pointer; transition: background 0.12s; }
+      padding: 0.55em 0.5em; font-size: 0.95em; cursor: pointer; transition: background 0.12s;
+      display: inline-flex; align-items: center; justify-content: center; gap: 0.4em; }
+    nav button svg { width: 1.15em; height: 1.15em; flex: none; }
+    nav #tabCal { padding: 0.55em 0.8em; font-size: 0.85em; color: var(--label); }
+    nav #tabCal.active { color: #fff; }
     nav button:hover { background: var(--hover); }
     nav button.active { background: var(--accent); color: #fff; }
     #coreStatus { font-size: 0.8em; display: inline-flex; align-items: center; gap: 0.45em;
@@ -56,19 +61,19 @@
     @media (min-width: 640px) {
       header { grid-template-columns: auto auto 1fr; gap: 1.2em; padding: 0.7em 1.1em; }
       header h1 { order: 1; } nav { order: 2; } #coreStatus { order: 3; }
-      nav { grid-column: auto; grid-template-columns: repeat(3, auto); }
+      nav { grid-column: auto; grid-template-columns: auto auto auto; }
       nav button { padding: 0.45em 1.1em; }
       #coreStatus { justify-self: end; }
     }
     main { padding: 0.8em; max-width: 720px; margin: 0 auto;
       padding-left: max(0.8em, env(safe-area-inset-left));
       padding-right: max(0.8em, env(safe-area-inset-right)); }
-    footer { margin-top: 2em; padding-top: 1em; border-top: 1px solid var(--line); font-size: 0.85em; }
+    footer { margin-top: 0.8em; padding-top: 0.5em; border-top: 1px solid var(--line); font-size: 0.8em; }
     footer a { color: var(--accent); }
     .pane { display: none; }
     .pane.active { display: block; }
     .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
-      padding: 1em; margin: 0.8em 0; }
+      padding: 1em; margin: 0.6em 0; }
     .card h2 { margin: 0 0 0.7em; font-size: 0.8em; font-weight: 600; color: var(--muted);
       letter-spacing: 0.06em; }
     .row { display: flex; gap: 0.8em; align-items: center; flex-wrap: wrap; margin: 0.6em 0; }
@@ -128,13 +133,16 @@
     #txOther { margin-top: 0.4em; padding: 0.45em 0.7em; border-radius: 6px;
       background: rgba(180,83,9,0.22); color: #f3c98b; font-size: 0.85em; }
     #txEstimate { display: grid; grid-template-columns: repeat(auto-fit, minmax(8.5em, 1fr));
-      gap: 0.6em; margin: 0.8em 0 0.3em; }
+      gap: 0.6em; margin: 0.6em 0 0; }
     .est { background: var(--field); border: 1px solid var(--line); border-radius: 6px;
-      padding: 0.55em 0.75em; }
+      padding: 0.4em 0.75em; }
     .est .who { font-size: 0.8em; color: var(--muted); }
     .est .time { font-size: 1.25em; font-weight: 600; font-variant-numeric: tabular-nums; }
     .est .rate { font-size: 0.8em; color: var(--muted); font-variant-numeric: tabular-nums; }
-    #txTheory { margin: 0.5em 0 0.9em; white-space: pre-line; }
+    #txTheory { margin: 0.6em 0 0; white-space: pre-line; }
+    #txStart { margin-top: 0.6em; }
+    .limit { margin-top: 0.4em; display: flex; justify-content: space-between; gap: 0.8em; }
+    .limit .over { color: var(--ng); font-weight: 600; }
     #txInfo { margin-top: 0.7em; font-size: 0.9em; }
     /* 送信ステージ: コードを白背景で大きく表示 */
     #txStage { display: none; position: fixed; inset: 0; background: #fff; z-index: 50;
@@ -259,6 +267,11 @@
     #rxExpo input[type="range"] { flex: 1; min-width: 6em; }
     #rxExpoVal { min-width: 4em; text-align: right; }
     #rxExpoNote { font-size: 0.85em; }
+    /* 詳細は既定で閉じる。開いたときだけ露出・診断・受信状況の帯を出す */
+    #rxDiagToggle { align-self: flex-start; padding: 0.35em 0.8em; font-size: 0.85em;
+      background: rgba(34,38,47,0.8); }
+    #rxStage:not(.showdiag) #rxExpo, #rxStage:not(.showdiag) #rxExpoNote,
+    #rxStage:not(.showdiag) #rxDiag, #rxStage:not(.showdiag) #rxCoverage { display: none; }
   </style>
 </head>
 <body>
@@ -266,9 +279,9 @@
     <h1>Vloom</h1>
     <div id="coreStatus" class="muted">読み込み中…</div>
     <nav>
-      <button id="tabSend" class="active">送信</button>
-      <button id="tabRecv">受信</button>
-      <button id="tabCal">校正</button>
+      <button id="tabSend" class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M7 9l5-5 5 5M5 20h14"/></svg>送信</button>
+      <button id="tabRecv"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>受信</button>
+      <button id="tabCal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><circle cx="12" cy="12" r="5.6" stroke-width="2.4"/><circle cx="12" cy="12" r="8" stroke-width="3.2" stroke-dasharray="3.14 3.14"/></svg>校正</button>
     </nav>
   </header>
   <main>
@@ -279,27 +292,27 @@
       <div class="card">
         <h2>送るもの</h2>
         <div class="seg full" id="txMode">
-          <button data-m="file" class="active">ファイル</button>
-          <button data-m="text">テキスト</button>
-          <button data-m="test">計測データ</button>
+          <button data-m="text" class="active">テキスト</button>
+          <button data-m="file">ファイル</button>
+          <button data-m="test">テスト</button>
         </div>
 
-        <div id="txSrcFile" class="src">
+        <div id="txSrcText" class="src">
+          <textarea id="txText" rows="4" placeholder="送るテキストを入力"></textarea>
+          <div class="limit muted small"><span>受信側には .txt として届きます</span><span id="txTextCount"></span></div>
+        </div>
+
+        <div id="txSrcFile" class="src" hidden>
           <label class="drop" id="txDrop">
             <input type="file" id="txFile" multiple />
             <strong>ファイルを選ぶ</strong>
-            <span class="muted small">複数選べます。ここへドロップしても追加できます</span>
+            <span class="muted small" id="txDropNote">複数可・合計 50MB まで。ドロップでも追加できます</span>
           </label>
           <ul class="files" id="txFiles"></ul>
           <div class="filesfoot" id="txFilesFoot" hidden>
             <span class="muted" id="txFilesNote"></span>
             <button class="secondary" id="txFilesClear">すべて外す</button>
           </div>
-        </div>
-
-        <div id="txSrcText" class="src" hidden>
-          <textarea id="txText" rows="5" placeholder="送るテキストを入力"></textarea>
-          <div class="muted small" style="margin-top:0.4em">受信側にはテキストファイル (.txt) として届きます。</div>
         </div>
 
         <div id="txSrcTest" class="src" hidden>
@@ -310,28 +323,30 @@
               <option value="./testdata/test-1MB.jpg" data-size="1048716" selected>1MB の画像</option>
               <option value="./testdata/test-2MB.jpg" data-size="2091447">2MB の画像</option>
             </select></label>
-          <div class="muted small" style="margin-top:0.5em">条件を振って比べるための固定データです。
-            画像にサイズを焼き込んであるので、受信側で開けばどれが壊れずに届いたか分かります。</div>
+          <div class="muted small" style="margin-top:0.4em">計測用のテストデータです。</div>
         </div>
       </div>
 
       <div class="card">
-        <h2>設定</h2>
-        <div class="fields">
-          <label class="field"><span>格子 (受信側と揃える)</span>
-            <select id="txGrid">
-              <option value="5x4">5×4 (確実)</option>
-              <option value="7x6">7×6 (標準)</option>
-              <option value="9x8">9×8 (高速)</option>
-              <option value="11x10">11×10 (限界)</option>
-              <option value="11x14">11×14 (縦長)</option>
-              <option value="13x18" selected>13×18 (超密)</option>
-              <option value="18x13">18×13 (超密・横長)</option>
-            </select></label>
-        </div>
+        <h2>送信</h2>
+        <div id="txSummary"></div>
+        <div id="txOther"></div>
+        <div id="txEstimate"></div>
+        <button id="txStart" class="wide">送信開始</button>
+        <div id="txInfo" class="muted"></div>
         <details>
-          <summary>詳細設定 (通常は触らない)</summary>
+          <summary>詳細設定</summary>
           <div class="fields">
+            <label class="field"><span>格子 (受信側と揃える)</span>
+              <select id="txGrid">
+                <option value="5x4">5×4 (確実)</option>
+                <option value="7x6">7×6 (標準)</option>
+                <option value="9x8">9×8 (高速)</option>
+                <option value="11x10">11×10 (限界)</option>
+                <option value="11x14">11×14 (縦長)</option>
+                <option value="13x18" selected>13×18 (超密)</option>
+                <option value="18x13">18×13 (超密・横長)</option>
+              </select></label>
             <label class="field"><span>bit/セル</span>
               <select id="txBpc">
                 <option value="1" selected>1 (白黒)</option>
@@ -340,17 +355,8 @@
             <label class="field"><span>FPS</span>
               <input type="number" id="txFps" value="20" min="2" max="60" inputmode="numeric" /></label>
           </div>
+          <div id="txTheory" class="muted small"></div>
         </details>
-      </div>
-
-      <div class="card">
-        <h2>送信</h2>
-        <div id="txSummary"></div>
-        <div id="txOther"></div>
-        <div id="txEstimate"></div>
-        <div id="txTheory" class="muted small"></div>
-        <button id="txStart" class="wide">送信開始</button>
-        <div id="txInfo" class="muted"></div>
       </div>
     </section>
 
@@ -418,8 +424,8 @@
       </div>
     </section>
     <footer class="muted">
-      Vloom は <a href="https://github.com/kuronekorou39/vloom">MIT ライセンス</a>。
-      同梱するサードパーティの表記は <a href="./THIRD-PARTY-NOTICES.md">こちら</a>。
+      Vloom · <a href="https://github.com/kuronekorou39/vloom">MIT ライセンス</a> ·
+      <a href="./THIRD-PARTY-NOTICES.md">サードパーティの表記</a>
     </footer>
   </main>
 
@@ -460,6 +466,7 @@
          「一部だけ繰り返し拾っている」のかが分からない (後者は永久に終わらない) -->
     <canvas id="rxCoverage"></canvas>
     <div id="rxBottom" class="scanbar">
+      <button id="rxDiagToggle" class="secondary" aria-expanded="false">詳細 ▸</button>
       <div id="rxExpo" hidden>
         <label><input type="checkbox" id="rxExpoAuto" checked /> 自動露出</label>
         <input type="range" id="rxExpoRange" disabled />

@@ -128,9 +128,13 @@ $("txStop").addEventListener("click", () => {
 // ---- 送るもの (ファイル / テキスト / 計測データ) ----
 // 送るのは常に 3 種類のうち選ばれている 1 つだけ。以前は欄が並んでいて
 // 「計測データ > ファイル > テキスト」の順で黙って採用され、負けた入力は無視された。
-const TX_MODES = { file: "txSrcFile", text: "txSrcText", test: "txSrcTest" };
-const TX_MODE_LABEL = { file: "ファイル", text: "テキスト", test: "計測データ" };
-let txMode = "file";
+const TX_MODES = { text: "txSrcText", file: "txSrcFile", test: "txSrcTest" };
+const TX_MODE_LABEL = { text: "テキスト", file: "ファイル", test: "テスト" };
+let txMode = "text";
+// 送れる量の上限。形式の上限 (受信側 512MB) より手前で、所要時間で決めている。
+// 長い転送は熱制限で約 100 KB/s に落ちるので、50MB で 8 分ほどかかる
+const TX_TEXT_MAX_CHARS = 10000;
+const TX_FILES_MAX_BYTES = 50 * 1024 * 1024;
 /** 選択中のファイル (File の配列)。選び直しても置き換えず、足していく */
 let txFiles = [];
 
@@ -177,9 +181,13 @@ function renderTxFiles() {
     ul.append(li);
   });
   $("txFilesFoot").hidden = txFiles.length === 0;
-  $("txFilesNote").textContent = txFiles.length > 1
-    ? `${txFiles.length} 個を 1 つの ZIP にまとめて送ります`
-    : "";
+  const total = txFiles.reduce((a, f) => a + f.size, 0);
+  const note = $("txFilesNote");
+  note.textContent = total > TX_FILES_MAX_BYTES
+    ? `合計 ${fmtSize(total)} — ${fmtSize(TX_FILES_MAX_BYTES)} を超えています`
+    : `合計 ${fmtSize(total)} / ${fmtSize(TX_FILES_MAX_BYTES)}` +
+      (txFiles.length > 1 ? ` · 1 つの ZIP にまとめて送ります` : "");
+  note.classList.toggle("ng", total > TX_FILES_MAX_BYTES);
   updateTxSummary();
 }
 
@@ -207,6 +215,7 @@ window.addEventListener("drop", (e) => {
 });
 
 const txTextBytes = () => new TextEncoder().encode($("txText").value).length;
+$("txText").maxLength = TX_TEXT_MAX_CHARS;
 
 /** 今の選択で送るものの大きさと説明 (何も無ければ bytes = 0) */
 function txPlan() {
@@ -215,6 +224,7 @@ function txPlan() {
     if (!txFiles.length) return { bytes: 0, text: "ファイルが選ばれていません" };
     return {
       bytes,
+      over: bytes > TX_FILES_MAX_BYTES,
       text: txFiles.length === 1
         ? `${txFiles[0].name} · ${fmtSize(bytes)}`
         : `ファイル ${txFiles.length} 個 (ZIP) · ${fmtSize(bytes)}`,
@@ -226,7 +236,7 @@ function txPlan() {
   }
   const opt = $("txTest").selectedOptions[0];
   const bytes = parseInt(opt.dataset.size) || 0;
-  return { bytes, text: `計測データ · ${opt.textContent} (${fmtSize(bytes)})` };
+  return { bytes, text: `テスト · ${opt.textContent} (${fmtSize(bytes)})` };
 }
 
 const txSettings = () => ({
@@ -242,7 +252,10 @@ function updateTxSummary() {
   const { grid, bpc, fps } = txSettings();
   $("txSummary").textContent = plan.text;
   $("txSummary").classList.toggle("muted", !plan.bytes);
-  $("txStart").disabled = !plan.bytes;
+  $("txStart").disabled = !plan.bytes || !!plan.over;
+  const chars = $("txText").value.length;
+  $("txTextCount").textContent =
+    `${chars.toLocaleString()} / ${TX_TEXT_MAX_CHARS.toLocaleString()} 文字`;
 
   // 選んでいない側に入力が残っていたら、それは送られないと明示する
   const left = [];
@@ -557,6 +570,16 @@ function closeReceive() {
   $("rxStop").disabled = true;
 }
 $("rxStart").addEventListener("click", () => startReceive());
+
+function setRxDiag(open) {
+  $("rxStage").classList.toggle("showdiag", open);
+  $("rxDiagToggle").textContent = open ? "詳細 ▾" : "詳細 ▸";
+  $("rxDiagToggle").setAttribute("aria-expanded", String(open));
+  try { localStorage.setItem("vloom.rxDiag", open ? "1" : "0"); } catch (_) { /* 覚えられなくても動く */ }
+}
+$("rxDiagToggle").addEventListener("click", () =>
+  setRxDiag(!$("rxStage").classList.contains("showdiag")));
+try { setRxDiag(localStorage.getItem("vloom.rxDiag") === "1"); } catch (_) { setRxDiag(false); }
 // 受信中でも格子指定を切り替えられる (総当たり→固定で初回検出が速くなる)
 $("rxGrid").addEventListener("change", () => receiver.setGrid($("rxGrid").value));
 $("rxStop").addEventListener("click", () => closeReceive());
