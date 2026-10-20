@@ -7,7 +7,8 @@ import init, {
 import { VcodeSender, VcodeReceiver, REFRESH_SAFE_FPS } from "./vcode.js";
 import { estimate, theoryKbps } from "./estimate.js";
 import { fmtSize, fmtDuration, fmtStamp } from "./format.js";
-import { setupCalibration } from "./calibration.js";
+import { setupCalibration, CAL_LEVELS, CAL_OK_RATIO, calLevelOf } from "./calibration.js";
+import { listHistory, addHistory, deleteHistory, clearHistory } from "./history.js";
 import { CameraPicker, streamDeviceId } from "./camera.js";
 
 const $ = (id) => document.getElementById(id);
@@ -39,7 +40,7 @@ const TABS = { send: "tabSend", recv: "tabRecv", cal: "tabCal" };
 function showPane(which) {
   for (const [k, id] of Object.entries(PANES)) $(id).classList.toggle("active", k === which);
   for (const [k, id] of Object.entries(TABS)) $(id).classList.toggle("active", k === which);
-  if (which !== "cal") calibration.stop(); // 校正タブを離れたらカメラ/表示を止める
+  if (which !== "cal") calibration.stop(); // 校正タブを離れたら表示を止める
 }
 for (const k of Object.keys(TABS)) $(TABS[k]).addEventListener("click", () => showPane(k));
 
@@ -55,15 +56,7 @@ const calibration = setupCalibration({
   prev: $("calPrev"),
   next: $("calNext"),
   close: $("calClose"),
-  recvStart: $("calRecvStart"),
-  recvStop: $("calRecvStop"),
-  recvReset: $("calRecvReset"),
-  video: $("calVideo"),
-  chips: $("calChips"),
-  best: $("calBest"),
-  blocks: $("calBlocks"),
-  cameraSelect: $("calCamera"),
-  diag: $("calDiag"),
+  bar: $("calBar"),
 });
 
 // ---- 送信 ----
@@ -424,6 +417,12 @@ const receiver = new VcodeReceiver({
   video: $("rxVideo"),
   onDiag: (t) => { $("rxDiag").textContent = t; },
   onProgress: ({ frames, detected, blocks, blocksTotal, distinct, needed, stall, seen }) => {
+    if (calRead) {
+      $("rxInfo").textContent = blocksTotal
+        ? `直近 ${blocks}/${blocksTotal} ブロック · ${detected}/${frames} 枚検出`
+        : `テスト図柄を探しています · ${detected}/${frames} 枚検出`;
+      return;
+    }
     // 進捗は「重複を除いたパケット数 / 必要数」で出す。frames や検出回数は増え続けるので、
     // それだけを出していると、同じブロックしか拾えていない状態が「順調に見えて終わらない」
     // になっていた (実際に起きていた壊れ方)。
@@ -526,6 +525,9 @@ const receiver = new VcodeReceiver({
       });
     }
     $("rxAgain").addEventListener("click", () => startReceive());
+    addHistory({ name, type, size, blob, kbps: (stats && stats.kbps) || 0 })
+      .then(renderHistory)
+      .catch((e) => console.warn("[history] 保存できない", e));
     $("rxClose").addEventListener("click", () => closeReceive());
   },
 });
@@ -541,29 +543,78 @@ function clearResult() {
   for (const u of rxUrls) URL.revokeObjectURL(u);
   rxUrls = [];
 }
-async function startReceive() {
+// ---- 校正の確認 (受信と同じ全画面カメラで、復号せず格子ごとの読めた割合を数える) ----
+/** 格子ごとの最高の読めた割合 (校正中だけ Map、普段は null) */
+let calRead = null;
+function renderCalChips() {
+  const box = $("rxCal");
+  box.textContent = "";
+  CAL_LEVELS.forEach((lv, i) => {
+    const r = calRead ? calRead.get(i) : undefined;
+    const ok = r !== undefined && r >= CAL_OK_RATIO;
+    const chip = document.createElement("span");
+    chip.className = "chip" + (ok ? " ok" : "");
+    chip.textContent = `${ok ? "✅" : "○"} ${lv.grid.replace("x", "×")}` +
+      (r !== undefined ? ` ${Math.round(r * 100)}%` : "");
+    box.append(chip);
+  });
+}
+function calSummaryText() {
+  if (!calRead || !calRead.size) return "";
+  let best = -1;
+  for (const [i, r] of calRead) if (r >= CAL_OK_RATIO && i > best) best = i;
+  return best < 0
+    ? "読めた格子はありません (8 割以上のブロックが読めた格子を ✅ にします)"
+    : `✅ 読めた最も密な格子: ${CAL_LEVELS[best].grid.replace("x", "×")}`;
+}
+receiver.probe = null;
+$("calRecvStart").addEventListener("click", () => {
+  calRead = new Map();
+  receiver.probe = (ok, total) => {
+    const i = calLevelOf(total);
+    if (i < 0 || !total) return;
+    const r = ok / total;
+    if (r > (calRead.get(i) ?? -1)) { calRead.set(i, r); renderCalChips(); }
+  };
+  $("rxStage").classList.add("cal");
+  renderCalChips();
+  startReceive("auto");
+});
+
+async function startReceive(gridOverride) {
   clearResult();
   $("rxError").textContent = "";
   $("rxStall").textContent = "";
   $("rxBar").style.width = "0%";
   covLast = -1;
   covCanvas.classList.remove("on");
-  $("rxInfo").textContent = "スキャン中 — 送信側の vcode を枠に収めてください";
+  $("rxInfo").textContent = calRead
+    ? "送信側のテスト図柄を枠に収めてください"
+    : "スキャン中 — 送信側の vcode を枠に収めてください";
   $("rxStage").classList.add("active"); // 先に全画面を出す (映像の表示サイズが確定してから走査)
   try {
-    await receiver.start(rxPicker.deviceId, $("rxGrid").value);
+    await receiver.start(rxPicker.deviceId, gridOverride || $("rxGrid").value);
     rxPicker.refresh(streamDeviceId(receiver.stream)); // 許可後はデバイス名が取れるので一覧を更新
     setupExposure(); // 露出コントロールを対応状況に合わせて出す
     $("rxStart").disabled = true;
     $("rxStop").disabled = false;
   } catch (e) {
     $("rxStage").classList.remove("active");
-    $("rxError").textContent = "カメラ起動失敗: " + (e && e.message ? e.message : e);
+    const msg = "カメラ起動失敗: " + (e && e.message ? e.message : e);
+    if (calRead) { endCal(); $("calSummary").textContent = msg; } else $("rxError").textContent = msg;
   }
+}
+function endCal() {
+  if (!calRead) return;
+  $("calSummary").textContent = calSummaryText();
+  calRead = null;
+  receiver.probe = null;
+  $("rxStage").classList.remove("cal");
 }
 // 受信画面を閉じて設定の画面に戻る (完了後も、途中で止めたときも)
 function closeReceive() {
   receiver.stop();
+  endCal();
   clearResult();
   $("rxStage").classList.remove("active");
   $("rxStart").disabled = false;
@@ -580,6 +631,47 @@ function setRxDiag(open) {
 $("rxDiagToggle").addEventListener("click", () =>
   setRxDiag(!$("rxStage").classList.contains("showdiag")));
 try { setRxDiag(localStorage.getItem("vloom.rxDiag") === "1"); } catch (_) { setRxDiag(false); }
+// ---- 受信履歴 ----
+let histUrls = [];
+async function renderHistory() {
+  let items = [];
+  try { items = await listHistory(); } catch (_) { /* IndexedDB が使えない (プライベート閲覧など) */ }
+  for (const u of histUrls) URL.revokeObjectURL(u);
+  histUrls = [];
+  const ul = $("rxHistList");
+  ul.textContent = "";
+  $("rxHistCount").textContent = items.length ? `(${items.length})` : "";
+  $("rxHistEmpty").hidden = items.length > 0;
+  $("rxHistClear").hidden = items.length === 0;
+  for (const it of items) {
+    const li = document.createElement("li");
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = it.name; // 相手が決めた名前なので textContent で入れる
+    name.title = it.name;
+    const meta = document.createElement("span");
+    meta.className = "size";
+    const d = new Date(it.at);
+    meta.textContent = `${fmtSize(it.size)} · ${d.getMonth() + 1}/${d.getDate()} ` +
+      `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    const a = document.createElement("a");
+    const u = URL.createObjectURL(new Blob([it.data], { type: it.type || "application/octet-stream" }));
+    histUrls.push(u);
+    a.href = u;
+    a.download = it.name;
+    a.textContent = "保存";
+    const del = document.createElement("button");
+    del.type = "button";
+    del.textContent = "✕";
+    del.setAttribute("aria-label", `${it.name} を履歴から消す`);
+    del.addEventListener("click", () => deleteHistory(it.id).then(renderHistory));
+    li.append(name, meta, a, del);
+    ul.append(li);
+  }
+}
+$("rxHistClear").addEventListener("click", () => clearHistory().then(renderHistory));
+renderHistory();
+
 // 受信中でも格子指定を切り替えられる (総当たり→固定で初回検出が速くなる)
 $("rxGrid").addEventListener("change", () => receiver.setGrid($("rxGrid").value));
 $("rxStop").addEventListener("click", () => closeReceive());

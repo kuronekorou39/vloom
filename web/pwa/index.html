@@ -169,15 +169,7 @@
     .txctl input[type="range"] { width: 100%; min-width: 0; }
     .txctl.check { grid-template-columns: auto 1fr; justify-content: start; }
     .txctl output { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
-    /* 受信: カメラ映像。開始前後で高さが変わらないよう 4:3 の枠を確保し、映像は
-       中身を歪めず枠内に収める (縦横比が違うカメラは上下に黒帯)。開始前は「停止中」。 */
-    #calRxWrap { position: relative; background: #000;
-      border-radius: var(--radius); overflow: hidden; max-width: 600px;
-      aspect-ratio: 4 / 3; display: grid; place-items: center; }
-    #calRxWrap::after { content: "カメラ停止中";
-      position: absolute; inset: 0; z-index: 0; display: grid; place-items: center;
-      color: #59606b; font-size: 0.9em; }
-    #rxVideo, #calVideo { position: relative; z-index: 1;
+    #rxVideo { position: relative; z-index: 1;
       width: 100%; height: auto; display: block; }
     progress { width: 100%; height: 10px; border: none; border-radius: 5px; overflow: hidden;
       background: var(--field); }
@@ -203,17 +195,17 @@
       font-size: 0.95em; cursor: pointer; border-radius: 0; transition: background 0.12s; }
     .seg button:hover { background: var(--hover); }
     .seg button.active { background: var(--accent); color: #fff; }
-    /* 校正: レベル判定チップ */
-    #calChips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0.6em 0; }
+    /* 格子ごとの判定チップ (校正の確認) */
     .chip { background: #262a31; border: 1px solid var(--line); border-radius: 14px;
       padding: 0.2em 0.7em; font-size: 0.85em; color: var(--muted); }
     .chip.ok { color: var(--ok); border-color: #2e6b3f; }
     /* 校正: 全画面テストパターン表示 */
     #calStage { display: none; position: fixed; inset: 0; background: #fff; z-index: 60;
-      flex-direction: column; align-items: center; justify-content: center; }
-    #calCanvas { image-rendering: pixelated; background: #fff; max-width: 100vmin; max-height: 90vh; }
+      flex-direction: column; align-items: flex-start; justify-content: flex-start; }
+    #calCanvas { image-rendering: pixelated; background: #fff; display: block; }
     #calBar { position: fixed; left: 0; right: 0; bottom: 0; background: rgba(20,22,28,0.92);
-      color: var(--text); padding: 0.5em 1em; display: flex; gap: 0.8em; align-items: center; }
+      color: var(--text); padding: 0.5em 1em; display: flex; gap: 0.8em; align-items: center;
+      padding-bottom: max(0.5em, env(safe-area-inset-bottom)); }
     #calBar .grow { flex: 1; }
     #calBar #calLabel { font-size: 1em; }
     /* V受信ステージ: カメラを画面いっぱいに出し (cover)、状態/操作/診断を上に重ねる */
@@ -267,6 +259,15 @@
     #rxExpo input[type="range"] { flex: 1; min-width: 6em; }
     #rxExpoVal { min-width: 4em; text-align: right; }
     #rxExpoNote { font-size: 0.85em; }
+    /* 校正の確認: 進捗バーの代わりに格子ごとの読めた割合を出す */
+    #rxCal { display: none; flex-wrap: wrap; gap: 6px; }
+    #rxStage.cal #rxCal { display: flex; }
+    #rxStage.cal #rxBarWrap { display: none; }
+    #rxCal .chip { background: rgba(20,22,28,0.75); color: #cfd3da; }
+    #rxCal .chip.ok { color: var(--ok); border-color: #2e6b3f; }
+    #rxHistList li { grid-template-columns: minmax(0, 1fr) auto auto auto; }
+    #rxHistList a { color: var(--accent); text-decoration: none; padding: 0.3em 0.5em; }
+    #rxHistory summary .muted { font-size: 0.9em; }
     /* 詳細は既定で閉じる。開いたときだけ露出・診断・受信状況の帯を出す */
     #rxDiagToggle { align-self: flex-start; padding: 0.35em 0.8em; font-size: 0.85em;
       background: rgba(34,38,47,0.8); }
@@ -382,44 +383,34 @@
         <div id="rxError" class="ng"></div>
         <div class="muted small">カメラを全画面で開きます。送信側のコードを中央のオレンジ枠に収めてください。</div>
       </div>
+      <details class="card" id="rxHistory">
+        <summary>受信履歴 <span id="rxHistCount" class="muted"></span></summary>
+        <ul class="files" id="rxHistList"></ul>
+        <div id="rxHistEmpty" class="muted small">まだありません</div>
+        <div class="filesfoot">
+          <span class="muted">このブラウザ内に最新 30 件。しばらく開かないと消えることがあります</span>
+          <button class="secondary" id="rxHistClear">すべて削除</button>
+        </div>
+      </details>
     </section>
 
     <!-- ============ 校正 ============ -->
     <section id="paneCal" class="pane">
       <div class="card">
-        <div class="row">
-          <div class="seg full" id="calMode" style="flex:1">
-            <button data-m="send" class="active">送信(表示)</button>
-            <button data-m="recv">受信(確認)</button>
-          </div>
+        <div class="seg full" id="calMode">
+          <button data-m="send" class="active">送信(表示)</button>
+          <button data-m="recv">受信(確認)</button>
         </div>
-      </div>
-
-      <!-- 送信(表示) -->
-      <div id="calSendView">
-        <div class="card">
-          <div class="row"><button id="calShow" class="wide">テストパターンを全画面表示</button></div>
-          <div class="muted">受信側が読めたらそのレベルはOK。ゆるい→きつい と上げて限界を探す。
-            もう一方の端末 (スマホアプリ / 別PC) の「校正 → 受信(確認)」で読み取ります。</div>
+        <div id="calSendView" class="src">
+          <button id="calShow" class="wide">テスト図柄を全画面表示</button>
+          <div class="muted small" style="margin-top:0.5em">粗い 5×4 から密な 13×18 まで、◀ ▶ で切り替えます。
+            もう一方の端末の「校正 → 受信(確認)」で読み取ります。</div>
         </div>
-      </div>
-
-      <!-- 受信(確認) -->
-      <div id="calRecvView" style="display:none">
-        <div class="card">
-          <div class="row">
-            <button id="calRecvStart">カメラ開始</button>
-            <button id="calRecvStop" class="secondary" disabled>停止</button>
-            <button id="calRecvReset" class="secondary">リセット</button>
-          </div>
-          <div class="row">
-            <label class="field" style="flex:1"><span>カメラ</span><select id="calCamera" class="camsel"></select></label>
-          </div>
-          <div id="calRxWrap"><video id="calVideo" autoplay playsinline muted></video></div>
-          <div id="calBest" class="muted" style="margin-top:0.6em">送信側のテストパターンに向けてください</div>
-          <div id="calBlocks" class="muted" style="font-size:0.85em"></div>
-          <div id="calDiag" class="diag"></div>
-          <div id="calChips"></div>
+        <div id="calRecvView" class="src" hidden>
+          <button id="calRecvStart" class="wide">カメラを開いて確認</button>
+          <div id="calSummary" class="muted" style="margin-top:0.6em"></div>
+          <div class="muted small" style="margin-top:0.4em">送信側のテスト図柄を枠に収めると、格子ごとに読めたかを表示します。
+            読めた最も密な格子が、使える上限の目安です。</div>
         </div>
       </div>
     </section>
@@ -457,6 +448,7 @@
         <!-- 復元までの進捗 (重複を除いたパケット数 / 必要数)。検出回数だけだと
              「同じブロックしか拾えていない」状態が見分けられない -->
         <div id="rxBarWrap"><div id="rxBar"></div></div>
+        <div id="rxCal"></div>
       </div>
       <button id="rxStop" class="secondary">停止</button>
     </div>

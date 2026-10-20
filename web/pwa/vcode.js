@@ -282,6 +282,9 @@ export class VcodeReceiver {
     this.workers = [];
     this.guideEl = null;
     this._onResize = () => this._positionGuide();
+    // 校正用: 設定すると復号せず、検出した枚のブロック数だけをこの関数に渡す
+    // (どの格子がどれだけ読めるかを見るため。校正の図柄はファウンテン符号の転送ではない)
+    this.probe = null;
   }
 
   async start(deviceId, grid = "auto") {
@@ -441,6 +444,7 @@ export class VcodeReceiver {
     if (this.firstDetectedAt === null) this.firstDetectedAt = performance.now();
     this.blocks = m.blocks;
     this.blocksTotal = m.blocksTotal;
+    if (this.probe) { this.probe(m.blocks, m.blocksTotal); this._progress(); return; }
     if (!this.dec) {
       try { this.dec = new FountainDecoder(m.oti); } catch (_) { return; }
     }
@@ -667,6 +671,7 @@ export class VcodeReceiver {
     if (this.firstDetectedAt === null) this.firstDetectedAt = performance.now();
     this.blocks = rep.blocksOk;
     this.blocksTotal = rep.blocksTotal;
+    if (this.probe) { this.probe(rep.blocksOk, rep.blocksTotal); this._progress(); return; }
     if (!this.dec) {
       try { this.dec = new FountainDecoder(rep.oti); } catch (_) { return; }
     }
@@ -709,7 +714,7 @@ export class VcodeReceiver {
     // 検出できているのにパケットが増えない = 同じ一部のブロックだけを拾い続けている。
     // 原因はほぼ px/セル 不足 (密すぎる格子) なので、必要な値と対処を名指しで出す。
     let stall = null;
-    if (this.detected > 0 && performance.now() - this.lastGainAt > STALL_MS) {
+    if (!this.probe && this.detected > 0 && performance.now() - this.lastGainAt > STALL_MS) {
       stall =
         gridTooDense(this.scanW, this.scanH, this.grid) ||
         (this.grid === "auto" && this.scanW
