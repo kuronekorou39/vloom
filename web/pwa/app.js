@@ -615,7 +615,24 @@ showPane("send");
 })();
 
 if ("serviceWorker" in navigator) {
+  // 新しい版の SW に切り替わったら 1 回だけ読み直す。cache-first なので、
+  // 読み直さないと表示中のページは古い版のまま残る (iPhone の Safari で
+  // 再読み込みしても直らなかった)。受信中なら閉じたときに読み直す
+  let reloadPending = false;
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!hadController || reloadPending) return; // 初回のインストールでは読み直さない
+    reloadPending = true;
+    if (!$("rxStage").classList.contains("active")) location.reload();
+  });
+  $("rxStop").addEventListener("click", () => { if (reloadPending) location.reload(); });
+  document.addEventListener("click", (e) => {
+    if (reloadPending && e.target && e.target.id === "rxClose") location.reload();
+  });
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js").catch(() => {});
+    // sw.js 自体は HTTP キャッシュを通さずに確認する (Pages は 10 分キャッシュする)
+    navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" })
+      .then((reg) => reg.update())
+      .catch(() => {});
   });
 }
