@@ -271,7 +271,11 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
     var lastLog = DateTime.now();
     while (mounted && _running && seq == _seq) {
       final t0 = DateTime.now();
-      final img = await _frameImage(_frameIdx % _frameCount);
+      // 巡ごとに 1 フレームずらす (デスクトップ送信の _frame_arg と同じ)。毎巡同じ並びだと、
+      // 受信側の間引きの位相が揃ったときに同じフレームを落とし続け、読めないブロック位置の
+      // パケットも何巡しても届かない。ずらせば同じ位置が別のパケットを運ぶ
+      final img = await _frameImage(
+          _frameIdx % _frameCount + _frameIdx ~/ _frameCount);
       if (!mounted || !_running || seq != _seq) break;
       setState(() {
         _current = img;

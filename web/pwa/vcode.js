@@ -238,7 +238,11 @@ export class VcodeSender {
       ? this.shownIdx
       : Math.floor((now - this.t0) / interval + 0.25);
     if (want !== this.shownIdx || this.dirty) {
-      this._drawFrame(want % this.frameCount);
+      // 巡ごとに 1 フレームずらして渡す (デスクトップ送信の _frame_arg と同じ)。
+      // 毎巡同じ並びだと、受信側の間引きの位相が揃ったときに同じフレームを
+      // 落とし続け、同じブロック位置が読めないときもそのパケットは何巡しても届かない
+      // (ゲージが半分を過ぎてから極端に遅くなる)。ずらせば同じ位置が別のパケットを運ぶ
+      this._drawFrame((want % this.frameCount) + Math.floor(want / this.frameCount));
       this.shownIdx = want;
       this.dirty = false;
       const pass = Math.floor(want / this.frameCount) + 1;
