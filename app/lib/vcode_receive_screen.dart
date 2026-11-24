@@ -22,6 +22,7 @@ import 'preset.dart';
 import 'probe_stats.dart';
 import 'rx_prefs.dart';
 import 'launch_args.dart';
+import 'packet_coverage.dart';
 import 'scan_worker.dart';
 import 'src/rust/api/fountain.dart';
 import 'src/rust/api/vcode.dart';
@@ -234,7 +235,6 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   CameraImage? _pendingImg;
 
   FountainDecoder? _dec;
-  int? _packetSize; // 最初の回収パケットから推定 (シリアライズ長 - 4)
   Uint8List? _payload;
   HistoryItem? _savedItem;
 
@@ -254,9 +254,9 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   /// 中間に散るなら px/セル・ピント・露出といった空間方向の問題を示す。
   /// どちらの壁に当たっているかで打ち手が変わるので、切り分けの一次情報として出す。
   final List<int> _blockHist = List<int>.filled(6, 0);
-  // 受信できた ESI (Encoding Symbol ID) の集合。重複を除いた"実データ被覆"。
-  // RaptorQ は distinct が必要数 K に届くと復元できる。カバレッジ格子と distinct 数の表示に使う。
-  final Set<int> _seenEsi = {};
+  // 受信できたパケットの被覆 (重複除く)。ブロックごとに必要数で頭打ちした数が全体の必要数に
+  // 届くと復元できる。進捗・カバレッジ格子・distinct 数の表示に使う。OTI が分かった時点で作る
+  PacketCoverage? _cov;
   int _integrityFails = 0; // エンドツーエンド CRC 不一致で受信をやり直した回数
   int _lastScanMs = 0;
   // 処理時間の内訳 (30 枚ごとに平均してログに出す)
@@ -609,20 +609,13 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         final packets = probeTag == null ? report.packets : const <Uint8List>[];
         if (probeTag == null) {
           _dec ??= FountainDecoder(otiBytes: report.oti);
-          if (_packetSize == null && report.packets.isNotEmpty) {
-            _packetSize = report.packets.first.length - 4;
-          }
+          _cov ??= PacketCoverage.fromOti(report.oti);
         }
         var done = false;
         final swDec = Stopwatch()..start();
         for (final p in packets) {
           _packetsAdded++;
-          if (p.length >= 4) {
-            // RaptorQ payload ID = SBN(1 byte) + ESI(3 byte, big-endian)。
-            // 単一ソースブロック前提 (SBN=0) で ESI をカバレッジ格子の座標に使う。
-            final esi = (p[1] << 16) | (p[2] << 8) | p[3];
-            _seenEsi.add(esi);
-          }
+          _cov!.add(p);
           if (_dec!.addPacket(packet: p)) {
             done = true;
             break;
@@ -671,6 +664,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
               '($_integrityFails 回目)。デコーダを再作成して受信続行',
             );
             _dec = null;
+            _cov = null;
             return;
           }
           _onComplete(payload);
@@ -1163,8 +1157,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     setState(() {
       _dec = null;
       _probe = null;
-      _packetSize = null;
-      _seenEsi.clear();
+      _cov = null;
       _packetsAdded = 0;
       _blocksOk = 0;
       _blocksTotalSum = 0;
@@ -1238,7 +1231,6 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     setState(() {
       _dec = null;
       _probe = null;
-      _packetSize = null;
       _payload = null;
       _savedItem = null;
       _framesSeen = 0;
@@ -1249,7 +1241,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _blockHist.fillRange(0, _blockHist.length, 0);
       _errorKinds.clear();
       _packetsAdded = 0;
-      _seenEsi.clear();
+      _cov = null;
       _integrityFails = 0;
       _scanMsSum = 0;
       _rotateUsSum = 0;
@@ -1387,14 +1379,14 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     );
   }
 
-  /// 受信データのカバレッジ格子 (ESI ごとの被覆)。高さは固定で、セル数が増えても
-  /// マスを小さくして一定サイズ内に収める (カメラ表示位置がずれないように)。
-  Widget _coverageGrid(int k) {
+  /// 受信データのカバレッジ格子 (パケット番号順の被覆)。高さは固定で、
+  /// 一定サイズ内に収める (カメラ表示位置がずれないように)。
+  Widget _coverageGrid(PacketCoverage cov) {
     return SizedBox(
       height: 72,
       width: double.infinity,
       child: CustomPaint(
-        painter: _CoverageGridPainter(seen: _seenEsi, k: k),
+        painter: _CoverageGridPainter(cov: cov, distinct: cov.distinct),
       ),
     );
   }
@@ -1475,7 +1467,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
             : '$_focusHunts 回検出 (固定せず)',
       ),
       ('投入パケット', '$_packetsAdded'),
-      ('distinct パケット', '${_seenEsi.length}'),
+      ('distinct パケット', '${_cov?.distinct ?? 0}'),
       if (_integrityFails > 0) ('整合性エラー再試行', '$_integrityFails 回'),
       (
         '平均スキャン時間',
@@ -1857,10 +1849,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   @override
   Widget build(BuildContext context) {
     final cam = _cam;
-    final ps = _packetSize ?? 42;
-    final total = _dec == null
-        ? null
-        : (_dec!.payloadSize().toInt() + ps - 1) ~/ ps; // 必要 source パケット数
+    final cov = _cov;
+    final total = cov?.kt; // 必要 source パケット数
 
     if (_payload != null) return _resultView();
     if (cam == null || !cam.value.isInitialized) {
@@ -2083,6 +2073,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   /// 黒のグラデーションを敷き、文字は読めるが映像側の端は透ける形にする。
   /// 中身が伸びても映像を潰しきらないよう高さを画面の 6 割で頭打ちにしてスクロールさせる。
   Widget _controlPanel(int? total) {
+    final cov = _cov;
     // 端 (画面の外側) を濃く、内側 (映像側) を透明にする
     final edge = _panelAtTop ? Alignment.topCenter : Alignment.bottomCenter;
     final inner = _panelAtTop ? Alignment.bottomCenter : Alignment.topCenter;
@@ -2165,15 +2156,15 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                     Padding(
                       padding: const EdgeInsets.only(bottom: 6),
                       child: LinearProgressIndicator(
-                        value: (_seenEsi.length / total).clamp(0.0, 1.0),
+                        value: (cov!.useful / total).clamp(0.0, 1.0),
                         minHeight: 6,
                         backgroundColor: const Color(0x55FFFFFF),
                       ),
                     ),
                   // 受信データのカバレッジ格子: ESI ごとのマスを、受信済み=緑(source)/水色(repair)、
                   // 未受信=灰で塗る。埋まらない穴が「取れていないフレームのデータ」= 未完了の原因。
-                  if (total != null && _panelExpanded) ...[
-                    _coverageGrid(total),
+                  if (cov != null && _panelExpanded) ...[
+                    _coverageGrid(cov),
                     const SizedBox(height: 4),
                   ],
                   // 一度も検出できていないときだけ、切り分けに要る実測値を出す。
@@ -2197,7 +2188,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                   Text(
                     '検出 $_framesDetected/$_framesSeen · '
                     // distinct (重複除く) が必要数 K に届くと復元される。投入は重複込みの累計。
-                    '受信 ${_seenEsi.length}${total != null ? "/$total 必要" : ""} '
+                    '受信 ${cov?.useful ?? 0}${total != null ? "/$total 必要" : ""} '
                     '(投入 $_packetsAdded 重複込) · scan ${_lastScanMs}ms'
                     '${_seeded ? " · [位置固定]" : ""}'
                     '${_autoAcquireCount > 0 ? " · 自動取得 $_autoAcquireCount 回" : ""}'
@@ -2402,42 +2393,46 @@ class _DetectedQuadPainter extends CustomPainter {
 /// 未受信=灰で塗る。埋まらない穴 = まだ取れていないパケット (= 復元が完了しない原因) が
 /// 一目でわかる。RaptorQ は distinct が必要数 K に届くと復元できる。
 class _CoverageGridPainter extends CustomPainter {
-  _CoverageGridPainter({required this.seen, required this.k});
-  final Set<int> seen;
-  final int k; // 必要 source パケット数 (ESI < k = source, >= k = repair)
+  _CoverageGridPainter({required this.cov, required this.distinct});
+  final PacketCoverage cov;
+  // 描いた時点の受信数。cov は同じインスタンスが更新され続けるので、比較用に控える
+  final int distinct;
 
   @override
   void paint(Canvas canvas, Size size) {
-    var cap = k;
-    for (final e in seen) {
-      if (e + 1 > cap) cap = e + 1;
-    }
+    final cap = cov.cap;
     if (cap <= 0 || size.width <= 0 || size.height <= 0) return;
-    // 固定領域 (size) に cap マスを正方セルで収める。増えるほどセルを小さくする。
-    var s = 8.0; // 希望セルサイズ
-    var cols = (size.width / s).floor();
-    if (cols < 1) cols = 1;
-    var rows = (cap / cols).ceil();
-    while (rows * s > size.height && s > 1.0) {
-      s -= 0.5;
-      cols = (size.width / s).floor();
-      if (cols < 1) cols = 1;
-      rows = (cap / cols).ceil();
-    }
-    final gap = s > 3 ? 1.0 : 0.0;
+    // 1 マス 1 パケットだと 10MB 超で数十万マスになり、毎フレームの描画で UI が詰まる。
+    // マス数を上限で抑え、1 マスに入るパケットの充足率を濃淡で出す (PWA と同じ)。
+    const s = 6.0;
+    final cols = math.max(1, (size.width / s).floor());
+    final rows = math.max(1, (size.height / s).floor());
+    // 1 マス = 度数分布のバケット perB 個 (= per パケット)
+    final perB = math.max(1, (cap / cov.bucketW / (cols * rows)).ceil());
+    final per = perB * cov.bucketW;
+    final cells = math.min(cols * rows, (cap / per).ceil());
     final unseen = Paint()..color = const Color(0xFF37474F);
-    final src = Paint()..color = const Color(0xFF4CAF50);
-    final rep = Paint()..color = const Color(0xFF29B6F6);
-    for (var i = 0; i < cap; i++) {
-      final r = i ~/ cols, c = i % cols;
-      canvas.drawRect(
-        Rect.fromLTWH(c * s, r * s, s - gap, s - gap),
-        seen.contains(i) ? (i < k ? src : rep) : unseen,
-      );
+    final paint = Paint();
+    for (var i = 0; i < cells; i++) {
+      var got = 0;
+      for (var j = i * perB; j < (i + 1) * perB && j < cov.hist.length; j++) {
+        got += cov.hist[j];
+      }
+      final rect = Rect.fromLTWH((i % cols) * s, (i ~/ cols) * s, s - 1, s - 1);
+      if (got == 0) {
+        canvas.drawRect(rect, unseen);
+        continue;
+      }
+      final a = 0.25 + 0.75 * math.min(1.0, got / per);
+      // source と repair で色を分ける (マスの中心がどちら側かで判定)
+      final src = (i + 0.5) * per < cov.kt;
+      paint.color = (src ? const Color(0xFF4CAF50) : const Color(0xFF29B6F6))
+          .withValues(alpha: a);
+      canvas.drawRect(rect, paint);
     }
   }
 
   @override
   bool shouldRepaint(covariant _CoverageGridPainter old) =>
-      old.seen.length != seen.length || old.k != k;
+      old.distinct != distinct || !identical(old.cov, cov);
 }

@@ -9,6 +9,7 @@ import {
   gridTooDense, pxPerCell,
 } from "./camera.js";
 import { fmtSize, fmtElapsed } from "./format.js";
+import { PacketCoverage } from "./coverage.js";
 
 const REPAIR_RATE = 0.5;
 
@@ -451,23 +452,20 @@ export class VcodeReceiver {
     if (this.probe) { this.probe(m.blocks, m.blocksTotal); this._progress(); return; }
     if (!this.dec) {
       try { this.dec = new FountainDecoder(m.oti); } catch (_) { return; }
+      this.cov = new PacketCoverage(m.oti);
+      this.needed = this.cov.kt;
     }
     const tDec = performance.now();
     let done = false;
     for (const pkt of m.packets) {
-      // RaptorQ の payload ID = SBN(1) + ESI(3, big-endian)。単一ソースブロック前提で
-      // ESI を「重複を除いた被覆」として数える (進捗と停滞判定に使う)
-      if (pkt.length >= 4) this.seenEsi.add((pkt[1] << 16) | (pkt[2] << 8) | pkt[3]);
+      // 重複を除いた被覆を数える (進捗と停滞判定に使う。複数ソースブロック対応は coverage.js)
+      this.cov.add(pkt);
       if (this.dec.addPacket(pkt)) { done = true; break; }
-    }
-    if (!this.needed && m.packets.length > 0) {
-      const symbol = m.packets[0].length - 4;
-      if (symbol > 0) this.needed = Math.ceil(Number(this.dec.payloadSize()) / symbol);
     }
     // 主スレッドでのデコーダ投入時間 (1 枚あたり)。ワーカーを増やしても伸びないとき、
     // ここが詰まっているのかを切り分ける
     this.decMs = this.decMs * 0.9 + (performance.now() - tDec) * 0.1;
-    this.distinct = this.seenEsi.size;
+    this.distinct = this.cov.useful;
     this._progress();
     if (!done) return;
     // エンドツーエンド CRC-32 検証。不一致 = 復元結果が破損 → デコーダを捨てて受信続行
@@ -475,7 +473,7 @@ export class VcodeReceiver {
     if (!payload) {
       console.warn("[vcode-rx] 整合性エラー: 復元結果が破損。デコーダを作り直して受信続行");
       this.dec = null;
-      this.seenEsi.clear();
+      this.cov = null;
       this.distinct = 0;
       this.lastDistinct = 0;
       this.lastGainAt = performance.now();
@@ -534,7 +532,8 @@ export class VcodeReceiver {
     this.stats = { fps: 0, mean: 0, sat: 0 };
     this._lastDiag = 0;
     this.firstDetectedAt = null;
-    // 重複を除いた被覆 (ESI 集合) と、必要パケット数。進捗表示と停滞判定に使う
+    // 重複を除いた被覆 (ブロックごとに必要数で頭打ちした受信数) と、必要パケット数。
+    // 進捗表示と停滞判定に使う
     this.distinct = 0;
     this.needed = 0;
     this.lastDistinct = 0;
@@ -543,8 +542,9 @@ export class VcodeReceiver {
     this.scanH = 0;
     this.blocks = 0;
     this.blocksTotal = 0;
-    // 被覆はワーカーをまたいで 1 つにまとめる (ワーカーごとに持つと合流できない)
-    this.seenEsi = new Set();
+    // 被覆はワーカーをまたいで 1 つにまとめる (ワーカーごとに持つと合流できない)。
+    // OTI が分かった時点 (デコーダと同時) に作る
+    this.cov = null;
     this.readyCount = 0;
     this.feeding = false;
     this.reader = null;
@@ -678,21 +678,17 @@ export class VcodeReceiver {
     if (this.probe) { this.probe(rep.blocksOk, rep.blocksTotal); this._progress(); return; }
     if (!this.dec) {
       try { this.dec = new FountainDecoder(rep.oti); } catch (_) { return; }
+      this.cov = new PacketCoverage(rep.oti);
+      this.needed = this.cov.kt;
     }
-    const seen = this.seenEsi;
     const n2 = rep.packetCount();
     let done = false;
     for (let i = 0; i < n2; i++) {
       const pkt = rep.packet(i);
-      // RaptorQ の payload ID = SBN(1) + ESI(3, big-endian)。重複を除いた被覆を数える
-      if (pkt.length >= 4) seen.add((pkt[1] << 16) | (pkt[2] << 8) | pkt[3]);
+      this.cov.add(pkt);
       if (this.dec.addPacket(pkt)) { done = true; break; }
     }
-    if (!this.needed && n2 > 0) {
-      const symbol = rep.packet(0).length - 4;
-      if (symbol > 0) this.needed = Math.ceil(Number(this.dec.payloadSize()) / symbol);
-    }
-    this.distinct = seen.size;
+    this.distinct = this.cov.useful;
     this._progress();
     if (!done) return;
     // エンドツーエンド CRC-32 検証。不一致 = 復元結果が破損 → デコーダを捨てて受信続行
@@ -700,7 +696,7 @@ export class VcodeReceiver {
     if (!payload) {
       console.warn("[vcode-rx] 整合性エラー: 復元結果が破損。デコーダを作り直して受信続行");
       this.dec = null;
-      seen.clear();
+      this.cov = null;
       this.distinct = 0;
       this.lastDistinct = 0;
       this.lastGainAt = performance.now();
@@ -735,7 +731,7 @@ export class VcodeReceiver {
       distinct: this.distinct,
       needed: this.needed,
       stall,
-      seen: this.seenEsi,
+      cov: this.cov,
     });
   }
 

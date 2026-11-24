@@ -372,40 +372,37 @@ const rxPicker = new CameraPicker($("rxCamera"));
 // 緑 = source パケットの範囲、水色 = repair の範囲。
 const covCanvas = $("rxCoverage");
 let covLast = -1;
-function drawCoverage(seen, needed) {
-  if (!seen || !needed) { covCanvas.classList.remove("on"); return; }
+function drawCoverage(cov) {
+  if (!cov || !cov.kt) { covCanvas.classList.remove("on"); return; }
   covCanvas.classList.add("on");
   // 増えていなければ描き直さない
-  if (seen.size === covLast) return;
-  covLast = seen.size;
+  if (cov.positions.size === covLast) return;
+  covLast = cov.positions.size;
   const dpr = window.devicePixelRatio || 1;
   const w = Math.round(covCanvas.clientWidth * dpr);
   const h = Math.round(covCanvas.clientHeight * dpr);
   if (!w || !h) return;
   if (covCanvas.width !== w || covCanvas.height !== h) { covCanvas.width = w; covCanvas.height = h; }
   const ctx = covCanvas.getContext("2d");
-  // repair も含めて、届いている中で最大の番号までを描く
-  let cap = needed;
-  for (const e of seen) if (e + 1 > cap) cap = e + 1;
+  // repair も含めて、届いている中で最大の位置までを描く
   const s = Math.max(3 * dpr, Math.round(5 * dpr));
   const cols = Math.max(1, Math.floor(w / s));
   const rows = Math.max(1, Math.floor(h / s));
   const cells = cols * rows;
-  const per = Math.max(1, Math.ceil(cap / cells));
-  const got = new Uint32Array(cells);
-  for (const e of seen) {
-    const i = Math.floor(e / per);
-    if (i < cells) got[i]++;
-  }
+  // 1 マス = 度数分布のバケット perB 個 (= per 位置)
+  const perB = Math.max(1, Math.ceil(cov.cap / cov.bucketW / cells));
+  const per = perB * cov.bucketW;
   ctx.clearRect(0, 0, w, h);
   ctx.fillStyle = "rgba(20,26,32,0.72)";
   ctx.fillRect(0, 0, w, h);
   const gap = s > 4 * dpr ? dpr : 0;
   for (let i = 0; i < cells; i++) {
-    const ratio = Math.min(1, got[i] / per);
-    if (ratio === 0) continue;
-    // source と repair で色を分ける (バケットの中心がどちら側かで判定)
-    const src = (i + 0.5) * per < needed;
+    let got = 0;
+    for (let j = i * perB; j < (i + 1) * perB; j++) got += cov.hist[j] || 0;
+    if (got === 0) continue;
+    const ratio = Math.min(1, got / per);
+    // source と repair で色を分ける (マスの中心がどちら側かで判定)
+    const src = (i + 0.5) * per < cov.kt;
     ctx.fillStyle = src
       ? `rgba(76,175,80,${0.25 + 0.75 * ratio})`
       : `rgba(41,182,246,${0.25 + 0.75 * ratio})`;
@@ -416,7 +413,7 @@ function drawCoverage(seen, needed) {
 const receiver = new VcodeReceiver({
   video: $("rxVideo"),
   onDiag: (t) => { $("rxDiag").textContent = t; },
-  onProgress: ({ frames, detected, blocks, blocksTotal, distinct, needed, stall, seen }) => {
+  onProgress: ({ frames, detected, blocks, blocksTotal, distinct, needed, stall, cov }) => {
     if (calRead) {
       $("rxInfo").textContent = blocksTotal
         ? `直近 ${blocks}/${blocksTotal} ブロック · ${detected}/${frames} 枚検出`
@@ -436,7 +433,7 @@ const receiver = new VcodeReceiver({
       `${head} · 直近 ${blocks}/${blocksTotal} ブロック · ${detected}/${frames} 枚検出`;
     $("rxBar").style.width = `${pct}%`;
     $("rxStall").textContent = stall || "";
-    drawCoverage(seen, needed);
+    drawCoverage(cov);
   },
   onDone: async ({ name, type, size, blob, stats }) => {
     // 受信したファイル名は相手の画面から来る = 攻撃者が選べる。HTML に入れる前に必ず

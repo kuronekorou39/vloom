@@ -35,11 +35,35 @@ impl Encoder {
     /// payload を packet_size で符号化し、追加で extra_repair 個のリペアパケットを生成する。
     /// extra_repair = 0 ならパケットは source 分のみ (= ceil(payload.len() / packet_size))。
     /// 損失に強くしたければ extra_repair を増やす (例: source の 50% 程度)。
+    ///
+    /// extra_repair は**オブジェクト全体**でのリペア数。RaptorQ は 2MB 前後を超えると
+    /// 複数のソースブロックに割るので、各ブロックへはソースシンボル数に比例して配る。
+    /// (raptorq の `get_encoded_packets(n)` の n はブロックあたりの数。全体の 50% を
+    /// そのまま渡すと 12MB で 1 巡がデータの 4 倍、32MB で 8.5 倍に膨らんでいた。)
+    ///
+    /// パケットはブロックをまたいで交互に並べる。ブロック順に並べると、あるブロックの
+    /// 取りこぼしは 1 巡 (= ファイル全体ぶん) 待たないと埋まらず、ブロックごとの
+    /// 余剰リペアも「もう復元済みのブロック」に使われて無駄になる。
     pub fn new(payload: &[u8], packet_size: u16, extra_repair: u32) -> Self {
         let encoder = RqEncoder::with_defaults(payload, packet_size);
         let oti = encoder.get_config();
-        let packets = encoder.get_encoded_packets(extra_repair);
-        Self { oti, packets }
+        let blocks = encoder.get_block_encoders();
+        let per_block: Vec<Vec<EncodingPacket>> = if blocks.len() <= 1 {
+            vec![encoder.get_encoded_packets(extra_repair)]
+        } else {
+            let k_total: u64 = blocks.iter().map(|b| b.source_packets().len() as u64).sum();
+            blocks
+                .iter()
+                .map(|b| {
+                    let mut v = b.source_packets();
+                    let k = v.len() as u64;
+                    let repair = (extra_repair as u64 * k).div_ceil(k_total.max(1)) as u32;
+                    v.extend(b.repair_packets(0, repair));
+                    v
+                })
+                .collect()
+        };
+        Self { oti, packets: interleave(per_block) }
     }
 
     pub fn oti(&self) -> &ObjectTransmissionInformation {
@@ -58,6 +82,35 @@ impl Encoder {
     pub fn packet(&self, i: usize) -> Vec<u8> {
         self.packets[i % self.packets.len()].serialize()
     }
+}
+
+/// ブロックごとのパケット列を、各ブロックの進み具合 (= 列内の位置の割合) が揃うように
+/// 1 本へ混ぜる。ブロックの大きさはほぼ等しい (RaptorQ の分割は 1 シンボル差以内) が、
+/// リペア数の丸めで長さが少しずれても偏らないよう、割合が最も遅れている列から取る。
+fn interleave(lists: Vec<Vec<EncodingPacket>>) -> Vec<EncodingPacket> {
+    if lists.len() <= 1 {
+        return lists.into_iter().next().unwrap_or_default();
+    }
+    let total: usize = lists.iter().map(Vec::len).sum();
+    let lens: Vec<usize> = lists.iter().map(Vec::len).collect();
+    let mut iters: Vec<_> = lists.into_iter().map(Vec::into_iter).collect();
+    let mut taken = vec![0usize; iters.len()];
+    let mut out = Vec::with_capacity(total);
+    while out.len() < total {
+        // taken/len が最小の列 (同率なら番号の小さい列)。整数で比べる: a/la < b/lb ⇔ a*lb < b*la
+        let mut best = usize::MAX;
+        for i in 0..iters.len() {
+            if taken[i] >= lens[i] {
+                continue;
+            }
+            if best == usize::MAX || taken[i] * lens[best] < taken[best] * lens[i] {
+                best = i;
+            }
+        }
+        out.push(iters[best].next().expect("taken < len"));
+        taken[best] += 1;
+    }
+    out
 }
 
 pub struct Decoder {
@@ -175,6 +228,51 @@ mod tests {
             }
         }
         panic!("did not recover at 50% loss (Fountain code 想定通り動いていない)");
+    }
+
+    /// 複数ソースブロックでも、extra_repair はオブジェクト全体の数として効き、
+    /// パケットはブロックをまたいで交互に並ぶ。
+    #[test]
+    fn multi_block_repair_is_total_and_interleaved() {
+        // シンボルを小さくしてブロック分割を起こす (vcode 1bit は 42B で 2MB 前後から分割)
+        let payload: Vec<u8> = (0..600_000u32).map(|i| (i.wrapping_mul(2654435761) >> 24) as u8).collect();
+        let k_total = payload.len().div_ceil(8);
+        let encoder = Encoder::new(&payload, 8, (k_total / 2) as u32);
+        let z = encoder.oti().source_blocks();
+        assert!(z > 1, "テストの前提: 複数ブロックに割れること (Z={z})");
+        let ratio = encoder.packet_count() as f64 / k_total as f64;
+        assert!((1.49..1.52).contains(&ratio), "1 巡はデータの 1.5 倍のはず: {ratio:.3}");
+        // 先頭 Z 個は全ブロックから 1 つずつ
+        let mut head: Vec<u8> = (0..z as usize)
+            .map(|i| EncodingPacket::deserialize(&encoder.packet(i)).payload_id().source_block_number())
+            .collect();
+        head.sort();
+        assert_eq!(head, (0..z).collect::<Vec<_>>());
+    }
+
+    /// 複数ブロックで 30% を落としても 1 巡以内に復元できる (ブロック順だと特定ブロックが
+    /// 足りず 2 巡目待ちになりやすかった)。
+    #[test]
+    fn multi_block_recovers_within_one_cycle_at_30pct_loss() {
+        let payload: Vec<u8> = (0..600_000u32).map(|i| (i.wrapping_mul(2246822519) >> 24) as u8).collect();
+        let k_total = payload.len().div_ceil(8);
+        let encoder = Encoder::new(&payload, 8, (k_total / 2) as u32);
+        assert!(encoder.oti().source_blocks() > 1);
+        let mut decoder = Decoder::from_oti_bytes(&encoder.oti_bytes());
+        let mut rng = 0x1234_5678u32;
+        for i in 0..encoder.packet_count() {
+            rng ^= rng << 13;
+            rng ^= rng >> 17;
+            rng ^= rng << 5;
+            if rng % 10 < 3 {
+                continue;
+            }
+            if let Some(out) = decoder.add_packet(&encoder.packet(i)) {
+                assert_eq!(out, payload);
+                return;
+            }
+        }
+        panic!("1 巡で復元できなかった");
     }
 
     #[test]

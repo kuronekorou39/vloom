@@ -27,7 +27,7 @@ pub struct VcodeTx {
 #[pymethods]
 impl VcodeTx {
     /// payload には先頭に CRC-32 が付与される (受信側は unwrap_payload で検証して剥がす)。
-    /// extra_repair はソースブロックあたりのリペアパケット数。
+    /// extra_repair はオブジェクト全体でのリペアパケット数 (ソースブロックへは大きさに比例して配る)。
     #[new]
     #[pyo3(signature = (payload, extra_repair, grid_w, grid_h, bits_per_cell))]
     fn new(payload: &[u8], extra_repair: u32, grid_w: u8, grid_h: u8, bits_per_cell: u8) -> Self {
