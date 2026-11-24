@@ -2,6 +2,10 @@
 
 符号化は Rust コア (vloom_core) をそのまま呼ぶので、吐くフレームは PWA・スマホアプリと
 バイト単位で同一。受信側に手を入れる必要はない。
+
+画面は「送るもの → 送信の設定 → 送信」の上から下への 1 本道にしてある。普段触るのは
+格子・fps・表示先だけで、bit/セル・リペア・余白・配置は計測で条件を振るときのための
+もの (既定のままで使える) なので「詳細設定」に畳む。
 """
 
 from __future__ import annotations
@@ -13,20 +17,24 @@ import pathlib
 import re
 
 import vloom_core
-from PySide6.QtCore import QRect, Qt
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import QRect, Qt, Signal
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont, QGuiApplication, QMouseEvent
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
+    QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -49,11 +57,36 @@ DEFAULT_MARGIN_CELLS = 8
 # 30 にすると混ざって回収率が落ちる (実測: 11x10 で 60 -> 33 KB/s)。
 DEFAULT_FPS = 20
 
-
 # 格子の一辺の上限。Rust 側 (VcodeTx) がこの範囲に丸めるので、超える指定をそのまま
 # 渡すと「指定と違う格子が黙って送られる」ことになる (実際に 16x22 を指定して 16x20 が
 # 出て、受信側の格子と食い違ったまま計測した)。ここで止める
 GRID_SIDE_RANGE = (2, 20)
+
+# 画面の配色 (ライト)。補足の文字・枠線・強調の 3 色だけを使う
+MUTED = "#6b7280"
+BORDER = "#d0d5dd"
+ACCENT = "#2563eb"
+WARN = "#b45309"
+
+STYLE = f"""
+QLabel[role="section"] {{ font-weight: 600; font-size: 11pt; }}
+QLabel[role="muted"] {{ color: {MUTED}; }}
+QLabel[role="warn"] {{ color: {WARN}; }}
+QFrame[role="card"] {{
+    border: 1px solid {BORDER}; border-radius: 8px; background: palette(base);
+}}
+QFrame#dropZone {{
+    border: 1.5px dashed {BORDER}; border-radius: 8px; background: palette(base);
+}}
+QFrame#dropZone[hover="true"] {{ border-color: {ACCENT}; }}
+QPushButton#primary {{
+    background: {ACCENT}; color: white; border: none; border-radius: 6px;
+    padding: 10px 16px; font-weight: 600; font-size: 11pt;
+}}
+QPushButton#primary:hover {{ background: #1d4ed8; }}
+QPushButton#primary:pressed {{ background: #1e40af; }}
+QToolButton#disclosure {{ border: none; font-weight: 600; padding: 2px 0; }}
+"""
 
 
 def parse_grid(text: str) -> tuple[int, int]:
@@ -64,11 +97,94 @@ def parse_grid(text: str) -> tuple[int, int]:
     return gw, gh
 
 
+def _fmt_size(n: int) -> str:
+    if n >= 1 << 20:
+        return f"{n / (1 << 20):.1f} MB"
+    if n >= 1 << 10:
+        return f"{n / (1 << 10):.0f} KB"
+    return f"{n} B"
+
+
+def _fmt_sec(sec: float) -> str:
+    if sec >= 60:
+        return f"{int(sec // 60)} 分 {int(sec % 60)} 秒"
+    return f"{sec:.0f} 秒" if sec >= 10 else f"{sec:.1f} 秒"
+
+
+def _label(text: str, role: str | None = None, wrap: bool = False) -> QLabel:
+    w = QLabel(text)
+    if role:
+        w.setProperty("role", role)
+    w.setWordWrap(wrap)
+    return w
+
+
+class DropZone(QFrame):
+    """ファイルを落とす / クリックして選ぶ領域。選ばれたら fileChosen を出す。"""
+
+    fileChosen = Signal(pathlib.Path)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setObjectName("dropZone")
+        self.setAcceptDrops(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumHeight(96)
+        self.title = QLabel("ここにファイルをドロップ")
+        self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        f = self.title.font()
+        f.setPointSizeF(f.pointSizeF() + 1)
+        f.setWeight(QFont.Weight.DemiBold)
+        self.title.setFont(f)
+        self.sub = _label("またはクリックして選ぶ", "muted")
+        self.sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay = QVBoxLayout(self)
+        lay.addStretch(1)
+        lay.addWidget(self.title)
+        lay.addWidget(self.sub)
+        lay.addStretch(1)
+
+    def show_file(self, path: pathlib.Path | None) -> None:
+        if path is None:
+            self.title.setText("ここにファイルをドロップ")
+            self.sub.setText("またはクリックして選ぶ")
+        else:
+            self.title.setText(path.name)
+            self.sub.setText(f"{_fmt_size(path.stat().st_size)} · クリックで選び直す")
+
+    def _set_hover(self, on: bool) -> None:
+        self.setProperty("hover", "true" if on else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def mouseReleaseEvent(self, e: QMouseEvent) -> None:
+        if e.button() == Qt.MouseButton.LeftButton:
+            path, _ = QFileDialog.getOpenFileName(self, "送るファイルを選ぶ")
+            if path:
+                self.fileChosen.emit(pathlib.Path(path))
+
+    def dragEnterEvent(self, e: QDragEnterEvent) -> None:
+        urls = e.mimeData().urls()
+        if len(urls) == 1 and urls[0].isLocalFile() and pathlib.Path(urls[0].toLocalFile()).is_file():
+            e.acceptProposedAction()
+            self._set_hover(True)
+
+    def dragLeaveEvent(self, e) -> None:  # noqa: ANN001 (QDragLeaveEvent)
+        self._set_hover(False)
+
+    def dropEvent(self, e: QDropEvent) -> None:
+        self._set_hover(False)
+        self.fileChosen.emit(pathlib.Path(e.mimeData().urls()[0].toLocalFile()))
+
+
 class MainWindow(QWidget):
+    TAB_FILE, TAB_TEXT = 0, 1
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Vloom — 送信")
-        self.setMinimumWidth(560)
+        self.setStyleSheet(STYLE)
+        self.setMinimumWidth(520)
         self.path: pathlib.Path | None = None
         self.stage: SenderWindow | None = None
         # 一度開いた送信ウィンドウの位置とサイズを覚えておく。三脚でカメラを固定して
@@ -80,34 +196,103 @@ class MainWindow(QWidget):
         # 既定は従来どおり切り下げなし。比べて決めるための切り替え。
         self.snap_cells = False
 
-        self.file_label = QLabel("未選択")
-        self.file_label.setWordWrap(True)
-        pick = QPushButton("ファイルを選択...")
-        pick.clicked.connect(self._pick_file)
-        clear = QPushButton("解除")
-        clear.clicked.connect(self._clear_file)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 18, 20, 18)
+        root.setSpacing(10)
 
-        file_row = QHBoxLayout()
-        file_row.addWidget(pick)
-        file_row.addWidget(clear)
-        file_row.addWidget(self.file_label, 1)
-
+        # ---- 送るもの ----
+        root.addWidget(_label("送るもの", "section"))
+        self.source_tabs = QTabWidget()
+        self.source_tabs.setDocumentMode(True)
+        self.drop = DropZone()
+        self.drop.fileChosen.connect(self._set_file)
+        self.file_label = _label("", "muted")  # 互換用 (計測スクリプトのログに残る)
+        # 解除はタブ列の右端に置き、ファイルを選んだときだけ出す
+        self.clear_btn = QToolButton()
+        self.clear_btn.setText("選択を解除")
+        self.clear_btn.setAutoRaise(True)
+        self.clear_btn.setVisible(False)
+        self.clear_btn.clicked.connect(self._clear_file)
+        file_page = QWidget()
+        fl = QVBoxLayout(file_page)
+        fl.setContentsMargins(0, 8, 0, 0)
+        fl.addWidget(self.drop)
         self.text = QPlainTextEdit()
-        self.text.setPlaceholderText("または、ここにテキストを入力 (ファイル未選択時に送信)")
-        self.text.setFixedHeight(64)
+        self.text.setPlaceholderText("送るテキストを入力")
+        self.text.setFixedHeight(self.drop.minimumHeight())
+        text_page = QWidget()
+        tl = QVBoxLayout(text_page)
+        tl.setContentsMargins(0, 8, 0, 0)
+        tl.addWidget(self.text)
+        self.source_tabs.addTab(file_page, "ファイル")
+        self.source_tabs.addTab(text_page, "テキスト")
+        self.source_tabs.setCornerWidget(self.clear_btn, Qt.Corner.TopRightCorner)
+        root.addWidget(self.source_tabs)
 
+        self.name_override = QLineEdit()
+        self.name_override.setPlaceholderText("省略すると元のファイル名 (テキストは日時入りの名前)")
+        name_form = QFormLayout()
+        name_form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        name_form.addRow("受信側での名前", self.name_override)
+        root.addLayout(name_form)
+
+        root.addSpacing(6)
+
+        # ---- 送信の設定 ----
+        root.addWidget(_label("送信の設定", "section"))
         self.grid = QComboBox()
         self.grid.addItems(GRIDS)
+        self.grid.setCurrentText("13x18 (超密)")  # 既定は縦長・超密 (実測最速)
+        self.fps = QSpinBox()
+        self.fps.setRange(2, 60)
+        self.fps.setValue(DEFAULT_FPS)
+        self.fps.setSuffix(" fps")
+        self.screen = QComboBox()
+        for i, s in enumerate(QGuiApplication.screens()):
+            g = s.geometry()
+            self.screen.addItem(f"{i + 1}: {s.name()} ({g.width()}×{g.height()}, "
+                                f"{s.refreshRate():.0f}Hz)")
+        main_form = QFormLayout()
+        main_form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        main_form.setHorizontalSpacing(16)
+        main_form.addRow("格子", self.grid)
+        main_form.addRow("フレームレート", self.fps)
+        main_form.addRow("表示するモニタ", self.screen)
+        root.addLayout(main_form)
+
+        # 目安 (理論速度・所要時間・注意) をカードにまとめる
+        card = QFrame()
+        card.setProperty("role", "card")
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(12, 10, 12, 10)
+        cl.setSpacing(2)
+        self.theory = QLabel("")
+        f = self.theory.font()
+        f.setWeight(QFont.Weight.DemiBold)
+        self.theory.setFont(f)
+        self.estimate = _label("", "muted", wrap=True)
+        self.warn = _label("", "warn", wrap=True)
+        cl.addWidget(self.theory)
+        cl.addWidget(self.estimate)
+        cl.addWidget(self.warn)
+        root.addWidget(card)
+
+        # ---- 詳細設定 (計測用。既定のままで使える) ----
+        self.adv_toggle = QToolButton()
+        self.adv_toggle.setObjectName("disclosure")
+        self.adv_toggle.setText("詳細設定")
+        self.adv_toggle.setCheckable(True)
+        self.adv_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.adv_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        self.adv_toggle.toggled.connect(self._toggle_advanced)
+        root.addWidget(self.adv_toggle)
+
         self.bpc = QComboBox()
         # 既定は 1bit (白黒)。輝度 4 値は復号できるが、同じ格子の 1bit より遅い
         # (docs/experiments.md 2026-08-28)。既定を 4 値にしていたせいで、
         # --bpc を省いたコマンドが黙って 4 値で送り、13x18 で回収 0/234 になった。
         # PWA・スマホアプリの既定も 1bit なので、そちらに揃える。
         self.bpc.addItems(["1 (白黒)", "2 (輝度4値)"])
-        self.fps = QSpinBox()
-        self.fps.setRange(2, 60)
-        self.grid.setCurrentText("13x18 (超密)")  # 既定は縦長・超密 (実測最速)
-        self.fps.setValue(DEFAULT_FPS)
         self.repair = QSpinBox()
         # 捕捉率が低いほど高いリペア率が効くので、振り幅を広く取っておく
         self.repair.setRange(0, 400)
@@ -127,89 +312,98 @@ class MainWindow(QWidget):
         self.zoom.setSingleStep(0.05)
         self.zoom.setDecimals(2)
         self.zoom.setValue(1.00)
+        self.zoom.setPrefix("× ")
         self.dx = QDoubleSpinBox()
         self.dy = QDoubleSpinBox()
-        for w in (self.dx, self.dy):
+        for w, p in ((self.dx, "横 "), (self.dy, "縦 ")):
             w.setRange(-0.50, 0.50)
             w.setSingleStep(0.01)
             w.setDecimals(3)
             w.setValue(0.0)
-
-        self.screen = QComboBox()
-        for i, s in enumerate(QGuiApplication.screens()):
-            g = s.geometry()
-            self.screen.addItem(f"{i + 1}: {s.name()} ({g.width()}x{g.height()})")
-
-        self.name_override = QLineEdit()
-        self.name_override.setPlaceholderText("受信側に見せるファイル名 (省略可)")
-
-        form = QFormLayout()
-        form.addRow("格子:", self.grid)
-        form.addRow("bit/セル:", self.bpc)
-        form.addRow("FPS:", self.fps)
-        form.addRow("リペア:", self.repair)
-        form.addRow("余白:", self.margin)
+            w.setPrefix(p)
         place = QHBoxLayout()
         place.setContentsMargins(0, 0, 0, 0)
-        place.addWidget(QLabel("倍率"))
-        place.addWidget(self.zoom)
-        place.addWidget(QLabel("横"))
-        place.addWidget(self.dx)
-        place.addWidget(QLabel("縦"))
-        place.addWidget(self.dy)
+        for w in (self.zoom, self.dx, self.dy):
+            w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            place.addWidget(w)
         place_row = QWidget()
         place_row.setLayout(place)
-        form.addRow("配置:", place_row)
-        form.addRow("表示先:", self.screen)
-        form.addRow("ファイル名:", self.name_override)
 
-        self.theory = QLabel("")
-        self.theory.setStyleSheet("color:#8a919c;")
-        self.info = QLabel("スマホアプリ / PWA の「受信」をこの画面に向けてください。")
-        self.info.setWordWrap(True)
-        self.info.setStyleSheet("color:#8a919c;")
+        self.advanced = QWidget()
+        adv_form = QFormLayout(self.advanced)
+        adv_form.setContentsMargins(16, 0, 0, 0)
+        adv_form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        adv_form.setHorizontalSpacing(16)
+        adv_form.addRow("bit/セル", self.bpc)
+        adv_form.addRow("リペア", self.repair)
+        adv_form.addRow("余白", self.margin)
+        adv_form.addRow("コードの配置", place_row)
+        adv_form.addRow("", _label("送信中も矢印キーで位置、+/- で大きさ、H で静止を切り替えられます",
+                                   "muted", wrap=True))
+        self.advanced.setVisible(False)
+        root.addWidget(self.advanced)
 
+        root.addStretch(1)
+
+        # ---- 送信 ----
         start = QPushButton("送信開始")
+        start.setObjectName("primary")
         start.setDefault(True)
         start.clicked.connect(self._start)
         # ファイルは送らず、格子と fps を自動で切り替えながら試験フレームを流す。
         # 受信側に設定ごとの速さが出続けるので、その環境で一番速い組が分かる
-        sweep = QPushButton("さがす (設定を自動で切り替えて速さを測る)")
+        sweep = QPushButton("さがす")
+        sweep.setToolTip("ファイルは送らず、格子と fps を自動で切り替えて、"
+                         "その環境で一番速い組を受信側に表示させます")
         sweep.clicked.connect(lambda: self.start_sweep())
-
-        root = QVBoxLayout(self)
-        root.addLayout(file_row)
-        root.addWidget(self.text)
-        root.addLayout(form)
-        root.addWidget(self.theory)
-        root.addWidget(start)
-        root.addWidget(sweep)
+        actions = QHBoxLayout()
+        actions.addWidget(start, 1)
+        actions.addWidget(sweep)
+        root.addLayout(actions)
+        self.info = _label("スマホアプリ / ブラウザ版の「受信」をこの画面に向けてください。",
+                           "muted", wrap=True)
         root.addWidget(self.info)
 
-        for w in (self.grid, self.bpc):
+        for w in (self.grid, self.bpc, self.screen):
             w.currentIndexChanged.connect(self._update_theory)
         for w in (self.fps, self.repair):
             w.valueChanged.connect(self._update_theory)
+        self.text.textChanged.connect(self._update_theory)
+        self.source_tabs.currentChanged.connect(self._update_theory)
         self._update_theory()
 
     # ---- 入力 ----
 
+    def _set_file(self, path: pathlib.Path) -> None:
+        self.path = path
+        self.drop.show_file(path)
+        self.clear_btn.setVisible(True)
+        self.file_label.setText(f"{path.name} ({path.stat().st_size:,} B)")
+        self.source_tabs.setCurrentIndex(self.TAB_FILE)
+        self._update_theory()
+
     def _pick_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "送るファイルを選ぶ")
         if path:
-            self.path = pathlib.Path(path)
-            size = self.path.stat().st_size
-            self.file_label.setText(f"{self.path.name} ({size:,} B)")
-            self._update_theory()
+            self._set_file(pathlib.Path(path))
 
     def _clear_file(self) -> None:
         self.path = None
-        self.file_label.setText("未選択")
+        self.drop.show_file(None)
+        self.clear_btn.setVisible(False)
+        self.file_label.setText("")
         self._update_theory()
 
+    def _toggle_advanced(self, on: bool) -> None:
+        self.advanced.setVisible(on)
+        self.adv_toggle.setArrowType(Qt.ArrowType.DownArrow if on else Qt.ArrowType.RightArrow)
+        self.adjustSize()
+
     def _payload(self) -> tuple[bytes, str, str] | None:
-        """送るバイト列と、受信側に伝える名前・MIME。"""
-        if self.path is not None:
+        """送るバイト列と、受信側に伝える名前・MIME。いま開いているタブのものを送る。"""
+        if self.source_tabs.currentIndex() == self.TAB_FILE:
+            if self.path is None:
+                return None
             data = self.path.read_bytes()
             name = self.name_override.text().strip() or self.path.name
             mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
@@ -223,10 +417,17 @@ class MainWindow(QWidget):
         name = self.name_override.text().strip() or f"message_{stamp}.txt"
         return text.encode("utf-8"), name, "text/plain;charset=utf-8"
 
+    def _payload_size(self) -> int | None:
+        """目安の計算用。読み込まずにサイズだけ見る。"""
+        if self.source_tabs.currentIndex() == self.TAB_FILE:
+            return self.path.stat().st_size if self.path is not None else None
+        n = len(self.text.toPlainText().encode("utf-8"))
+        return n or None
+
     # ---- 表示 ----
 
     def _refresh_note(self, fps: int) -> str:
-        """要求 fps とモニタのリフレッシュレートの噛み合わせを見る。
+        """要求 fps とモニタのリフレッシュレートの噛み合わせを見る。問題なければ空文字。
 
         コンポジタは垂直同期でしか画を出さないので、実際の表示時間はリフレッシュ
         周期の整数倍に丸められる。リフレッシュの整数分の 1 でない fps を要求すると
@@ -240,26 +441,43 @@ class MainWindow(QWidget):
         periods = hz / fps
         nearest = round(periods)
         if nearest < 2:
-            return f"   ※{hz:.0f}Hz では 1 フレームが 2 リフレッシュ未満 (fps 下げを推奨)"
+            return f"{hz:.0f}Hz のモニタでは 1 フレームが 2 リフレッシュ未満になります。fps を下げてください。"
         if abs(periods - nearest) > 0.02:
             # hz を割り切る fps だけを挙げる (hz/n が整数になる n)
             clean = sorted(
                 {round(hz / n) for n in range(2, 31) if abs(hz / n - round(hz / n)) < 0.02},
                 reverse=True,
             )
-            return (f"   ※{hz:.0f}Hz の整数分の 1 でない (表示時間が不揃いになる)。"
+            return (f"{hz:.0f}Hz の整数分の 1 でないため表示時間が不揃いになります。"
                     f"割り切れる fps: {', '.join(str(c) for c in clean)}")
-        return f"   ({hz:.0f}Hz の {nearest} リフレッシュ分を表示)"
+        return ""
 
     def _update_theory(self) -> None:
         gw, gh = parse_grid(self.grid.currentText())
         bpc = 1 if self.bpc.currentIndex() == 0 else 2
         fps = self.fps.value()
-        kbps = gw * gh * vloom_core.packet_size(bpc) * fps / 1024
-        note = "" if (gw, gh) in AUTO_DETECT_GRIDS else "   ※受信側で格子の明示指定が要る"
-        self.theory.setText(
-            f"理論 {kbps:.0f} KB/s  ({gw}x{gh} · {bpc}bit · {fps}fps){note}"
-            f"\n{self._refresh_note(fps).strip()}")
+        ps = vloom_core.packet_size(bpc)
+        per_frame = gw * gh
+        kbps = per_frame * ps * fps / 1024
+        self.theory.setText(f"理論 {kbps:.0f} KB/s   ({gw}×{gh} · {bpc}bit · {fps}fps)")
+
+        size = self._payload_size()
+        if size is None:
+            self.estimate.setText("送るものを選ぶと、かかる時間の目安が出ます。")
+        else:
+            # 最短 = ソースパケットを 1 枚も落とさず受け取れた場合。1 巡はリペア込みの全フレーム
+            source = math.ceil(size / ps)
+            best = math.ceil(source / per_frame) / fps
+            loop = math.ceil(source * (1 + self.repair.value() / 100) / per_frame) / fps
+            self.estimate.setText(f"{_fmt_size(size)} · 最短 {_fmt_sec(best)} · 1 巡 {_fmt_sec(loop)}")
+
+        warns = []
+        if (gw, gh) not in AUTO_DETECT_GRIDS:
+            warns.append("この格子は受信側で格子の指定が必要です。")
+        if note := self._refresh_note(fps):
+            warns.append(note)
+        self.warn.setText("\n".join(warns))
+        self.warn.setVisible(bool(warns))
 
     def _start(self) -> None:
         payload = self._payload()
@@ -351,8 +569,7 @@ class MainWindow(QWidget):
                        geometry: tuple[int, int, int, int] | None = None) -> None:
         """コマンドラインから条件を流し込む。指定のないものは UI の値のまま。"""
         if file:
-            self.path = pathlib.Path(file)
-            self.file_label.setText(f"{self.path.name} ({self.path.stat().st_size:,} B)")
+            self._set_file(pathlib.Path(file))
         if grid:
             i = next((k for k in range(self.grid.count())
                       if self.grid.itemText(k).split(" ")[0] == grid), None)
