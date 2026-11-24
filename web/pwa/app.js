@@ -342,8 +342,14 @@ $("txStart").addEventListener("click", async () => {
   $("txInfo").textContent = "";
   try {
     const { bytes, name, mime } = await buildTxPayload();
-    // 元のファイル名/MIME をヘッダに埋めて送る (受信側で元名・種別をそのまま復元)
+    // 元のファイル名/MIME をヘッダに埋めて送る (受信側で元名・種別をそのまま復元)。
+    // 縮むものはここで圧縮される。数十 MB だと数秒かかるので、先に一言出して描かせる
+    if (bytes.length > (1 << 20)) {
+      $("txInfo").textContent = "準備しています…";
+      await new Promise((r) => setTimeout(r, 30));
+    }
     const source = vcodeWrapFile(name, mime, bytes);
+    $("txInfo").textContent = "";
     $("txStage").style.display = "flex";
     fitTxCanvas();
     showTxBar();

@@ -232,8 +232,16 @@ class _VcodeSendScreenState extends State<VcodeSendScreen> {
     }
     final name = src.name;
     final mime = src.mime;
-    // 元のファイル名/MIME をヘッダに埋めて送る (受信側で元名・種別をそのまま復元)
+    // 元のファイル名/MIME をヘッダに埋めて送る (受信側で元名・種別をそのまま復元)。
+    // 縮むものはここで圧縮される。数十 MB だと 1〜2 秒かかるので、先に一言出して描かせる
+    if (src.bytes.length > (1 << 20) && mounted) {
+      setState(() => _status = '準備しています…');
+      await Future<void>.delayed(const Duration(milliseconds: 16));
+    }
     final payload = vcodeWrapFile(name: name, mime: mime, data: src.bytes);
+    if (payload.length * 100 < src.bytes.length * 95) {
+      debugPrint('[vcode-tx] 圧縮: ${src.bytes.length} → ${payload.length} B');
+    }
     final sourcePackets = (payload.length / packetSizeFor(_bpc)).ceil();
     final gridParts = _grid.split('x');
     final tx = VcodeTx(

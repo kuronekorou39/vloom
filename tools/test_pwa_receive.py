@@ -30,7 +30,8 @@ PAGES = "https://kuronekorou39.github.io/vloom/index.html"
 
 def build_y4m(path: Path, grid: str, payload_len: int, hold: int, cam: tuple[int, int],
               fill: float, name: str = "e2e.txt",
-              rotate: int = 0, cam_fps: int = 30) -> tuple[int, int, int, float]:
+              rotate: int = 0, cam_fps: int = 30,
+              compress: bool = False) -> tuple[int, int, int, float]:
     """vcode のフレーム列を、擬似カメラが読める Y4M (I420) にする。
 
     映像は実機のカメラと同じ寸法 (既定 1920x1080) で作り、コードはその高さの fill 倍に
@@ -41,7 +42,7 @@ def build_y4m(path: Path, grid: str, payload_len: int, hold: int, cam: tuple[int
     body = (("vloom pwa receive test " * (payload_len // 23 + 2))[:payload_len]).encode()
     # 送信側と同じ二重ラップ: 内側がファイル名/MIME、外側が復元結果の CRC 検証
     payload = vcode_encode.wrap_payload(
-        vcode_encode.wrap_file(name, "text/plain;charset=utf-8", body)
+        vcode_encode.wrap_file(name, "text/plain;charset=utf-8", body, compress=compress)
     )
     frames, _oti, _packets = vcode_encode.build(payload, gw, gh, 1)
     cw, ch = vcode_encode.frame_size(gw, gh)
@@ -91,6 +92,8 @@ def main() -> int:
                          "格子ごとの計算コストの差を測れる")
     ap.add_argument("--timeout", type=int, default=60, help="復元を待つ秒数")
     ap.add_argument("--shot", help="終了時のスクリーンショット出力先")
+    ap.add_argument("--compress", action="store_true",
+                    help="ファイルヘッダ ver 2 (deflate) で送り、受信側の展開を確かめる")
     ap.add_argument("--xss", action="store_true",
                     help="ファイル名に HTML を仕込み、実行されない (エスケープされる) ことを確かめる")
     args = ap.parse_args()
@@ -100,7 +103,7 @@ def main() -> int:
     tmp = Path(tempfile.gettempdir()) / "vloom_fake_cam.y4m"
     cam = tuple(int(v) for v in args.cam.split("x"))
     w, h, n, cell_px = build_y4m(tmp, args.grid, args.payload, args.hold, cam, args.fill, name,
-                                 args.rotate, args.cam_fps)
+                                 args.rotate, args.cam_fps, args.compress)
     print(f"擬似カメラ {w}x{h} · {n} フレーム · 格子 {args.grid} · {args.payload}B "
           f"· {cell_px:.2f} px/セル" + (f" · {args.rotate}度回転" if args.rotate else ""))
 
@@ -140,6 +143,11 @@ def main() -> int:
                 "() => document.getElementById('rxInfo').textContent.includes('<img src=x')")
             print(f"XSS 検査: 実行された={fired} / 文字として表示={escaped}")
             ok = ok and not fired and escaped
+        if args.compress:
+            # 展開できなければヘッダを解けず、名前が vcode_<日時>.bin になる
+            named = name in info
+            print(f"展開の検査: 元の名前で復元={named}")
+            ok = ok and named
         print("結果:", info.strip())
         # 結果表 (実効スループット・走査 fps 等) をそのまま出す。条件を振ったときに
         # 「読めた/読めない」だけでなく、どれだけ速く読めたかを比べられるようにする。

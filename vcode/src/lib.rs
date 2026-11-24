@@ -660,30 +660,93 @@ pub struct FileMeta {
     pub data: Vec<u8>,
 }
 
+/// ファイルヘッダの版。1 = 中身そのまま、2 = 中身を deflate で圧縮。
+const FILE_VERSION_RAW: u8 = 1;
+const FILE_VERSION_DEFLATE: u8 = 2;
+
+/// deflate の圧縮レベル (0〜10)。送るのにかかる時間 (数百 KB/s) に比べて圧縮は
+/// 桁で速いので、速さより縮み方を取る。6 は zlib の既定と同じ釣り合い。
+const DEFLATE_LEVEL: u8 = 6;
+
+/// 圧縮後がこの割合以下に縮むときだけ圧縮版で送る。ほとんど縮まないものを圧縮すると、
+/// 受信側の展開の手間と旧版の受信側で読めなくなる不便だけが残る。
+const COMPRESS_KEEP_RATIO: f64 = 0.95;
+
+/// これより大きいものは、先に一部だけ圧縮して縮むかを見る。写真・動画・zip のような
+/// 圧縮済みの大きいファイルを丸ごと圧縮して捨てる無駄を避ける。
+const COMPRESS_PROBE_ABOVE: usize = 1 << 20;
+const COMPRESS_PROBE_CHUNK: usize = 64 << 10;
+
+/// 受信側が展開を許す上限 (展開後の長さ)。中身は他人の画面から来るので、宣言長と
+/// 実際の展開を両方ここで止める (小さな入力から巨大な出力を作る細工への備え)。
+/// fountain::MAX_PAYLOAD_BYTES (1 オブジェクトの上限) を圧縮率で割り戻した値より十分大きく取る。
+pub const MAX_INFLATED_BYTES: usize = 2 << 30;
+
+/// 圧縮すると縮むか。大きいものは先頭・中央・末尾の 3 か所を試しに圧縮して判断する。
+fn worth_compressing(data: &[u8]) -> bool {
+    if data.len() <= COMPRESS_PROBE_ABOVE {
+        return true; // 小さいものは丸ごと圧縮して比べても安い
+    }
+    let n = COMPRESS_PROBE_CHUNK;
+    let mid = data.len() / 2 - n / 2;
+    let sample: Vec<u8> = [&data[..n], &data[mid..mid + n], &data[data.len() - n..]].concat();
+    let packed = miniz_oxide::deflate::compress_to_vec(&sample, DEFLATE_LEVEL);
+    (packed.len() as f64) <= sample.len() as f64 * COMPRESS_KEEP_RATIO
+}
+
 /// ファイル名・MIME を先頭ヘッダに付けて中身と 1 本のバイト列にする。
-/// レイアウト: [MAGIC 4][ver 1][name_len u16 LE][name][mime_len u16 LE][mime][data...]。
 /// vcode は生バイトしか運ばないため、これを payload として送ると受信側で元名・種別を復元できる。
+///
+/// レイアウト: [MAGIC 4][ver 1][name_len u16 LE][name][mime_len u16 LE][mime][本体]
+///   - ver 1: 本体 = 中身そのまま
+///   - ver 2: 本体 = [展開後の長さ u64 LE][deflate (raw) で圧縮した中身]
+///
+/// 縮むもの (テキスト・文書・ログ・無圧縮の複数ファイルまとめ等) だけ ver 2 にする。
+/// ver 2 は旧版の受信側では解けない (unwrap_file が None を返し、生バイトとして保存される)。
 pub fn wrap_file(name: &str, mime: &str, data: &[u8]) -> Vec<u8> {
+    if worth_compressing(data) {
+        let packed = miniz_oxide::deflate::compress_to_vec(data, DEFLATE_LEVEL);
+        if (packed.len() as f64) + 8.0 <= data.len() as f64 * COMPRESS_KEEP_RATIO {
+            let mut body = Vec::with_capacity(8 + packed.len());
+            body.extend_from_slice(&(data.len() as u64).to_le_bytes());
+            body.extend_from_slice(&packed);
+            return wrap_file_body(name, mime, FILE_VERSION_DEFLATE, &body);
+        }
+    }
+    wrap_file_body(name, mime, FILE_VERSION_RAW, data)
+}
+
+/// 圧縮しない ver 1 で包む (旧版の受信側に確実に渡したいとき・テスト用)。
+pub fn wrap_file_raw(name: &str, mime: &str, data: &[u8]) -> Vec<u8> {
+    wrap_file_body(name, mime, FILE_VERSION_RAW, data)
+}
+
+fn wrap_file_body(name: &str, mime: &str, version: u8, body: &[u8]) -> Vec<u8> {
     let nb = name.as_bytes();
     let mb = mime.as_bytes();
     // 名前/MIME は u16 長に収める (異常長は切り詰め。実ファイル名で起きることはない)
     let nlen = nb.len().min(u16::MAX as usize);
     let mlen = mb.len().min(u16::MAX as usize);
-    let mut v = Vec::with_capacity(4 + 1 + 2 + nlen + 2 + mlen + data.len());
+    let mut v = Vec::with_capacity(4 + 1 + 2 + nlen + 2 + mlen + body.len());
     v.extend_from_slice(&FILE_MAGIC);
-    v.push(1); // version
+    v.push(version);
     v.extend_from_slice(&(nlen as u16).to_le_bytes());
     v.extend_from_slice(&nb[..nlen]);
     v.extend_from_slice(&(mlen as u16).to_le_bytes());
     v.extend_from_slice(&mb[..mlen]);
-    v.extend_from_slice(data);
+    v.extend_from_slice(body);
     v
 }
 
 /// wrap_file の逆。マジックが無い/壊れている場合は None (= 旧形式の生バイト。
 /// 受信側は従来どおり中身推測 + タイムスタンプ名にフォールバックする)。
+/// ver 2 は展開して返す。展開できない・長さが合わない場合も None。
 pub fn unwrap_file(buf: &[u8]) -> Option<FileMeta> {
-    if buf.len() < 7 || buf[..4] != FILE_MAGIC || buf[4] != 1 {
+    if buf.len() < 7 || buf[..4] != FILE_MAGIC {
+        return None;
+    }
+    let version = buf[4];
+    if version != FILE_VERSION_RAW && version != FILE_VERSION_DEFLATE {
         return None;
     }
     let mut off = 5usize;
@@ -701,7 +764,22 @@ pub fn unwrap_file(buf: &[u8]) -> Option<FileMeta> {
     }
     let mime = String::from_utf8(buf[off..off + mlen].to_vec()).ok()?;
     off += mlen;
-    Some(FileMeta { name, mime, data: buf[off..].to_vec() })
+    let body = &buf[off..];
+    let data = if version == FILE_VERSION_RAW {
+        body.to_vec()
+    } else {
+        let len_bytes: [u8; 8] = body.get(..8)?.try_into().ok()?;
+        let len = u64::from_le_bytes(len_bytes);
+        if len > MAX_INFLATED_BYTES as u64 {
+            return None;
+        }
+        let out = miniz_oxide::inflate::decompress_to_vec_with_limit(&body[8..], len as usize).ok()?;
+        if out.len() as u64 != len {
+            return None;
+        }
+        out
+    };
+    Some(FileMeta { name, mime, data })
 }
 
 #[cfg(test)]
@@ -753,6 +831,53 @@ mod tests {
         assert_eq!(got.name, "");
         assert_eq!(got.mime, "");
         assert_eq!(got.data, data);
+    }
+
+    #[test]
+    fn file_wrap_compresses_text_and_roundtrips() {
+        let text: Vec<u8> = "光だけでファイルを渡す。".repeat(5000).into_bytes();
+        let wrapped = wrap_file("notes.txt", "text/plain", &text);
+        assert_eq!(wrapped[4], FILE_VERSION_DEFLATE);
+        assert!(wrapped.len() * 10 < text.len(), "繰り返しの多いテキストは大きく縮むはず");
+        let got = unwrap_file(&wrapped).unwrap();
+        assert_eq!(got.name, "notes.txt");
+        assert_eq!(got.data, text);
+    }
+
+    #[test]
+    fn file_wrap_keeps_incompressible_raw() {
+        // 擬似乱数 (圧縮済みファイル相当) は縮まないので ver 1 のまま。大きい方は抜き取り判定の経路
+        for len in [10_000usize, 3 << 20] {
+            let mut x = 0x9e37_79b9u32;
+            let data: Vec<u8> = (0..len)
+                .map(|_| {
+                    x ^= x << 13;
+                    x ^= x >> 17;
+                    x ^= x << 5;
+                    x as u8
+                })
+                .collect();
+            let wrapped = wrap_file("a.jpg", "image/jpeg", &data);
+            assert_eq!(wrapped[4], FILE_VERSION_RAW, "len={len}");
+            assert_eq!(unwrap_file(&wrapped).unwrap().data, data);
+        }
+    }
+
+    #[test]
+    fn unwrap_file_rejects_bad_deflate() {
+        let text = b"abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabc".repeat(100);
+        let wrapped = wrap_file("x", "", &text);
+        assert_eq!(wrapped[4], FILE_VERSION_DEFLATE);
+        // 宣言長を偽る (実際より長い / 上限超え) と弾く
+        let body = 5 + 2 + 1 + 2;
+        let mut longer = wrapped.clone();
+        longer[body..body + 8].copy_from_slice(&(text.len() as u64 + 1).to_le_bytes());
+        assert_eq!(unwrap_file(&longer), None);
+        let mut huge = wrapped.clone();
+        huge[body..body + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert_eq!(unwrap_file(&huge), None);
+        // 本体を途中で切ると弾く
+        assert_eq!(unwrap_file(&wrapped[..wrapped.len() - 3]), None);
     }
 
     #[test]

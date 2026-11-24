@@ -84,15 +84,26 @@ def crc32(data: bytes) -> int:
 FILE_MAGIC = b"\x00VF1"  # 先頭 NUL で実ファイルの先頭バイトとの衝突を避ける
 
 
-def wrap_file(name: str, mime: str, data: bytes) -> bytes:
-    """[MAGIC 4][ver 1][name_len u16 LE][name][mime_len u16 LE][mime][data]。"""
+def wrap_file(name: str, mime: str, data: bytes, compress: bool = False) -> bytes:
+    """[MAGIC 4][ver][name_len u16 LE][name][mime_len u16 LE][mime][本体]。
+
+    既定は ver 1 (本体 = 中身そのまま)。compress=True なら ver 2 (本体 = 展開後の長さ
+    u64 LE + raw deflate) で包む。Rust の wrap_file は縮むときだけ ver 2 にするが、
+    こちらは受信側の展開経路を試すための明示指定にしてある (縮むかは判断しない)。
+    """
     nb = name.encode("utf-8")[:0xFFFF]
     mb = mime.encode("utf-8")[:0xFFFF]
+    if compress:
+        c = zlib.compressobj(6, zlib.DEFLATED, -15)  # wbits 負 = ヘッダなしの raw deflate
+        body = struct.pack("<Q", len(data)) + c.compress(data) + c.flush()
+        ver = b"\x02"
+    else:
+        body, ver = data, b"\x01"
     return b"".join([
-        FILE_MAGIC, b"\x01",
+        FILE_MAGIC, ver,
         struct.pack("<H", len(nb)), nb,
         struct.pack("<H", len(mb)), mb,
-        data,
+        body,
     ])
 
 

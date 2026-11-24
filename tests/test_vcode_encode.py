@@ -41,3 +41,14 @@ def test_wrap_payload_prepends_end_to_end_crc32():
     (crc,) = struct.unpack(">I", payload[:4])
     assert crc == zlib.crc32(data) & 0xFFFFFFFF
     assert payload[4:] == data
+
+
+def test_wrap_file_compressed_v2():
+    name, data = "a.txt", ("光だけで渡す " * 1000).encode("utf-8")
+    wrapped = ve.wrap_file(name, "text/plain", data, compress=True)
+    assert wrapped[4] == 2  # ver 2 = deflate
+    offset = 5 + 2 + len(name.encode()) + 2 + len(b"text/plain")
+    (inflated_len,) = struct.unpack_from("<Q", wrapped, offset)
+    assert inflated_len == len(data)
+    assert zlib.decompress(wrapped[offset + 8:], -15) == data
+    assert len(wrapped) < len(data) // 10

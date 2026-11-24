@@ -29,3 +29,5 @@ profile = []
 
 [dependencies]
 rayon = { version = "1.10", optional = true }
+# ファイルヘッダ ver 2 の圧縮 (wrap_file)。純 Rust なので wasm でもそのまま動く
+miniz_oxide = "0.8"

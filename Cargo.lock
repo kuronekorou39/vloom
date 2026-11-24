@@ -207,6 +207,7 @@ dependencies = [
 name = "vloom-vcode"
 version = "0.1.0"
 dependencies = [
+ "miniz_oxide",
  "png",
  "rayon",
  "vloom-fountain",

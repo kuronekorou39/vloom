@@ -49,13 +49,15 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## MIT OR Apache-2.0 (デュアルライセンス)
+## MIT OR Apache-2.0 ほか (複数ライセンスから選べるもの)
 
 Vloom は MIT を選択して利用しています。
 
 | コンポーネント | 著作権表示 | 含まれる配布物 |
 |---|---|---|
 | [wasm-bindgen](https://github.com/rustwasm/wasm-bindgen) 0.2 | Copyright (c) 2014 Alex Crichton | WASM |
+| [miniz_oxide](https://github.com/Frommi/miniz_oxide) 0.8 (MIT OR Zlib OR Apache-2.0) | Copyright 2013-2014 RAD Game Tools and Valve Software; Copyright 2010-2014 Rich Geldreich and Tenacious Software LLC; Copyright (c) 2017 Frommi | WASM / APK / iOS / デスクトップ |
+| [adler2](https://github.com/oyvindln/adler2) 2.x (0BSD OR MIT OR Apache-2.0、miniz_oxide の依存) | Copyright (C) Jonas Schievink, oyvindln | WASM / APK / iOS / デスクトップ |
 
 ## LGPL-3.0 (デスクトップアプリのみ)
 
