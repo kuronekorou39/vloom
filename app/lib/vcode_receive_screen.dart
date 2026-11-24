@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert' show utf8;
 import 'dart:isolate';
-import 'dart:math' as math;
 import 'dart:io';
 
 import 'package:camera/camera.dart';
@@ -20,9 +19,14 @@ import 'history_screen.dart' show shareReceived, saveReceivedToFile;
 import 'history_store.dart';
 import 'preset.dart';
 import 'probe_stats.dart';
+import 'receive/detected_code.dart';
+import 'receive/file_sniff.dart';
+import 'receive/focus_hunter.dart';
+import 'receive/packet_coverage.dart';
+import 'receive/rx_stats.dart';
+import 'receive/rx_widgets.dart';
 import 'rx_prefs.dart';
 import 'launch_args.dart';
-import 'packet_coverage.dart';
 import 'scan_worker.dart';
 import 'src/rust/api/fountain.dart';
 import 'src/rust/api/vcode.dart';
@@ -64,48 +68,7 @@ const kAutoAcquireCooldownFrames = 45;
 // 転送だけが 1 回の停止と引き換えに露出の安定 (白飛び防止) を得る形にする。
 const kCamLockStreak = 300;
 
-// --- ピント (AF) の探り直しを見つけて、合っている瞬間に固定する ---
-//
-// 合成計測 (track_motion) では、手振れそのものより**ピント**が効く。13x18
-// (3.4px/セル) で中心のボケ半径が 0.35 → 0.80px になるだけで回収ブロックが
-// 8 割落ちた (露光を 2 倍にしたときの 4 割減より桁で大きい)。据え置きなら AF は
-// 一度合えば動かないが、手持ちは距離が変わり続けて連続 AF が探り直す。
-// 実機の「三脚 138 / 手持ち 60 KB/s」はこれで説明が付く。
-//
-// ただし AF ロックは無条件にやると損をする。三脚では既に合っているので、
-// モード切替の停止 (0.5〜5 秒) だけが乗る (実測 both 49 / ae 76 KB/s)。
-// そこで「探り直しが起きている」証拠を掴んでからにする: 満点率が高い状態から
-// 低い状態へ落ちて戻る、を 2 度観測したら AF が探っていると見なし、
-// 次に高い状態になった瞬間 (= 今ピントが合っている) に固定する。
-// 据え置きでは満点率が落ちないのでこの経路には入らない。
-
-/// 「ピントが合っている」と見なす満点ブロック率 (回収 / 全体)
-const kFocusGoodRatio = 0.55;
-
-/// 「ボケている」と見なす満点ブロック率
-const kFocusBadRatio = 0.25;
-
-/// 探り直しと判断するのに必要な、good → bad → good の往復回数
-const kFocusHuntCycles = 2;
-
-/// good / bad をこの枚数だけ「連続して」満たしたときだけ状態が変わったと見なす。
-///
-/// 回収率は 1〜2 枚おきに大きく上下する (ローリングシャッターで送信フレームの
-/// 切り替わりをまたいだ枚は帯を失う。実機ログで 125/234 と 75/234 が交互に出た)。
-/// 単発の上下を「探り直し」と数えると、実機では受信開始 240ms で 2 往復に達して
-/// 誤爆した。AF の探り直しはボケが 0.5〜2 秒続くので、連続枚数で区別できる。
-const kFocusStateFrames = 6;
-
-/// 検出がこの枚数に達するまでは数え始めない。開始直後は AE/AF が動いている途中で、
-/// 位置合わせも粗いため回収率が低く出る (それを探り直しと取り違えない)。
-const kFocusSettleFrames = 30;
-
-/// AF を固定した後、これだけ連続でボケていたら固定を解除して AF に戻す
-/// (距離が変わって固定したピントが外れた場合)
-const kFocusRelockBadFrames = 12;
-
-/// 1 回の受信で AF 固定を試みる上限。切替のたびにフレームが止まるので粘らない
-const kFocusLockAttempts = 3;
+// AF の探り直し検出の定数と判断は receive/focus_hunter.dart。
 
 // --- 密すぎる格子から降りる誘導 ---
 //
@@ -187,10 +150,6 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   /// 直近の検出失敗理由 (Rust 側が返す FrameError)
   String? _lastError;
 
-  /// 失敗理由の内訳 (CornerMismatch / HeaderNotFound / ...)。
-  /// 「たまに読める」ときに、読めない側が どの工程で落ちているか を切り分ける。
-  final Map<String, int> _errorKinds = {};
-
   /// 成功例と失敗例のダンプをそれぞれ 1 枚ずつ残したか。
   /// 追従できる/できないの差を PC で直接比べるために、両方が要る。
   bool _needOkDump = true;
@@ -210,23 +169,17 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   bool _acquiring = false; // acquire 実行中 (UI スピナー表示)
   bool _autoAcquire = true; // 検出できないとき自動で acquire を走らせる
   bool _acquireIsAuto = false; // 実行中の acquire が自動起動か (自動なら確認ダイアログを出さない)
-  int _autoAcquireAt = 0; // 次に自動 acquire してよい _framesSeen (連発を防ぐクールダウン)
+  int _autoAcquireAt = 0; // 次に自動 acquire してよい _stats.framesSeen (連発を防ぐクールダウン)
   int _autoAcquireCount = 0; // 自動 acquire の実行回数 (統計・UI 表示用)
   int _missStreak = 0; // 連続して検出できなかったフレーム数
   int _detectStreak = 0; // 連続して検出できたフレーム数 (AF/AE ロックの判断に使う)
   bool _restoring = false; // 全パケット到達後の復元・検証中 (画面が固まって見えないように出す)
   bool _camLocked = false; // フォーカス・露出をロック済みか
-  // --- AF の探り直し検出 (定数の解説は kFocusGoodRatio 付近) ---
-  bool _focusLocked = false; // AF を固定済みか
-  bool _focusWasGood = false; // 直近が「合っている」側だったか
-  int _focusHunts = 0; // good -> bad -> good の往復を観測した回数
-  int _focusGoodRun = 0; // 連続して「合っている」側だったフレーム数
-  int _focusBadRun = 0; // 連続して「ボケている」側だったフレーム数
-  int _focusAttempts = 0; // AF 固定を試みた回数
+  FocusHunter _focus = FocusHunter(); // AF の探り直し検出 (receive/focus_hunter.dart)
   bool _seeded = false; // acquire 結果で受信位置を確定済み (中央ガイド枠に頼らず追従)
-  List<double>? _detCorners; // acquire で検出した 4 隅 (回転後画像座標, 8 値) — ハイライト表示用
-  int _detImgW = 0, _detImgH = 0, _detRot = 0; // 検出時の回転後画像寸法と回転 (表示座標への変換用)
-  int _detCellsW = 0, _detCellsH = 0; // 検出したコードのセル数 (充填率・px/セル の計算用)
+  DetectedCode? _det; // 検出したコードの位置 — 枠のハイライト・構図の誘導・読み上げ用
+  // 最後に検出したコードのセル幅。見失って _det を消した後も「密すぎる格子」の誘導に使う
+  int _lastCellsW = 0;
   Timer? _watchdog; // プレビューが灰色 (フレーム途絶) になったら作り直す
   // スキャンは別 isolate (ScanWorker) で回す。理由は scan_worker.dart を参照
   ScanPool? _rx;
@@ -241,34 +194,11 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   // 統計
   int _camCallbacks = 0; // カメラが配信した全フレーム (busy スキップ含む)
   DateTime? _camStarted;
-  int _framesSeen = 0;
-  int _framesDetected = 0;
-  int _framesTracked = 0;
-  int _blocksOk = 0;
-  /// 検出フレームの blocksTotal の累計 (平均回収率 = _blocksOk / これ)
-  int _blocksTotalSum = 0;
-  int _packetsAdded = 0;
-
-  /// 検出フレーム 1 枚あたりの回収ブロック数の分布 (0 / ~25% / ~50% / ~75% / ~99% / 100%)。
-  /// 二極化 (0 と満点だけ) ならローリングシャッターや残像による時間方向の混入、
-  /// 中間に散るなら px/セル・ピント・露出といった空間方向の問題を示す。
-  /// どちらの壁に当たっているかで打ち手が変わるので、切り分けの一次情報として出す。
-  final List<int> _blockHist = List<int>.filled(6, 0);
+  /// 受信 1 回ぶんの集計 (やり直しでインスタンスごと作り直す)
+  RxStats _stats = RxStats();
   // 受信できたパケットの被覆 (重複除く)。ブロックごとに必要数で頭打ちした数が全体の必要数に
   // 届くと復元できる。進捗・カバレッジ格子・distinct 数の表示に使う。OTI が分かった時点で作る
   PacketCoverage? _cov;
-  int _integrityFails = 0; // エンドツーエンド CRC 不一致で受信をやり直した回数
-  int _lastScanMs = 0;
-  // 処理時間の内訳 (30 枚ごとに平均してログに出す)
-  int _tTotal = 0, _tScan = 0, _tDec = 0, _tFrames = 0;
-  int _tMissMs = 0, _tMissN = 0; // 検出できなかったフレームの scan 時間と枚数
-  // スキャン内訳の累計 (Y プレーン回転コピー / 探索・デコード)。
-  // カメラのフレーム間隔に追従できないとき、どちらが効いているかの切り分けに使う。
-  int _rotateUsSum = 0;
-  int _decodeUsSum = 0;
-  int _scanMsSum = 0;
-  int _scanCount = 0;
-  DateTime? _firstDetected;
   Duration? _elapsed;
   String _status = 'カメラ起動待ち';
 
@@ -480,7 +410,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       // 輝度の値域を間引きで測る。16〜235 に収まっていれば video range で、
       // フル 0〜255 を前提にした閾値判定が効きにくい端末だと分かる。
       // 検出できている間は不要なので、未検出のときだけ測る。
-      if (_framesDetected == 0 && _framesSeen % 30 == 0) {
+      if (_stats.framesDetected == 0 && _stats.framesSeen % 30 == 0) {
         var lo = 255, hi = 0;
         for (var i = 0; i < y.bytes.length; i += 64) {
           final v = y.bytes[i];
@@ -495,14 +425,14 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       // どちらが返ってくるかはスキャンしてみないと分からないので、結果を見て振り分ける。
       final wantDump =
           ((_needOkDump || _needNgDump) &&
-              _framesSeen > 0 &&
-              _framesSeen % 20 == 0) ||
+              _stats.framesSeen > 0 &&
+              _stats.framesSeen % 20 == 0) ||
           _lowDumps < LaunchArgs.cached.dumpLow;
       // 成績に関係なく等間隔で保存する標本。間隔は 1MB の受信 (約 200 枚) から
       // 20 枚ほど取れる幅
       final wantAllDump =
           _allDumps < LaunchArgs.cached.dumpAll &&
-          _framesSeen % LaunchArgs.cached.dumpEvery == 0;
+          _stats.framesSeen % LaunchArgs.cached.dumpEvery == 0;
       final rx = _rx;
       if (rx == null) return;
       // 位置検出 (acquire): 画面全体を sweep して実際の 4 隅を取得し、ポップアップで確認 →
@@ -525,12 +455,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           _acquiring = false;
           if (rep.detected) {
             // 検出 4 隅をハイライト表示用に保持 (確認ダイアログの背後に見える)
-            _detCorners = rep.corners.toList();
-            _detImgW = rep.imgW;
-            _detImgH = rep.imgH;
-            _detRot = rep.rot;
-            _detCellsW = rep.cellsW;
-            _detCellsH = rep.cellsH;
+            _setDetected(rep.corners, rep.imgW, rep.imgH, rep.rot, rep.cellsW, rep.cellsH);
           }
         });
         if (_acquireIsAuto) {
@@ -584,24 +509,18 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         }
       }
 
-      _framesSeen++;
-      _lastScanMs = sw.elapsedMilliseconds;
-      _scanMsSum += _lastScanMs;
-      _tScan += _lastScanMs;
-      if (!report.detected) {
-        _tMissMs += _lastScanMs;
-        _tMissN++;
-      }
-      _rotateUsSum += report.rotateUs;
-      _decodeUsSum += report.decodeUs;
-      _scanCount++;
+      _stats.addScan(
+        scanMs: sw.elapsedMilliseconds,
+        detected: report.detected,
+        rotateUs: report.rotateUs,
+        decodeUs: report.decodeUs,
+      );
       if (report.detected) {
-        _framesDetected++;
-        if (report.tracked) _framesTracked++;
-        _firstDetected ??= DateTime.now();
-        _blocksOk += report.blocksOk;
-        _blocksTotalSum += report.blocksTotal;
-        _blockHist[_histBucket(report.blocksOk, report.blocksTotal)]++;
+        _stats.addDetected(
+          tracked: report.tracked,
+          ok: report.blocksOk,
+          total: report.blocksTotal,
+        );
         // 試験フレーム (「さがす」モード) はファイルを運んでいない。デコーダには入れず、
         // 設定ごとの速さを数えるだけにする
         final probeTag = ProbeTag.parse(report.oti);
@@ -614,18 +533,18 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         var done = false;
         final swDec = Stopwatch()..start();
         for (final p in packets) {
-          _packetsAdded++;
+          _stats.packetsAdded++;
           _cov!.add(p);
           if (_dec!.addPacket(packet: p)) {
             done = true;
             break;
           }
         }
-        _tDec += swDec.elapsedMilliseconds;
+        _stats.addDecodeMs(swDec.elapsedMilliseconds);
         debugPrint(
           '[vcode-rx] seq=${report.frameSeq} '
           'blocks=${report.blocksOk}/${report.blocksTotal} '
-          'pkts=$_packetsAdded scan=${_lastScanMs}ms '
+          'pkts=${_stats.packetsAdded} scan=${_stats.lastScanMs}ms '
           'tracked=${report.tracked} done=$done',
         );
         // 半分程度しか取れないフレームは、どの行が落ちたかを出す。散らばって
@@ -658,10 +577,10 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           final payload = vcodeUnwrapPayload(payload: _dec!.payload()!);
           if (payload == null) {
             setState(() => _restoring = false);
-            _integrityFails++;
+            _stats.integrityFails++;
             debugPrint(
               '[vcode-rx] 整合性エラー: 復元結果が破損 '
-              '($_integrityFails 回目)。デコーダを再作成して受信続行',
+              '(${_stats.integrityFails} 回目)。デコーダを再作成して受信続行',
             );
             _dec = null;
             _cov = null;
@@ -683,12 +602,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         // 「今どこを読んでいるか」を毎フレーム更新する。追従中も枠が動くので、
         // ロックできているかが画面を見れば分かる。
         if (report.corners.length >= 8) {
-          _detCorners = report.corners.toList();
-          _detImgW = report.imgW;
-          _detImgH = report.imgH;
-          _detRot = report.rot;
-          _detCellsW = report.cellsW;
-          _detCellsH = report.cellsH;
+          _setDetected(report.corners, report.imgW, report.imgH, report.rot,
+              report.cellsW, report.cellsH);
         }
       } else {
         // 中央ガイド枠での探索が「連続して」失敗するなら、広域 sweep に切り替えて
@@ -698,7 +613,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         _missStreak++;
         _detectStreak = 0;
         // 見失ったら枠を消す (古い位置を出したままにしない)
-        if (_missStreak > kAutoAcquireMissFrames ~/ 2) _detCorners = null;
+        if (_missStreak > kAutoAcquireMissFrames ~/ 2) _det = null;
         // ロングロスト: ロックしたピントが合わなくなった (距離が変わった等) 可能性が
         // あるので AF に戻す。短いロストでは解除しない。モード切替はカメラの
         // フレーム供給を 0.5〜2 秒止めるので、acquire (20) より長く粘る
@@ -708,46 +623,28 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         }
         if (_autoAcquire &&
             _missStreak >= kAutoAcquireMissFrames &&
-            _framesSeen >= _autoAcquireAt) {
-          _autoAcquireAt = _framesSeen + kAutoAcquireCooldownFrames;
+            _stats.framesSeen >= _autoAcquireAt) {
+          _autoAcquireAt = _stats.framesSeen + kAutoAcquireCooldownFrames;
           _missStreak = 0;
           _autoAcquireCount++;
           _startAcquire(auto: true);
         }
       }
-      if (!report.detected) {
-        // 理由は "rot90/7x6:CornerMismatch" のような形。末尾の種別だけ数える。
-        final kind = (report.error ?? '?').split(':').last.split(' ').first;
-        _errorKinds[kind] = (_errorKinds[kind] ?? 0) + 1;
-      }
-      if (!report.detected && _framesSeen % 30 == 0) {
+      if (!report.detected) _stats.addMiss(report.error);
+      if (!report.detected && _stats.framesSeen % 30 == 0) {
         _lastError = report.error;
         debugPrint(
           '[vcode-rx] not detected (${report.error}) '
-          'scan=${_lastScanMs}ms seen=$_framesSeen detected=$_framesDetected '
+          'scan=${_stats.lastScanMs}ms seen=${_stats.framesSeen} '
+          'detected=${_stats.framesDetected} '
           'camFps=${_camFps.toStringAsFixed(1)}',
         );
       }
-      if (mounted && _framesSeen % 5 == 0) setState(() {});
+      if (mounted && _stats.framesSeen % 5 == 0) setState(() {});
       // 1 枚あたりの処理時間の内訳 (30 枚ごとの平均)。受信の処理速度が天井になった
       // とき、Rust のスキャンか、FRB の Y 面コピーか、デコーダ投入か、を切り分ける
-      _tTotal += sw.elapsedMilliseconds;
-      _tFrames++;
-      if (_tFrames >= 30) {
-        debugPrint(
-          '[vcode-rx] timing avg/frame: total=${(_tTotal / _tFrames).toStringAsFixed(1)}ms '
-          'scan(frb)=${(_tScan / _tFrames).toStringAsFixed(1)}ms '
-          'decoder=${(_tDec / _tFrames).toStringAsFixed(1)}ms '
-          'miss=$_tMissN/$_tFrames (${_tMissN == 0 ? 0 : (_tMissMs / _tMissN).toStringAsFixed(0)}ms each) '
-          'rust(rot+dec)=${((_rotateUsSum + _decodeUsSum) / 1000 / (_scanCount == 0 ? 1 : _scanCount)).toStringAsFixed(1)}ms',
-        );
-        _tTotal = 0;
-        _tScan = 0;
-        _tDec = 0;
-        _tFrames = 0;
-        _tMissMs = 0;
-        _tMissN = 0;
-      }
+      final timing = _stats.addFrameTime(sw.elapsedMilliseconds);
+      if (timing != null) debugPrint('[vcode-rx] timing avg/frame: $timing');
     } finally {
       _inFlight--;
       final next = _pendingImg;
@@ -759,6 +656,21 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       }
     }
   }
+
+  void _setDetected(List<double> corners, int imgW, int imgH, int rot,
+      int cellsW, int cellsH) {
+    _det = DetectedCode(
+      corners: corners.toList(),
+      imgW: imgW,
+      imgH: imgH,
+      rot: rot,
+      cellsW: cellsW,
+      cellsH: cellsH,
+    );
+    _lastCellsW = cellsW;
+  }
+
+  int get _sensorOrientation => _cam?.description.sensorOrientation ?? 90;
 
   Future<void> _saveDump(VcodeScanReport report, String tag) async {
     try {
@@ -778,83 +690,16 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     }
   }
 
-  /// 先頭バイトからファイル種別を推定する (vcode はメタデータを運ばないため)
-  (String, String) _sniffType(Uint8List b) {
-    if (b.length > 3 && b[0] == 0xFF && b[1] == 0xD8)
-      return ('jpg', 'image/jpeg');
-    if (b.length > 7 && b[0] == 0x89 && b[1] == 0x50)
-      return ('png', 'image/png');
-    if (b.length > 11 &&
-        b[8] == 0x57 &&
-        b[9] == 0x45 &&
-        b[10] == 0x42 &&
-        b[11] == 0x50) {
-      return ('webp', 'image/webp');
-    }
-    // ISO-BMFF (オフセット 4 に 'ftyp'): HEIC/AVIF (iOS 写真の既定形式)
-    if (b.length > 11 &&
-        b[4] == 0x66 &&
-        b[5] == 0x74 &&
-        b[6] == 0x79 &&
-        b[7] == 0x70) {
-      final brand = String.fromCharCodes(b.sublist(8, 12));
-      if (const {
-        'heic',
-        'heix',
-        'hevc',
-        'heim',
-        'heis',
-        'mif1',
-        'msf1',
-      }.contains(brand)) {
-        return ('heic', 'image/heic');
-      }
-      if (brand == 'avif' || brand == 'avis') return ('avif', 'image/avif');
-    }
-    if (b.length > 3 &&
-        b[0] == 0x25 &&
-        b[1] == 0x50 &&
-        b[2] == 0x44 &&
-        b[3] == 0x46) {
-      return ('pdf', 'application/pdf');
-    }
-    if (b.length > 1 && b[0] == 0x50 && b[1] == 0x4B)
-      return ('zip', 'application/zip');
-    // 先頭 4KB の制御文字率でテキスト判定
-    final probe = b.take(4096);
-    final ctrl = probe
-        .where((c) => c < 9 || (c > 13 && c < 32) || c == 127)
-        .length;
-    if (probe.isNotEmpty && ctrl / probe.length < 0.02) {
-      return ('txt', 'text/plain;charset=utf-8');
-    }
-    return ('bin', 'application/octet-stream');
-  }
-
   Future<void> _onComplete(Uint8List rawPayload) async {
-    // ファイル名/MIME ヘッダがあれば元の名前・種別で保存。無ければ従来どおり推測+タイムスタンプ名。
+    // ファイル名/MIME ヘッダがあれば元の名前・種別で保存。無ければ推測+タイムスタンプ名。
     final meta = vcodeUnwrapFile(buf: rawPayload);
-    final Uint8List payload;
-    final String name;
-    final String mime;
-    final ts = DateTime.now()
-        .toIso8601String()
-        .replaceAll(':', '-')
-        .substring(0, 19);
-    if (meta != null) {
-      payload = meta.data;
-      final sniff = _sniffType(payload);
-      name = meta.name.isNotEmpty ? meta.name : 'vcode_$ts.${sniff.$1}';
-      mime = meta.mime.isNotEmpty ? meta.mime : sniff.$2;
-    } else {
-      payload = rawPayload;
-      final sniff = _sniffType(payload);
-      name = 'vcode_$ts.${sniff.$1}';
-      mime = sniff.$2;
-    }
-    final elapsed = _firstDetected == null
-        ? Duration.zero
-        : DateTime.now().difference(_firstDetected!);
+    final payload = meta?.data ?? rawPayload;
+    final (name, mime) = resolveReceivedName(
+      payload,
+      headerName: meta?.name ?? '',
+      headerMime: meta?.mime ?? '',
+    );
+    final elapsed = _stats.elapsedSinceFirstDetect();
     setState(() {
       _payload = payload;
       _elapsed = elapsed;
@@ -867,10 +712,10 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         '${(ms / 1000).toStringAsFixed(2)}s'
         ' · ${kbps.toStringAsFixed(1)}KB/s'
         ' · cam${_camFps.toStringAsFixed(0)}fps'
-        ' · 検出$_framesDetected/$_framesSeen(追従$_framesTracked)'
-        ' · blk$_blocksOk · pkt$_packetsAdded'
-        ' · scan${_scanCount > 0 ? (_scanMsSum / _scanCount).round() : 0}ms'
-        ' (rot${(_rotateUsSum / (_scanCount == 0 ? 1 : _scanCount) / 1000).toStringAsFixed(1)}/dec${(_decodeUsSum / (_scanCount == 0 ? 1 : _scanCount) / 1000).toStringAsFixed(1)}ms)';
+        ' · 検出${_stats.framesDetected}/${_stats.framesSeen}(追従${_stats.framesTracked})'
+        ' · blk${_stats.blocksOk} · pkt${_stats.packetsAdded}'
+        ' · scan${_stats.avgScanMs}ms'
+        ' (rot${_stats.avgRotateMs.toStringAsFixed(1)}/dec${_stats.avgDecodeMs.toStringAsFixed(1)}ms)';
     debugPrint(
       '[vcode-rx] COMPLETE: $name ${payload.length} bytes in ${ms}ms, $note',
     );
@@ -916,103 +761,9 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       report.cellsW ~/ 20,
       (report.cellsH - 56) ~/ 20, // 上下のストリップ (28 セル × 2) を除いた段数
     );
-    if (_framesSeen % 30 == 0) {
+    if (_stats.framesSeen % 30 == 0) {
       debugPrint('[vloom-probe] ${probe.summary()}');
     }
-  }
-
-  /// 「さがす」モードの一覧。設定ごとの実効スループットを出し続ける。
-  Widget _probePanel() {
-    final probe = _probe!;
-    final best = probe.best;
-    const head = TextStyle(color: Colors.white70, fontSize: 11);
-    TextStyle cell(ProbeSetting s) => TextStyle(
-      color: identical(s, best) ? const Color(0xFF7CFFB2) : Colors.white,
-      fontSize: 13,
-      fontWeight: identical(s, best) ? FontWeight.w700 : FontWeight.w500,
-      fontFeatures: const [FontFeature.tabularFigures()],
-    );
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.7),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            best == null
-                ? 'さがす: 計測中… (${probe.settingCount} 通り × '
-                      '${probe.dwellSec.toStringAsFixed(0)} 秒)'
-                : 'おすすめ: ${best.grid} / ${best.fps}fps '
-                      '(悪いときで ${best.minKbps!.toStringAsFixed(0)} KB/s)',
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Table(
-            columnWidths: const {
-              0: FixedColumnWidth(14),
-              1: FlexColumnWidth(1.25),
-              2: FlexColumnWidth(0.7),
-              3: FlexColumnWidth(0.95),
-              4: FlexColumnWidth(1.0),
-              5: FlexColumnWidth(1.9),
-            },
-            defaultVerticalAlignment: TableCellVerticalAlignment.middle,
-            children: [
-              const TableRow(
-                children: [
-                  SizedBox.shrink(),
-                  Text('格子', style: head),
-                  Text('fps', style: head),
-                  Text('KB/s', style: head, textAlign: TextAlign.right),
-                  Text('読めた', style: head, textAlign: TextAlign.right),
-                  Text('悪い〜良い', style: head, textAlign: TextAlign.right),
-                ],
-              ),
-              for (final s in probe.settings)
-                TableRow(
-                  children: [
-                    Text(
-                      identical(s, probe.current) ? '▶' : '',
-                      style: const TextStyle(color: Colors.white, fontSize: 11),
-                    ),
-                    Text(s.grid, style: cell(s)),
-                    Text('${s.fps}', style: cell(s)),
-                    Text(
-                      s.kbps.toStringAsFixed(0),
-                      style: cell(s),
-                      textAlign: TextAlign.right,
-                    ),
-                    Text(
-                      '${(s.recovery * 100).toStringAsFixed(0)}%',
-                      style: cell(s),
-                      textAlign: TextAlign.right,
-                    ),
-                    Text(
-                      s.visits == 0
-                          ? '-'
-                          : '${s.minKbps!.toStringAsFixed(0)}〜'
-                                '${s.maxKbps!.toStringAsFixed(0)}',
-                      style: cell(s),
-                      textAlign: TextAlign.right,
-                    ),
-                  ],
-                ),
-            ],
-          ),
-          // 構図の読み上げ (充填率・余白・px/セル) もここにまとめる
-          const SizedBox(height: 6),
-          _alignPanel(),
-        ],
-      ),
-    );
   }
 
   /// 探索する格子をスキャナに反映する。送信側の格子が分かっているなら固定するほど
@@ -1057,62 +808,31 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     // camlock=none は「カメラに一切触らない」、both は「_lockCamera が AF も握る」
     // 指定なので、どちらもこちらでは触らない。afhunt=0 で比較計測用に切れる。
     final mode = LaunchArgs.cached.camLock ?? 'ae';
-    if (mode == 'none' || mode == 'both' || total <= 0) return;
+    if (mode == 'none' || mode == 'both') return;
     if (LaunchArgs.cached.afHunt == 0) return;
-    final ratio = ok / total;
-    if (_focusLocked) {
-      // 固定したピントが外れた (距離が変わった) なら AF に戻す
-      _focusBadRun = ratio < kFocusBadRatio ? _focusBadRun + 1 : 0;
-      if (_focusBadRun >= kFocusRelockBadFrames) {
-        _focusBadRun = 0;
-        _focusLocked = false;
-        _focusWasGood = false;
+    final huntsBefore = _focus.hunts;
+    final action = _focus.update(ok, total, framesDetected: _stats.framesDetected);
+    if (_focus.hunts != huntsBefore) {
+      debugPrint('[vcode-rx] focus hunt ${_focus.hunts}/$kFocusHuntCycles');
+    }
+    switch (action) {
+      case FocusAction.lock:
+        debugPrint('[vcode-rx] focus lock (回収率 ${(ok * 100 / total).round()}%, '
+            '${_focus.attempts}/$kFocusLockAttempts 回目)');
+        _setFocusLocked(true);
+      case FocusAction.unlock:
         debugPrint('[vcode-rx] focus unlock (ピントが外れた)');
         _setFocusLocked(false);
-      }
-      return;
-    }
-    // 開始直後は AE/AF が動いている途中なので数えない
-    if (_framesDetected < kFocusSettleFrames) return;
-    // 連続して同じ側にいる枚数を数える。中間の値はどちらの走も進めず、切りもしない
-    // (1〜2 枚おきの上下で走が途切れると、続いているボケを見つけられない)
-    if (ratio >= kFocusGoodRatio) {
-      _focusGoodRun++;
-      _focusBadRun = 0;
-    } else if (ratio < kFocusBadRatio) {
-      _focusBadRun++;
-      _focusGoodRun = 0;
-    }
-    if (_focusWasGood && _focusBadRun >= kFocusStateFrames) {
-      // 合っていたのが続けてボケた = 探り直しが始まった
-      _focusWasGood = false;
-      _focusHunts++;
-      debugPrint('[vcode-rx] focus hunt $_focusHunts/$kFocusHuntCycles');
-      return;
-    }
-    if (_focusGoodRun < kFocusStateFrames) return;
-    _focusWasGood = true;
-    if (_focusHunts >= kFocusHuntCycles && _focusAttempts < kFocusLockAttempts) {
-      // 探り直しを見たうえで、今まさに合っている。ここで固定すればボケを避けられる
-      _focusAttempts++;
-      _focusLocked = true;
-      _focusBadRun = 0;
-      debugPrint('[vcode-rx] focus lock (回収率 ${(ratio * 100).round()}%, '
-          '$_focusAttempts/$kFocusLockAttempts 回目)');
-      _setFocusLocked(true);
+      case null:
+        break;
     }
   }
 
   /// AF の判定状態を初期に戻す (受信のやり直し・カメラの作り直し)。
   /// 固定していたら AF に返してから捨てる。
   void _resetFocusState() {
-    if (_focusLocked) _setFocusLocked(false);
-    _focusLocked = false;
-    _focusWasGood = false;
-    _focusHunts = 0;
-    _focusGoodRun = 0;
-    _focusBadRun = 0;
-    _focusAttempts = 0;
+    if (_focus.locked) _setFocusLocked(false);
+    _focus = FocusHunter();
   }
 
   /// AF だけを固定/解除する (露出は _lockCamera が別に扱う)。
@@ -1158,27 +878,14 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _dec = null;
       _probe = null;
       _cov = null;
-      _packetsAdded = 0;
-      _blocksOk = 0;
-      _blocksTotalSum = 0;
-      _blockHist.fillRange(0, _blockHist.length, 0);
-      _errorKinds.clear();
-      _framesSeen = 0;
-      _framesDetected = 0;
-      _framesTracked = 0;
-      _integrityFails = 0;
-      _scanMsSum = 0;
-      _rotateUsSum = 0;
-      _decodeUsSum = 0;
-      _scanCount = 0;
-      _firstDetected = null;
+      _stats = RxStats();
       _elapsed = null;
       _missStreak = 0;
       _detectStreak = 0;
       _autoAcquireAt = 0;
       _autoAcquireCount = 0;
       _seeded = false;
-      _detCorners = null;
+      _det = null;
       _lastError = null;
     });
     // スキャナの追従状態も捨てる (古い位置に引きずられないように)
@@ -1233,21 +940,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _probe = null;
       _payload = null;
       _savedItem = null;
-      _framesSeen = 0;
-      _framesDetected = 0;
-      _framesTracked = 0;
-      _blocksOk = 0;
-      _blocksTotalSum = 0;
-      _blockHist.fillRange(0, _blockHist.length, 0);
-      _errorKinds.clear();
-      _packetsAdded = 0;
       _cov = null;
-      _integrityFails = 0;
-      _scanMsSum = 0;
-      _rotateUsSum = 0;
-      _decodeUsSum = 0;
-      _scanCount = 0;
-      _firstDetected = null;
+      _stats = RxStats();
       _elapsed = null;
       _acquireRequested = false;
       _acquiring = false;
@@ -1258,14 +952,9 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _detectStreak = 0;
       _camLocked = false; // カメラは作り直すので AF/AE は自動に戻る
       // カメラごと作り直すため、AF の固定も判定の履歴も無効になる
-      _focusLocked = false;
-      _focusWasGood = false;
-      _focusHunts = 0;
-      _focusGoodRun = 0;
-      _focusBadRun = 0;
-      _focusAttempts = 0;
+      _focus = FocusHunter();
       _seeded = false;
-      _detCorners = null;
+      _det = null;
       _status = 'カメラ起動待ち';
     });
     await _initCamera();
@@ -1281,7 +970,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     setState(() {
       _acquiring = !auto;
       _acquireRequested = true;
-      if (!auto) _detCorners = null; // 手動時は前回のハイライトを消す
+      if (!auto) _det = null; // 手動時は前回のハイライトを消す
     });
   }
 
@@ -1379,56 +1068,6 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     );
   }
 
-  /// 受信データのカバレッジ格子 (パケット番号順の被覆)。高さは固定で、
-  /// 一定サイズ内に収める (カメラ表示位置がずれないように)。
-  Widget _coverageGrid(PacketCoverage cov) {
-    return SizedBox(
-      height: 72,
-      width: double.infinity,
-      child: CustomPaint(
-        painter: _CoverageGridPainter(cov: cov, distinct: cov.distinct),
-      ),
-    );
-  }
-
-  /// 回収ブロック数 → ヒストグラムのバケット番号
-  static int _histBucket(int ok, int total) {
-    if (total <= 0 || ok <= 0) return 0;
-    if (ok >= total) return 5;
-    final r = ok / total;
-    if (r < 0.25) return 1;
-    if (r < 0.50) return 2;
-    if (r < 0.75) return 3;
-    return 4;
-  }
-
-  static const _histLabels = ['0', '~25%', '~50%', '~75%', '~99%', '満点'];
-
-  /// 失敗理由の内訳を "CornerMismatch:120(80%) HeaderNotFound:30(20%)" の 1 行に
-  String _errorKindsText() {
-    final total = _errorKinds.values.fold<int>(0, (a, b) => a + b);
-    if (total == 0) return '-';
-    final e = _errorKinds.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-    return e
-        .map((x) => '${x.key}:${x.value}(${(x.value * 100 / total).round()}%)')
-        .join('  ');
-  }
-
-  /// ヒストグラムを "0:12 ~25%:3 ... 満点:80" の 1 行にする
-  String _histText() {
-    final total = _blockHist.fold<int>(0, (a, b) => a + b);
-    if (total == 0) return '-';
-    final parts = <String>[];
-    for (var i = 0; i < _blockHist.length; i++) {
-      if (_blockHist[i] > 0) {
-        final pct = (_blockHist[i] * 100 / total).round();
-        parts.add('${_histLabels[i]}:${_blockHist[i]}($pct%)');
-      }
-    }
-    return parts.join('  ');
-  }
-
   /// 受信完了時の統計。テーブル表示とクリップボードコピーで同じデータを使う
   /// (条件を振って比べるとき、目視で書き写すと必ず取りこぼすため)。
   List<(String, String)> _statsRows() {
@@ -1452,38 +1091,30 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
             : '${preview.width.round()}×${preview.height.round()}',
       ),
       ('格子指定', _forcedGrid == kGridAuto ? '自動 (候補総当たり)' : _forcedGrid),
-      ('カメラフレーム数', '$_framesSeen (検出 $_framesDetected / 追従 $_framesTracked)'),
+      ('カメラフレーム数',
+          '${_stats.framesSeen} (検出 ${_stats.framesDetected} / 追従 ${_stats.framesTracked})'),
       ('カメラ実効fps', _camFps.toStringAsFixed(1)),
-      ('回収ブロック', '$_blocksOk (部分回収込み)'),
-      ('　1 枚あたり分布', _histText()),
-      ('未検出の内訳', _errorKindsText()),
+      ('回収ブロック', '${_stats.blocksOk} (部分回収込み)'),
+      ('　1 枚あたり分布', _stats.histText()),
+      ('未検出の内訳', _stats.errorKindsText()),
       // AF の探り直しをいくつ観測し、固定できたか。手持ちの遅さがピント由来かを
       // 実機ログで確かめるための一次情報 (三脚では 0 回のままになるはず)
-      (
-        'AF 探り直し',
-        _focusAttempts > 0
-            ? '$_focusHunts 回検出 → $_focusAttempts 回固定'
-                '${_focusLocked ? " (固定中)" : " (解除済み)"}'
-            : '$_focusHunts 回検出 (固定せず)',
-      ),
-      ('投入パケット', '$_packetsAdded'),
+      ('AF 探り直し', _focus.summary()),
+      ('投入パケット', '${_stats.packetsAdded}'),
       ('distinct パケット', '${_cov?.distinct ?? 0}'),
-      if (_integrityFails > 0) ('整合性エラー再試行', '$_integrityFails 回'),
+      if (_stats.integrityFails > 0)
+        ('整合性エラー再試行', '${_stats.integrityFails} 回'),
       (
         '平均スキャン時間',
-        _scanCount > 0 ? '${(_scanMsSum / _scanCount).round()} ms' : '-',
+        _stats.scanCount > 0 ? '${_stats.avgScanMs} ms' : '-',
       ),
       (
         '　うち回転コピー',
-        _scanCount > 0
-            ? '${(_rotateUsSum / _scanCount / 1000).toStringAsFixed(1)} ms'
-            : '-',
+        _stats.scanCount > 0 ? '${_stats.avgRotateMs.toStringAsFixed(1)} ms' : '-',
       ),
       (
         '　うち探索・デコード',
-        _scanCount > 0
-            ? '${(_decodeUsSum / _scanCount / 1000).toStringAsFixed(1)} ms'
-            : '-',
+        _stats.scanCount > 0 ? '${_stats.avgDecodeMs.toStringAsFixed(1)} ms' : '-',
       ),
     ];
     return rows;
@@ -1517,150 +1148,30 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     }
   }
 
-  Widget _statsTable() {
-    final rows = _statsRows();
-    return Table(
-      columnWidths: const {0: IntrinsicColumnWidth(), 1: FlexColumnWidth()},
-      defaultVerticalAlignment: TableCellVerticalAlignment.middle,
-      children: [
-        for (final (label, value) in rows)
-          TableRow(
-            children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 8),
-                child: Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 8),
-                child: Text(
-                  value,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ],
-          ),
-      ],
-    );
-  }
-
-  /// 構図の誘導 (人向けの一言)。数字の読み上げ (_alignPanel) と違い、どう動けば
-  /// いいかだけを短く出す。問題がなければ null (何も出さない)
-  String? _guideHint() {
-    final c = _detCorners;
-    if (c == null || c.length < 8 || _detImgW == 0 || _detImgH == 0) {
-      return null;
-    }
-    final delta =
-        ((_cam?.description.sensorOrientation ?? 90) - _detRot + 360) % 360;
-    var minX = 1.0, maxX = 0.0, minY = 1.0, maxY = 0.0;
-    for (var i = 0; i < 4; i++) {
-      final p = previewNorm(c[i * 2], c[i * 2 + 1], _detImgW, _detImgH, delta);
-      minX = math.min(minX, p.dx);
-      maxX = math.max(maxX, p.dx);
-      minY = math.min(minY, p.dy);
-      maxY = math.max(maxY, p.dy);
-    }
-    // はみ出しかけ → まず離れる (寄せの指示より優先)
-    if (minX < 0.02 || maxX > 0.98 || minY < 0.02 || maxY > 0.98) {
-      return '少し離してください';
-    }
-    final topLen = math.sqrt(
-      math.pow(c[2] - c[0], 2) + math.pow(c[3] - c[1], 2),
-    );
-    final leftLen = math.sqrt(
-      math.pow(c[6] - c[0], 2) + math.pow(c[7] - c[1], 2),
-    );
-    final pxW = _detCellsW > 0 ? topLen / _detCellsW : 0.0;
-    final pxH = _detCellsH > 0 ? leftLen / _detCellsH : 0.0;
-    final px = math.min(pxW, pxH);
-    if (px > 0 && px < 2.2) return 'もう少し近づけてください';
-    final cx = (minX + maxX) / 2 - 0.5, cy = (minY + maxY) / 2 - 0.5;
-    if (cx.abs() > 0.16 || cy.abs() > 0.16) {
-      final dirs = <String>[
-        if (cx < -0.16) '左',
-        if (cx > 0.16) '右',
-        if (cy < -0.16) '上',
-        if (cy > 0.16) '下',
-      ];
-      return 'コードが${dirs.join("と")}に寄っています';
-    }
-    return null;
-  }
-
   /// 密度を落としたほうが速い状況なら、その誘導文を返す。
   /// 検出はできているのに満点ブロックが集まらない = 1 セルあたりの画素が足りない。
   String? _sparseHint() {
-    if (_framesDetected < kSparseHintFrames || _blocksTotalSum <= 0) return null;
-    if (_detCellsW <= kSparseHintCellsW) return null; // すでに十分粗い
+    final ratio = _stats.recoveryRatio;
+    if (_stats.framesDetected < kSparseHintFrames || ratio == null) return null;
+    if (_lastCellsW <= kSparseHintCellsW) return null; // すでに十分粗い
     if (_forcedGrid == kSparseHintGrid) return null;
-    final ratio = _blocksOk / _blocksTotalSum;
     if (ratio >= kSparseHintRatio) return null;
     return '読めているのは ${(ratio * 100).round()}% です。'
         'タップして $kSparseHintGrid にすると速いことがあります';
   }
 
-  Widget _hintBadge(String text, {VoidCallback? onTap}) {
-    final badge = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Text(
-        text,
-        textAlign: TextAlign.center,
-        style: const TextStyle(
-          color: Colors.amberAccent,
-          fontSize: 13,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    );
-    return onTap == null ? badge : GestureDetector(onTap: onTap, child: badge);
-  }
-
   List<Widget> _hintWidgets() {
     final sparse = _sparseHint();
+    final guide = _det?.guideHint(_sensorOrientation);
     return [
       if (sparse != null)
-        _hintBadge(sparse, onTap: () {
+        HintBadge(sparse, onTap: () {
           // 送信側も同じ格子にしないと読めないので、切り替えたことが分かるように
-          // 通常の格子選択と同じ経路 (_selectGrid) を通す
+          // 通常の格子選択と同じ経路 (_selectPreset) を通す
           final i = kPresets.indexWhere((p) => p.grid == kSparseHintGrid);
           if (i >= 0) _selectPreset(i);
         }),
-      ..._legacyHintWidgets(),
-    ];
-  }
-
-  List<Widget> _legacyHintWidgets() {
-    final h = _guideHint();
-    if (h == null) return const [];
-    return [
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.55),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Text(
-          h,
-          style: const TextStyle(
-            color: Colors.amberAccent,
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ),
+      if (guide != null) HintBadge(guide),
     ];
   }
 
@@ -1673,7 +1184,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         Colors.amber,
         Icons.travel_explore,
       ),
-      _ when _framesDetected > 0 && _missStreak < kBadgeHoldMissFrames => (
+      _ when _stats.framesDetected > 0 && _missStreak < kBadgeHoldMissFrames => (
         _camLocked
             ? '追従中 (露出固定)'
             : _seeded
@@ -1687,11 +1198,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color, width: 1.5),
-      ),
+      decoration: overlayBadgeDecoration(border: color),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1722,11 +1229,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       borderRadius: BorderRadius.circular(16),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.55),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.white70, width: 1.2),
-        ),
+        decoration: overlayBadgeDecoration(border: Colors.white70, borderWidth: 1.2),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1874,18 +1377,12 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                 : const Alignment(0, -0.3),
             // 検出領域のハイライト (シアン)。緑のガイド枠と区別できる色。
             // カメラ画像の矩形に重ねて描く = 画像座標との対応がそのまま保たれる。
-            overlay: _detCorners == null
+            overlay: _det == null
                 ? null
                 : CustomPaint(
-                    painter: _DetectedQuadPainter(
-                      corners: _detCorners!,
-                      imgW: _detImgW,
-                      imgH: _detImgH,
-                      delta:
-                          ((cam.description.sensorOrientation) -
-                              _detRot +
-                              360) %
-                          360,
+                    painter: DetectedQuadPainter(
+                      _det!,
+                      sensorOrientation: cam.description.sensorOrientation,
                     ),
                   ),
           ),
@@ -1938,44 +1435,12 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                   : const Alignment(0, -0.12),
               child: FractionallySizedBox(
                 widthFactor: 0.74,
-                child: _probePanel(),
+                child: ProbePanel(probe: _probe!, footer: _alignPanel()),
               ),
             ),
           ),
-        if (_restoring)
-          Container(
-            color: Colors.black54,
-            child: const Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 12),
-                  Text(
-                    '復元中…',
-                    style: TextStyle(color: Colors.white, fontSize: 15),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        if (_acquiring)
-          Container(
-            color: Colors.black54,
-            child: const Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 12),
-                  Text(
-                    '位置を検出中…',
-                    style: TextStyle(color: Colors.white, fontSize: 15),
-                  ),
-                ],
-              ),
-            ),
-          ),
+        if (_restoring) const BusyOverlay('復元中…'),
+        if (_acquiring) const BusyOverlay('位置を検出中…'),
         Positioned(
           left: 0,
           right: 0,
@@ -1997,77 +1462,9 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     return c[0] == 0 ? 0.92 : c[1] / c[0];
   }
 
-  /// 構図合わせ用の読み上げ。検出した四隅から、カメラ画像に対する充填率と四辺の
-  /// 余白、px/セル を出す。三脚やウィンドウをどちらへどれだけ動かせばよいかを
-  /// 数字で判断できるようにする (緑の枠は目安にしかならないため)。
-  Widget _alignPanel() {
-    final c = _detCorners;
-    if (c == null || c.length < 8 || _detImgW == 0 || _detImgH == 0) {
-      return const SizedBox.shrink();
-    }
-    final delta =
-        ((_cam?.description.sensorOrientation ?? 90) - _detRot + 360) % 360;
-    var minX = 1.0, maxX = 0.0, minY = 1.0, maxY = 0.0;
-    for (var i = 0; i < 4; i++) {
-      final p = previewNorm(c[i * 2], c[i * 2 + 1], _detImgW, _detImgH, delta);
-      minX = math.min(minX, p.dx);
-      maxX = math.max(maxX, p.dx);
-      minY = math.min(minY, p.dy);
-      maxY = math.max(maxY, p.dy);
-    }
-    final fillW = (maxX - minX) * 100, fillH = (maxY - minY) * 100;
-    final top = minY * 100, bottom = (1 - maxY) * 100;
-    final left = minX * 100, right = (1 - maxX) * 100;
-    // px/セル は回転後画像座標での辺の長さをセル数で割る (カメラ画像の実寸)。
-    // 縦横で違えば小さいほう = 読み取りが厳しいほうを出す
-    final topLen = math.sqrt(
-      math.pow(c[2] - c[0], 2) + math.pow(c[3] - c[1], 2),
-    );
-    final leftLen = math.sqrt(
-      math.pow(c[6] - c[0], 2) + math.pow(c[7] - c[1], 2),
-    );
-    final pxW = _detCellsW > 0 ? topLen / _detCellsW : 0.0;
-    final pxH = _detCellsH > 0 ? leftLen / _detCellsH : 0.0;
-    final pxPerCell = math.min(pxW, pxH);
-    // 余白が 2% を切った辺は、少しの揺れで四隅マーカーが画角から出る
-    final tight = <String>[
-      if (top < 2) '上',
-      if (bottom < 2) '下',
-      if (left < 2) '左',
-      if (right < 2) '右',
-    ];
-    // いちばん余っている辺を示す。そちらへ寄せる/大きくする余地がある
-    final slack = {
-      '上': top,
-      '下': bottom,
-      '左': left,
-      '右': right,
-    }.entries.reduce((a, b) => a.value >= b.value ? a : b);
-    final style = TextStyle(
-      color: tight.isEmpty ? Colors.white : Colors.redAccent,
-      fontSize: 13,
-      fontFeatures: const [FontFeature.tabularFigures()],
-      height: 1.35,
-    );
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: const Color(0x99000000),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Text(
-          '充填 幅 ${fillW.toStringAsFixed(0)}% · 高 ${fillH.toStringAsFixed(0)}%'
-          '   ${pxPerCell.toStringAsFixed(1)} px/セル\n'
-          '余白 上 ${top.toStringAsFixed(0)}%  下 ${bottom.toStringAsFixed(0)}%  '
-          '左 ${left.toStringAsFixed(0)}%  右 ${right.toStringAsFixed(0)}%'
-          '${tight.isNotEmpty ? "\nはみ出し注意: ${tight.join("/")}" : "   (${slack.key}に余裕)"}',
-          style: style,
-        ),
-      ),
-    );
-  }
+  /// 構図合わせ用の読み上げ (充填率・余白・px/セル)。
+  Widget _alignPanel() =>
+      AlignPanel(code: _det, sensorOrientation: _sensorOrientation);
 
   /// 受信中の操作パネル。カメラ映像の上に重なるので、画面の端へ向かって濃くなる
   /// 黒のグラデーションを敷き、文字は読めるが映像側の端は透ける形にする。
@@ -2164,13 +1561,13 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                   // 受信データのカバレッジ格子: ESI ごとのマスを、受信済み=緑(source)/水色(repair)、
                   // 未受信=灰で塗る。埋まらない穴が「取れていないフレームのデータ」= 未完了の原因。
                   if (cov != null && _panelExpanded) ...[
-                    _coverageGrid(cov),
+                    CoverageGrid(cov),
                     const SizedBox(height: 4),
                   ],
                   // 一度も検出できていないときだけ、切り分けに要る実測値を出す。
                   // 回転はスキャナが rot と rot+180 しか試さないため端末差が出やすく、
                   // 輝度レンジは iOS の video range (16〜235) を見分けるために要る。
-                  if (_framesDetected == 0 && _framesSeen > 10)
+                  if (_stats.framesDetected == 0 && _stats.framesSeen > 10)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 4),
                       child: Text(
@@ -2186,13 +1583,13 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                     ),
                   if (_panelExpanded) _measureSettings(),
                   Text(
-                    '検出 $_framesDetected/$_framesSeen · '
+                    '検出 ${_stats.framesDetected}/${_stats.framesSeen} · '
                     // distinct (重複除く) が必要数 K に届くと復元される。投入は重複込みの累計。
                     '受信 ${cov?.useful ?? 0}${total != null ? "/$total 必要" : ""} '
-                    '(投入 $_packetsAdded 重複込) · scan ${_lastScanMs}ms'
+                    '(投入 ${_stats.packetsAdded} 重複込) · scan ${_stats.lastScanMs}ms'
                     '${_seeded ? " · [位置固定]" : ""}'
                     '${_autoAcquireCount > 0 ? " · 自動取得 $_autoAcquireCount 回" : ""}'
-                    '${_integrityFails > 0 ? " · 整合性エラー $_integrityFails" : ""}',
+                    '${_stats.integrityFails > 0 ? " · 整合性エラー ${_stats.integrityFails}" : ""}',
                     style: const TextStyle(fontSize: 12, color: Colors.white),
                   ),
                 ],
@@ -2232,7 +1629,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                 title: const Text('詳細な統計', style: TextStyle(fontSize: 13)),
                 tilePadding: const EdgeInsets.symmetric(horizontal: 8),
                 childrenPadding: const EdgeInsets.only(bottom: 8),
-                children: [_statsTable()],
+                children: [StatsTable(_statsRows())],
               ),
               const SizedBox(height: 12),
               Wrap(
@@ -2295,144 +1692,4 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       ),
     );
   }
-}
-
-/// acquire で検出した 4 隅 (回転後画像座標) を、プレビュー表示座標へ写してハイライトする。
-/// 回転差 delta = (sensorOrientation - 検出時 rot) を吸収してからプレビュー矩形に一様スケールする。
-/// VcodeCameraView の overlay として、カメラ画像の矩形そのものに重ねて描く。
-/// 回転後画像座標 (imgW×imgH) の点を、プレビュー表示の正規化座標 (0..1) へ写す。
-/// delta = (sensorOrientation - 検出時 rot + 360) % 360。プレビューは sensorOrientation
-/// 空間で表示されるので、検出時の回転との差分だけ回す。検出枠の描画と構図合わせの
-/// 読み上げで同じ変換を使う。
-Offset previewNorm(double x, double y, int imgW, int imgH, int delta) {
-  double ix, iy;
-  int pw, ph;
-  if (delta == 90) {
-    ix = imgH - 1 - y;
-    iy = x;
-    pw = imgH;
-    ph = imgW;
-  } else if (delta == 180) {
-    ix = imgW - 1 - x;
-    iy = imgH - 1 - y;
-    pw = imgW;
-    ph = imgH;
-  } else if (delta == 270) {
-    ix = y;
-    iy = imgW - 1 - x;
-    pw = imgH;
-    ph = imgW;
-  } else {
-    ix = x;
-    iy = y;
-    pw = imgW;
-    ph = imgH;
-  }
-  return Offset(ix / pw, iy / ph);
-}
-
-class _DetectedQuadPainter extends CustomPainter {
-  _DetectedQuadPainter({
-    required this.corners,
-    required this.imgW,
-    required this.imgH,
-    required this.delta,
-  });
-
-  /// 回転後画像座標の 4 隅 [tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y]
-  final List<double> corners;
-  final int imgW;
-  final int imgH;
-
-  /// (sensorOrientation - 検出時 rot + 360) % 360。プレビューは sensorOrientation 空間。
-  final int delta;
-
-  Offset _map(double x, double y, Size size) {
-    // この CustomPaint はカメラ画像の矩形そのものに重ねてあるので、
-    // 正規化座標を比率で伸ばすだけでよい
-    final n = previewNorm(x, y, imgW, imgH, delta);
-    return Offset(n.dx * size.width, n.dy * size.height);
-  }
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (corners.length < 8 || imgW == 0 || imgH == 0) return;
-    final tl = _map(corners[0], corners[1], size);
-    final tr = _map(corners[2], corners[3], size);
-    final br = _map(corners[4], corners[5], size);
-    final bl = _map(corners[6], corners[7], size);
-    final path = Path()
-      ..moveTo(tl.dx, tl.dy)
-      ..lineTo(tr.dx, tr.dy)
-      ..lineTo(br.dx, br.dy)
-      ..lineTo(bl.dx, bl.dy)
-      ..close();
-    canvas.drawPath(path, Paint()..color = const Color(0x3300E5FF));
-    canvas.drawPath(
-      path,
-      Paint()
-        ..color = const Color(0xFF00E5FF)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3,
-    );
-    final dot = Paint()..color = const Color(0xFF00E5FF);
-    for (final p in [tl, tr, br, bl]) {
-      canvas.drawCircle(p, 6, dot);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _DetectedQuadPainter old) =>
-      old.corners != corners ||
-      old.delta != delta ||
-      old.imgW != imgW ||
-      old.imgH != imgH;
-}
-
-/// 受信データのカバレッジ格子。ESI をマスに割り当て、受信済み=緑(source)/水色(repair)、
-/// 未受信=灰で塗る。埋まらない穴 = まだ取れていないパケット (= 復元が完了しない原因) が
-/// 一目でわかる。RaptorQ は distinct が必要数 K に届くと復元できる。
-class _CoverageGridPainter extends CustomPainter {
-  _CoverageGridPainter({required this.cov, required this.distinct});
-  final PacketCoverage cov;
-  // 描いた時点の受信数。cov は同じインスタンスが更新され続けるので、比較用に控える
-  final int distinct;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final cap = cov.cap;
-    if (cap <= 0 || size.width <= 0 || size.height <= 0) return;
-    // 1 マス 1 パケットだと 10MB 超で数十万マスになり、毎フレームの描画で UI が詰まる。
-    // マス数を上限で抑え、1 マスに入るパケットの充足率を濃淡で出す (PWA と同じ)。
-    const s = 6.0;
-    final cols = math.max(1, (size.width / s).floor());
-    final rows = math.max(1, (size.height / s).floor());
-    // 1 マス = 度数分布のバケット perB 個 (= per パケット)
-    final perB = math.max(1, (cap / cov.bucketW / (cols * rows)).ceil());
-    final per = perB * cov.bucketW;
-    final cells = math.min(cols * rows, (cap / per).ceil());
-    final unseen = Paint()..color = const Color(0xFF37474F);
-    final paint = Paint();
-    for (var i = 0; i < cells; i++) {
-      var got = 0;
-      for (var j = i * perB; j < (i + 1) * perB && j < cov.hist.length; j++) {
-        got += cov.hist[j];
-      }
-      final rect = Rect.fromLTWH((i % cols) * s, (i ~/ cols) * s, s - 1, s - 1);
-      if (got == 0) {
-        canvas.drawRect(rect, unseen);
-        continue;
-      }
-      final a = 0.25 + 0.75 * math.min(1.0, got / per);
-      // source と repair で色を分ける (マスの中心がどちら側かで判定)
-      final src = (i + 0.5) * per < cov.kt;
-      paint.color = (src ? const Color(0xFF4CAF50) : const Color(0xFF29B6F6))
-          .withValues(alpha: a);
-      canvas.drawRect(rect, paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _CoverageGridPainter old) =>
-      old.distinct != distinct || !identical(old.cov, cov);
 }

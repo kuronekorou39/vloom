@@ -19,7 +19,7 @@ import init, { VcodeRx } from "./pkg/vloom_core_wasm.js";
 /** vcode のブロック一辺と上下ストリップ (Rust の Layout と一致させる) */
 const BLOCK = 20;
 const STRIP = 28;
-/** 走査に載せたい px/セル。これを超えるぶんは縮小してよい (vcode.js と同値) */
+/** 走査に載せたい px/セル。これを超えるぶんは縮小してよい (vcode-receive.js と同値) */
 const TARGET_PX_PER_CELL = 3.6;
 /** 1 枚あたりの走査画素数の上限 */
 const MAX_PIXELS = 2560 * 1440;

@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:vloom/packet_coverage.dart';
+import 'package:vloom/receive/packet_coverage.dart';
 
 /// 転送長 len・シンボル長 t・ブロック数 z の OTI を作る。
 Uint8List oti(int len, int t, int z) {
