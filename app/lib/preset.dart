@@ -158,6 +158,18 @@ const kPresets = <VcodePreset>[
     preset: ResolutionPreset.max,
   ),
   VcodePreset(
+    // 300 ブロック。小さいノート PC (64Hz) からの受信で、速度テスト 3 回とも最速
+    // (15x20 / 32fps で 133〜195 KB/s、docs/measurements/2026-11-25-laptop-sweep.md)。
+    // 3 px/セル 前後まで寄せて使う
+    name: '最密',
+    description: '300×456 セル、300 ブロック。寄せて写せば超密より速い。'
+        'ノート PC 送信 32fps で 185〜195 KB/s',
+    grid: '15x20',
+    bpc: 1,
+    fps: 30,
+    preset: ResolutionPreset.max,
+  ),
+  VcodePreset(
     name: '4値(実験)',
     description: '輝度4値。復号はできるが同じ格子の 1bit より遅い (実測 22.8 KB/s)',
     grid: '7x6',

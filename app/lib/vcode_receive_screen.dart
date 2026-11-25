@@ -111,6 +111,9 @@ const kIdleAfter = Duration(seconds: 3);
 /// 省電力モードで走査する間隔。コードが写れば、この間隔のうちに気付いて全速に戻る
 const kIdleScanInterval = Duration(milliseconds: 300);
 
+/// 省電力中に広域探索 (送信側の格子に合わせ直す) をする間隔
+const kIdleAcquireInterval = Duration(seconds: 3);
+
 /// これだけ何も検出しなければカメラを止めて一時停止する (再開ボタンを出す)
 const kIdlePauseAfter = Duration(minutes: 2);
 
@@ -120,6 +123,15 @@ int? get _persistedPresetIndex {
   return (i != null && i >= 0 && i < kPresets.length) ? i : null;
 }
 
+/// 前回「自動」を選んでいた (RxPrefs には -1 で残す)。起動引数の指定があればそちらが優先
+bool get _persistedAuto =>
+    RxPrefs.presetIndex == kAutoPresetIndex &&
+    LaunchArgs.cached.grid == null &&
+    LaunchArgs.cached.preset == null;
+
+/// 「自動」を選んだときの _presetIndex / RxPrefs の値
+const kAutoPresetIndex = -1;
+
 class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     with WidgetsBindingObserver {
   CameraController? _cam;
@@ -127,8 +139,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   /// 選択中のプリセット。送信側と同じものを選べば格子も解像度も揃う
   // 起動 Intent でプリセットを指定できる (計測の自動化用)。カメラの解像度を
   // 決めるので、初期化より前に確定していなければならない。
-  int _presetIndex = LaunchArgs.cached.grid != null
-      ? -1 // 格子を直接指定したときはカスタム扱い
+  int _presetIndex = LaunchArgs.cached.grid != null || _persistedAuto
+      ? -1 // 格子を直接指定したとき・自動のときはプリセット外
       : (LaunchArgs.cached.preset ??
             _persistedPresetIndex ??
             kDefaultPresetIndex);
@@ -137,6 +149,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   // 格子の直接指定があればそれを使う (プリセットに無い格子を測るため)
   String _forcedGrid =
       LaunchArgs.cached.grid ??
+      (_persistedAuto ? kGridAuto : null) ??
       kPresets[LaunchArgs.cached.preset ??
               _persistedPresetIndex ??
               kDefaultPresetIndex]
@@ -244,6 +257,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   /// 最後にコードを検出した時刻 (カメラを開いた時刻から数え始める)
   DateTime? _lastDetectAt;
   DateTime? _lastIdleScan;
+  DateTime? _lastIdleAcquire;
 
   /// 何も写っていない時間が続いて、走査を間引いている
   bool get _isIdle {
@@ -717,11 +731,16 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           _camLocked = false;
           _lockCamera(false);
         }
-        // 省電力モードの間は広域探索 (重い) をしない。間引いた走査で写ったのに気付いたら戻る
+        // 広域探索は送信側の格子が違うときに合わせ直す唯一の手段なので、省電力中も止めない。
+        // ただし間隔を空ける (v0.5.4 で止めてしまい、13x18 のまま 15x20 を永久に掴めなかった)
+        final idleAcquireOk = !_isIdle ||
+            _lastIdleAcquire == null ||
+            DateTime.now().difference(_lastIdleAcquire!) >= kIdleAcquireInterval;
         if (_autoAcquire &&
-            !_isIdle &&
-            _missStreak >= kAutoAcquireMissFrames &&
-            _stats.framesSeen >= _autoAcquireAt) {
+            idleAcquireOk &&
+            _missStreak >= (_isIdle ? 1 : kAutoAcquireMissFrames) &&
+            (_isIdle || _stats.framesSeen >= _autoAcquireAt)) {
+          if (_isIdle) _lastIdleAcquire = DateTime.now();
           _autoAcquireAt = _stats.framesSeen + kAutoAcquireCooldownFrames;
           _missStreak = 0;
           _autoAcquireCount++;
@@ -1014,6 +1033,16 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     RxPrefs.savePreset(i); // 次回の手起動でも同じ格子で立ち上がる
     _applyForcedGrid();
     _changePreset(kPresets[i].preset);
+  }
+
+  /// 格子を「自動」にする (送信側の格子を写りから判別)。次回の起動でも自動のまま
+  void _selectAutoGrid() {
+    setState(() {
+      _presetIndex = kAutoPresetIndex;
+      _forcedGrid = kGridAuto;
+    });
+    RxPrefs.savePreset(kAutoPresetIndex);
+    _applyForcedGrid();
   }
 
   Future<void> _changePreset(ResolutionPreset p) async {
@@ -1369,6 +1398,28 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                 '格子 — 送信側と同じものを選ぶ',
                 style: TextStyle(fontWeight: FontWeight.w600),
               ),
+            ),
+            // 自動: 送信側の格子を写りから判別する。どれを選べばいいか分からないとき用
+            ListTile(
+              dense: true,
+              leading: Icon(
+                _forcedGrid == kGridAuto
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_off,
+                color: _forcedGrid == kGridAuto
+                    ? Theme.of(ctx).colorScheme.primary
+                    : null,
+              ),
+              title: const Text('自動 (送信側に合わせる)'),
+              subtitle: const Text(
+                '送信側の格子を写りから判別します。最初に掴むまで少し時間がかかります',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              onTap: () {
+                Navigator.pop(ctx);
+                _selectAutoGrid();
+              },
             ),
             for (var i = 0; i < kPresets.length; i++)
               ListTile(
