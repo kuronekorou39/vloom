@@ -42,6 +42,26 @@ pub struct Encoder {
     block_k: Vec<u32>,
 }
 
+/// 1 ソースブロックのシンボル数の目安 (42B シンボルで約 290KB)。
+///
+/// raptorq の既定は 1 ブロックを上限近く (約 5 万シンボル = 2.3MB) まで大きくする。
+/// 送信は全ブロックへ均等に配るので、大きいブロックはどれも受信の最後 1% でほぼ同時に
+/// 揃い、復元の計算 (スマホで 1 ブロック数秒) が「ゲージ満タン後」にまとめて走っていた。
+/// 小さいブロックは揃う時期が終盤にばらけ、計算を受信と並行して済ませられる。
+/// 30.6MB の見積もり (docs/measurements/2026-11-25-laptop-sweep.md): 満タン後の待ちは
+/// 約 9 秒 → 3 秒、受信は 2% 延びる (最後のブロックが揃うのを待つ分)。計算の合計も 3 割減る。
+const TARGET_BLOCK_SYMBOLS: u64 = 7_000;
+
+/// payload を何ブロックに分けるか決めた OTI。シンボル長と整列は raptorq の既定と同じ。
+/// 受信側は OTI に書かれた分け方に従うので、古い受信側でもそのまま読める。
+fn block_config(len: u64, packet_size: u16) -> ObjectTransmissionInformation {
+    let def = ObjectTransmissionInformation::with_defaults(len, packet_size);
+    let kt = len.div_ceil(def.symbol_size() as u64);
+    // Z は 8bit。上限に当たったら既定より細かくはしない (1 ブロックの上限 56,403 には収まる)
+    let z = kt.div_ceil(TARGET_BLOCK_SYMBOLS).clamp(def.source_blocks() as u64, 255) as u8;
+    ObjectTransmissionInformation::new(len, def.symbol_size(), z, 1, def.symbol_alignment())
+}
+
 /// RaptorQ の ESI は 24bit。1 ブロックのシンボル番号はこの手前までしか使えない。
 const MAX_ESI: u32 = (1 << 24) - 1;
 
@@ -59,7 +79,7 @@ impl Encoder {
     /// 取りこぼしは 1 巡 (= ファイル全体ぶん) 待たないと埋まらず、ブロックごとの
     /// 余剰リペアも「もう復元済みのブロック」に使われて無駄になる。
     pub fn new(payload: &[u8], packet_size: u16, extra_repair: u32) -> Self {
-        let encoder = RqEncoder::with_defaults(payload, packet_size);
+        let encoder = RqEncoder::new(payload, block_config(payload.len() as u64, packet_size));
         let oti = encoder.get_config();
         let blocks = encoder.get_block_encoders();
         let k_total: u64 = blocks.iter().map(|b| b.source_packets().len() as u64).sum();

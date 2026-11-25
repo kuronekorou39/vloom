@@ -293,6 +293,20 @@ def oti_with_defaults(transfer_length: int, max_packet_size: int) -> Oti:
     return Oti(transfer_length, symbol_size, z, n, alignment)
 
 
+# fountain::Encoder (Rust) の block_config と同じ。1 ソースブロックのシンボル数の目安。
+# 大きいブロックはどれも受信の最後にほぼ同時に揃い、復元計算が「ゲージ満タン後」に
+# まとめて走るので小さく割る (理由と計測は fountain/src/lib.rs の TARGET_BLOCK_SYMBOLS)
+TARGET_BLOCK_SYMBOLS = 7_000
+
+
+def oti_for_vloom(transfer_length: int, max_packet_size: int) -> Oti:
+    """送信側 (Rust の fountain::Encoder) と同じ分け方の OTI。"""
+    d = oti_with_defaults(transfer_length, max_packet_size)
+    kt = -(-transfer_length // d.symbol_size)
+    z = min(255, max(d.source_blocks, -(-kt // TARGET_BLOCK_SYMBOLS)))
+    return Oti(transfer_length, d.symbol_size, z, 1, d.alignment)
+
+
 def source_packets(data: bytes, oti: Oti) -> list[bytes]:
     """全 source ブロックの source パケット [SBN 1B][ESI 3B BE][symbol] を順に返す。"""
     t = oti.symbol_size
@@ -438,7 +452,7 @@ addEventListener("keydown", e => {{ if (e.key === "h") hud.classList.toggle("off
 
 def build(payload: bytes, grid_w: int, grid_h: int, bpc: int):
     """ペイロードを vcode フレーム (セル列) の列にする。VcodeTx と同じ割り当て。"""
-    oti = oti_with_defaults(len(payload), packet_size(bpc))
+    oti = oti_for_vloom(len(payload), packet_size(bpc))
     packets = source_packets(payload, oti)
     oti_bytes = oti.serialize()
 

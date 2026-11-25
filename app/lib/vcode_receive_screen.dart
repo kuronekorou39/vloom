@@ -1372,7 +1372,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         Icons.center_focus_strong,
       ),
       _ when _cov != null && _cov!.useful >= _cov!.kt && !_completing => (
-        '最後の計算中… (カメラはそのままで)',
+        '仕上げ中… (カメラはそのままで)',
         Colors.lightGreenAccent,
         Icons.hourglass_top,
       ),
@@ -1776,10 +1776,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                   if (total != null && !_panelExpanded)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 6),
-                      child: LinearProgressIndicator(
-                        value: (cov!.useful / total).clamp(0.0, 1.0),
-                        minHeight: 6,
-                        backgroundColor: const Color(0x55FFFFFF),
+                      child: ReceiveGauge(
+                        received: (cov!.useful / total).clamp(0.0, 1.0),
                       ),
                     ),
                   // 受信データのカバレッジ格子: ESI ごとのマスを、受信済み=緑(source)/水色(repair)、

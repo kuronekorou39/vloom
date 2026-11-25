@@ -1,6 +1,6 @@
 // Vloom PWA Service Worker: アプリシェル + WASM をキャッシュしてオフライン動作させる。
 // バージョンを上げるとキャッシュを更新する。
-const CACHE = "vloom-pwa-v60";
+const CACHE = "vloom-pwa-v62";
 const ASSETS = [
   "./",
   "./index.html",
@@ -9,6 +9,7 @@ const ASSETS = [
   "./vcode-send.js",
   "./vcode-receive.js",
   "./coverage.js",
+  "./decode-worker.js",
   "./scan-worker.js",
   "./calibration.js",
   "./history.js",

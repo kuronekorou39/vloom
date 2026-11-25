@@ -27,6 +27,8 @@ const SCAN_TARGET_PX_PER_CELL = 3.6;
 const SCAN_MAX_PIXELS = 2560 * 1440;
 // 検出できているのに新しいパケットが増えない状態がこれだけ続いたら、原因を出す
 const STALL_MS = 6000;
+// 復元ワーカーの準備完了をこれだけ待つ。返事が無ければ主スレッドでの復元に切り替える
+const DECODER_READY_TIMEOUT_MS = 5000;
 // 診断表示の更新間隔
 const DIAG_INTERVAL_MS = 500;
 
@@ -211,29 +213,91 @@ export class VcodeReceiver {
     this.blocks = blocks;
     this.blocksTotal = blocksTotal;
     if (this.probe) { this.probe(blocks, blocksTotal); this._progress(); return; }
-    if (!this.dec) {
-      try { this.dec = new FountainDecoder(oti); } catch (_) { return; }
+    if (!this.cov) {
       this.cov = new PacketCoverage(oti);
       this.needed = this.cov.kt;
+      this._startDecoder(oti);
     }
     const tDec = performance.now();
-    let done = false;
-    for (const pkt of packets) {
-      // 重複を除いた被覆を数える (進捗と停滞判定に使う。複数ソースブロック対応は coverage.js)
-      this.cov.add(pkt);
-      if (this.dec.addPacket(pkt)) { done = true; break; }
-    }
-    // 主スレッドでのデコーダ投入時間 (1 枚あたり)。ワーカーを増やしても伸びないとき、
+    // 重複を除いた被覆を数える (進捗と停滞判定に使う。複数ソースブロック対応は coverage.js)
+    for (const pkt of packets) this.cov.add(pkt);
+    // 復元計算は別ワーカーへ投げっぱなし (完了は _onDecoded で受ける)
+    this._feedDecoder(packets);
+    // 主スレッドで復元した場合はここで完了していることがある (完了表示を進捗で上書きしない)
+    if (this.finished) return;
+    // 主スレッドでの投入時間 (1 枚あたり)。ワーカーを増やしても伸びないとき、
     // ここが詰まっているのかを切り分ける
     this.decMs = this.decMs * 0.9 + (performance.now() - tDec) * 0.1;
     this.distinct = this.cov.useful;
     this._progress();
-    if (!done) return;
-    // エンドツーエンド CRC-32 検証。不一致 = 復元結果が破損 → デコーダを捨てて受信続行
-    const payload = vcodeUnwrapPayload(this.dec.payload());
+  }
+
+  /** 復元ワーカー (decode-worker.js) を立てる。作れない環境では主スレッドで復元する。 */
+  _startDecoder(oti) {
+    this._stopDecoder();
+    const gen = this.decGen;
+    // 準備完了の返事が来るまでに渡したパケットは控えておく (ワーカーが使えず主スレッドに
+    // 切り替えるとき、渡し直す)
+    this.decBacklog = [];
+    this.decReady = false;
+    const fallback = () => { if (gen === this.decGen && !this.decReady) this._decodeInline(oti); };
+    try {
+      const w = new Worker(new URL("./decode-worker.js", import.meta.url), { type: "module" });
+      w.onmessage = (e) => this._onDecodeMsg(gen, e.data, fallback);
+      w.onerror = fallback;
+      w.postMessage({ k: "init", oti });
+      this.decWorker = w;
+      // 読み込みに失敗しても知らせが来ない場合に備え、返事が無ければ主スレッドに切り替える
+      setTimeout(fallback, DECODER_READY_TIMEOUT_MS);
+    } catch (_) {
+      this._decodeInline(oti);
+    }
+  }
+
+  /** ワーカーが使えないときの退避: 主スレッドで復元する (大きいファイルでは最後に止まる) */
+  _decodeInline(oti) {
+    const backlog = this.decBacklog || [];
+    this._stopDecoder();
+    console.warn("[vcode-rx] 復元ワーカーが使えないので主スレッドで復元する");
+    try {
+      this.decInline = new FountainDecoder(oti);
+    } catch (_) {
+      this.cov = null; // 宣言サイズが不正なフレーム。次の枚で作り直す
+      return;
+    }
+    for (const packets of backlog) this._feedDecoder(packets);
+  }
+
+  _feedDecoder(packets) {
+    if (this.decInline) {
+      for (const p of packets) {
+        if (!this.decInline.addPacket(p)) continue;
+        this._onDecoded(vcodeUnwrapPayload(this.decInline.payload()));
+        return;
+      }
+      return;
+    }
+    if (this.decWorker && packets.length) {
+      if (!this.decReady) this.decBacklog.push(packets);
+      this.decWorker.postMessage({ k: "feed", packets });
+    }
+  }
+
+  _onDecodeMsg(gen, m, fallback) {
+    if (gen !== this.decGen || this.finished) return;
+    if (m.k === "ready") { this.decReady = true; this.decBacklog = []; }
+    else if (m.k === "fatal") fallback();
+    else if (m.k === "done") this._onDecoded(m.payload);
+    else if (m.k === "corrupt") this._onDecoded(null);
+    else if (m.k === "error") { this._stopDecoder(); this.cov = null; } // 不正な OTI。次の枚で作り直す
+  }
+
+  /** 復元と CRC 検証が終わった (payload が null なら CRC 不一致) */
+  _onDecoded(payload) {
+    this._stopDecoder();
     if (!payload) {
+      // 不一致 = ゴミパケットが RaptorQ を汚染して復元結果が破損 → デコーダを作り直して受信続行
       console.warn("[vcode-rx] 整合性エラー: 復元結果が破損。デコーダを作り直して受信続行");
-      this.dec = null;
       this.cov = null;
       this.distinct = 0;
       this.lastDistinct = 0;
@@ -241,6 +305,15 @@ export class VcodeReceiver {
       return;
     }
     this._finish(payload);
+  }
+
+  _stopDecoder() {
+    this.decGen = (this.decGen || 0) + 1;
+    if (this.decWorker) this.decWorker.terminate();
+    this.decWorker = null;
+    this.decInline = null;
+    this.decBacklog = [];
+    this.decReady = false;
   }
 
   /** 走査 fps の実測 (ワーカー全体の合計)。 */
@@ -279,7 +352,6 @@ export class VcodeReceiver {
     if (this.rafId) cancelAnimationFrame(this.rafId);
     this.rx = new VcodeRx();
     this.setGrid(this.grid);
-    this.dec = null;
     const loop = () => {
       if (!this.stream || this.finished) return;
       this._scanInline();
@@ -289,7 +361,8 @@ export class VcodeReceiver {
   }
 
   _reset() {
-    this.rx = null; this.dec = null; this.finished = false; this.frames = 0; this.detected = 0;
+    this._stopDecoder();
+    this.rx = null; this.finished = false; this.frames = 0; this.detected = 0;
     this.stats = { fps: 0, mean: 0, sat: 0 };
     this._lastDiag = 0;
     this.firstDetectedAt = null;
@@ -389,6 +462,7 @@ export class VcodeReceiver {
     this.rafId = null;
     for (const w of this.workers) w.terminate();
     this.workers = [];
+    this._stopDecoder();
     if (this.reader) { try { this.reader.cancel(); } catch (_) { /* 済 */ } this.reader = null; }
     if (this.procTrack) { this.procTrack.stop(); this.procTrack = null; }
     this.video.removeEventListener("loadedmetadata", this._onResize);

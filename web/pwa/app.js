@@ -429,8 +429,15 @@ const receiver = new VcodeReceiver({
     // 進捗は「重複を除いたパケット数 / 必要数」で出す。frames や検出回数は増え続けるので、
     // それだけを出していると、同じブロックしか拾えていない状態が「順調に見えて終わらない」
     // になっていた (実際に起きていた壊れ方)。
-    const pct = needed ? Math.min(100, Math.floor((distinct / needed) * 100)) : 0;
-    const head = needed
+    //
+    // 必要数に届いても最後のブロックの復元計算が残るので、バーは受信を 97% までの目盛りで
+    // 進め、届いたら「仕上げ中」として残りを流れる表示にする (満タンのまま待たされると苦痛)。
+    const ratio = needed ? Math.min(1, distinct / needed) : 0;
+    const finishing = needed > 0 && distinct >= needed;
+    const pct = Math.floor(ratio * 97);
+    const head = finishing
+      ? `仕上げ中… · ${distinct}/${needed} パケット`
+      : needed
       ? `復元まで ${pct}% · ${distinct}/${needed} パケット`
       : detected
         ? "コードを検出 · ヘッダ待ち"
@@ -438,6 +445,7 @@ const receiver = new VcodeReceiver({
     $("rxInfo").textContent =
       `${head} · 直近 ${blocks}/${blocksTotal} ブロック · ${detected}/${frames} 枚検出`;
     $("rxBar").style.width = `${pct}%`;
+    $("rxBar").classList.toggle("finishing", finishing);
     $("rxStall").textContent = stall || "";
     drawCoverage(cov);
   },
@@ -447,6 +455,7 @@ const receiver = new VcodeReceiver({
     const safeName = escHtml(name);
     $("rxInfo").innerHTML = `<span class="ok">✅ 復元成功: ${safeName} (${fmtSize(size)})</span>`;
     $("rxBar").style.width = "100%";
+    $("rxBar").classList.remove("finishing");
     $("rxStall").textContent = "";
     covCanvas.classList.remove("on");
     const url = rxUrl(blob);
@@ -589,6 +598,7 @@ async function startReceive(gridOverride) {
   $("rxError").textContent = "";
   $("rxStall").textContent = "";
   $("rxBar").style.width = "0%";
+  $("rxBar").classList.remove("finishing");
   covLast = -1;
   covCanvas.classList.remove("on");
   $("rxInfo").textContent = calRead
