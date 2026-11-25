@@ -16,3 +16,17 @@ dynamic = ["version"]
 [tool.maturin]
 module-name = "vloom_core"
 features = ["pyo3/extension-module"]
+
+[tool.uv]
+# Rust のソースが変わったら作り直す。既定では pyproject.toml しか見ないため、
+# pull でコア (vcode / fountain) が変わっても `uv sync` が古い拡張を使い続けていた。
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "Cargo.toml" },
+    { file = "src/**/*.rs" },
+    { file = "../Cargo.lock" },
+    { file = "../vcode/Cargo.toml" },
+    { file = "../vcode/src/**/*.rs" },
+    { file = "../fountain/Cargo.toml" },
+    { file = "../fountain/src/**/*.rs" },
+]

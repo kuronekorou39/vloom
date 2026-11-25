@@ -42,7 +42,7 @@ wasm-pack build --target web --release --out-dir ../web/pwa/pkg
 cd app && flutter pub get && flutter build apk --release   # Android
 
 uv sync                                   # Python: 素の環境 (tools/vcode_encode.py 用)
-uv sync --group desktop --reinstall-package vloom-core     # デスクトップアプリ (要 Rust)
+uv sync --group desktop                   # デスクトップアプリ (要 Rust)
 uv sync --group dev                       # 開発スクリプト (計測・PWA自動テスト等)
 
 uv run --group dev python web/pwa/serve_https.py            # PWA を実機で試す (HTTPS 必須)
@@ -52,9 +52,9 @@ uv run --group dev python tools/test_pwa_receive.py          # PWA 受信の自�
 手順の詳細・実機検証・トラブルシュートは [docs/development.md](docs/development.md)
 に一次情報がある。特に以下は踏みやすい罠として明記されているので、該当作業の前に読むこと。
 
-- Rust コア (`vcode/` / `fountain/`) を変更したら `py/` 側は
-  `uv sync --group desktop --reinstall-package vloom-core` を **必ず** 実行する
-  (`uv run --reinstall-package` では不十分。キャッシュが無効化されず古いホイールが残る)
+- Rust コア (`vcode/` / `fountain/`) を変更したら `py/` 側は `uv sync --group desktop` で
+  作り直される (`py/pyproject.toml` の `cache-keys` にコアのソースを登録済み)。新しい依存を
+  コアに足してソースの場所が増えたら、`cache-keys` にも足すこと
 - PWA は Service Worker でキャッシュ優先なので、配信物を更新したら
   `web/pwa/sw.js` の `CACHE` バージョンを上げる
 - `web/pwa/app.js` 等の構文チェックは `node --check` の前に `.mjs` へコピーする

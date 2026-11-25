@@ -136,19 +136,20 @@ uv sync --group dev                       # 開発スクリプト (Pillow / cryp
 uv sync --group desktop --group dev       # 両方
 ```
 
-`--group desktop` は `py/` の PyO3 クレートを maturin でビルドするので Rust が要ります。
-**Rust コア (`vcode/` や `fountain/`) を変更したときは `--reinstall-package vloom-core` を
-付けてください。** uv のキャッシュキーは `py/` の内容だけを見るため、path 依存の先が
-変わってもキャッシュが無効化されず、古いホイールがそのまま入ります。
+`--group desktop` は `py/` の PyO3 クレートを maturin でビルドするので Rust が要ります
+(別の PC では先に [rustup](https://rustup.rs/) で Rust を入れる。Windows は MSVC のビルドツールも要る)。
+
+Rust コア (`vcode/` や `fountain/`) を変更したとき・pull でコアが変わったときも、普通の
+`uv sync --group desktop` で作り直されます。`py/pyproject.toml` の `[tool.uv] cache-keys` に
+コアのソースを登録してあるためです。以前は uv が `py/` の内容しか見ず、path 依存の先が
+変わっても古いホイールを使い続けていました (格子の上限を変えた `.pyd` が反映されず、
+指定した格子と違うものが出力される状態にしばらく気づけなかった)。
+
+入れ替わったか怪しいときは、強制的に作り直せます (`uv run` ではなく `uv sync` に付けること)。
 
 ```bash
 uv sync --group desktop --reinstall-package vloom-core
 ```
-
-`uv run --reinstall-package ...` では足りません。site-packages から消しただけでも
-uv はビルドキャッシュから古いホイールを復元するので、**`uv sync` に付ける**こと
-(実際にこれで、格子の上限を変えた `.pyd` が反映されず、指定した格子と違うものが
-出力される状態にしばらく気づけませんでした)。
 
 `uv sync` は宣言どおりの状態に**揃える**ので、グループを指定し直すと前のグループの
 パッケージは消えます。両方要るときは同時に指定してください。既に `.venv` がある場合、
