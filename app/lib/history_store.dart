@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'receive/file_sniff.dart';
+
 /// 履歴の1エントリ。received は本体ファイルを端末に保存 (file に相対パス)、
 /// sent は試行の記録 (grid/ec など設定)。
 class HistoryItem {
@@ -58,6 +60,10 @@ class HistoryItem {
 /// ローカル履歴 (オフライン)。受信成功と送信試行を JSON インデックスで管理。
 class HistoryStore {
   HistoryStore._();
+
+  /// テスト用。シングルトンとは別の、まっさらなインスタンス
+  @visibleForTesting
+  HistoryStore.forTest();
   static final HistoryStore instance = HistoryStore._();
 
   late Directory _dir;
@@ -70,33 +76,103 @@ class HistoryStore {
   /// 履歴が変わるたびに増える (UI の再描画トリガ)。
   final ValueNotifier<int> revision = ValueNotifier<int>(0);
 
-  Future<void> init() async {
-    _dir = await getApplicationSupportDirectory();
+  /// [dir] はテスト用 (省略時はアプリのサポートディレクトリ)。
+  Future<void> init({Directory? dir}) async {
+    _dir = dir ?? await getApplicationSupportDirectory();
     if (!await _received.exists()) await _received.create(recursive: true);
-    if (await _index.exists()) {
-      try {
-        final j = jsonDecode(await _index.readAsString()) as Map<String, dynamic>;
-        received
-          ..clear()
-          ..addAll((j['received'] as List? ?? [])
-              .map((e) => HistoryItem.fromJson(e as Map<String, dynamic>)));
-        sent
-          ..clear()
-          ..addAll((j['sent'] as List? ?? [])
-              .map((e) => HistoryItem.fromJson(e as Map<String, dynamic>)));
-      } catch (_) {/* 壊れていたら無視 */}
-    }
+    await _load();
+    // 索引に載っていない受信ファイルを拾い直す (索引が壊れて消えた履歴の復旧)
+    if (await _recoverOrphans() > 0) await _persist();
     revision.value++;
+  }
+
+  /// 索引を読む。以前は 1 か所でも読めないと全件を黙って捨て、次の保存でその空の状態を
+  /// 書き込んでいた (2026-11-25 に受信履歴が全部消えた)。読めない項目だけを飛ばし、
+  /// 索引そのものが壊れていたら消さずに別名で残す。
+  Future<void> _load() async {
+    if (!await _index.exists()) return;
+    final Map<String, dynamic> j;
+    try {
+      j = jsonDecode(await _index.readAsString()) as Map<String, dynamic>;
+    } catch (e) {
+      final keep = '${_index.path}.broken-${DateTime.now().millisecondsSinceEpoch}';
+      debugPrint('[history] 索引が読めないので $keep に退避: $e');
+      try {
+        await _index.rename(keep);
+      } catch (_) {}
+      return;
+    }
+    List<HistoryItem> items(String key) {
+      final out = <HistoryItem>[];
+      for (final e in j[key] as List? ?? const []) {
+        try {
+          out.add(HistoryItem.fromJson(e as Map<String, dynamic>));
+        } catch (_) {/* この 1 件だけ飛ばす */}
+      }
+      return out;
+    }
+
+    received
+      ..clear()
+      ..addAll(items('received'));
+    sent
+      ..clear()
+      ..addAll(items('sent'));
+  }
+
+  /// received/ にあるのに索引に載っていないファイルを履歴に戻す。名前と種別は
+  /// 分からないので、中身から種別を推定し、保存した時刻 (ID = マイクロ秒) から名前を付ける。
+  Future<int> _recoverOrphans() async {
+    final known = received.map((e) => e.file).toSet();
+    var n = 0;
+    await for (final f in _received.list()) {
+      if (f is! File) continue;
+      final id = f.uri.pathSegments.last;
+      final rel = 'received/$id';
+      final us = int.tryParse(id);
+      if (known.contains(rel) || us == null) continue;
+      final size = await f.length();
+      if (size == 0) continue;
+      final raf = await f.open();
+      final head = await raf.read(4096);
+      await raf.close();
+      final t = DateTime.fromMicrosecondsSinceEpoch(us);
+      final (name, mime) = resolveReceivedName(head, now: t);
+      received.add(HistoryItem(
+        id: id,
+        name: name.replaceFirst('vcode_', '復旧_'),
+        type: mime,
+        size: size,
+        tsMs: t.millisecondsSinceEpoch,
+        file: rel,
+        note: '履歴の索引から消えていたファイルを復旧 (元の名前は不明)',
+      ));
+      n++;
+    }
+    if (n > 0) {
+      received.sort((a, b) => b.tsMs.compareTo(a.tsMs));
+      debugPrint('[history] 索引に無い受信ファイル $n 件を復旧');
+    }
+    return n;
   }
 
   String _newId() => DateTime.now().microsecondsSinceEpoch.toString();
 
-  Future<void> _persist() async {
-    final j = {
+  /// 保存は 1 つずつ順番に行う。以前は同時に 2 回呼ばれると (受信の完了が 2 回走った)、
+  /// 「空にしてから書く」が重なって索引が壊れた。
+  Future<void> _writing = Future.value();
+
+  Future<void> _persist() {
+    final j = jsonEncode({
       'received': received.map((e) => e.toJson()).toList(),
       'sent': sent.map((e) => e.toJson()).toList(),
-    };
-    await _index.writeAsString(jsonEncode(j));
+    });
+    return _writing = _writing.then((_) async {
+      // 一時ファイルに書いてから置き換える (書いている途中で落ちても元の索引が残る)
+      final tmp = File('${_index.path}.tmp');
+      await tmp.writeAsString(j, flush: true);
+      await tmp.rename(_index.path);
+    });
   }
 
   /// ストリーミング受信用: 出力先パスを確保 (実データはここへ直接書き込む)。

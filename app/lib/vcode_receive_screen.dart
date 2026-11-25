@@ -174,6 +174,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   int _missStreak = 0; // 連続して検出できなかったフレーム数
   int _detectStreak = 0; // 連続して検出できたフレーム数 (AF/AE ロックの判断に使う)
   bool _restoring = false; // 全パケット到達後の復元・検証中 (画面が固まって見えないように出す)
+  bool _completing = false; // 完了処理に入った (並行する走査から 2 回目が来ても進めない)
   bool _camLocked = false; // フォーカス・露出をロック済みか
   FocusHunter _focus = FocusHunter(); // AF の探り直し検出 (receive/focus_hunter.dart)
   bool _seeded = false; // acquire 結果で受信位置を確定済み (中央ガイド枠に頼らず追従)
@@ -590,6 +591,11 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           debugPrint('[vcode-rx] blockmap ${rows.join("|")}');
         }
         if (done) {
+          // 走査は複数本で並行に回るので、ほぼ同時に 2 本が「揃った」に達することがある。
+          // 2 回とも完了処理に進むと同じ受信が 2 件登録され、履歴の保存も重なっていた
+          // (30MB の記録が 2 件並び、そのあと履歴が全部消えた)。最初の 1 回だけ進める
+          if (_completing) return;
+          _completing = true;
           // 復元 (CRC 検証 + 履歴保存) は UI を数百 ms 塞ぐことがある。固まって
           // 見えないよう先に表示を切り替え、1 フレーム描かせてから進める
           setState(() {
@@ -602,6 +608,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           final payload = vcodeUnwrapPayload(payload: _dec!.payload()!);
           if (payload == null) {
             setState(() => _restoring = false);
+            _completing = false; // 作り直したデコーダで受信を続ける
             _stats.integrityFails++;
             debugPrint(
               '[vcode-rx] 整合性エラー: 復元結果が破損 '
@@ -905,6 +912,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     _resetFocusState();
     setState(() {
       _dec = null;
+      _completing = false;
       _probe = null;
       _cov = null;
       _stats = RxStats();
@@ -966,6 +974,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     await _stopCamera();
     setState(() {
       _dec = null;
+      _completing = false;
       _probe = null;
       _payload = null;
       _savedItem = null;
