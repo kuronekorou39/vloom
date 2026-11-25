@@ -46,8 +46,10 @@ from .sweep import DEFAULT_DWELL_SEC, SweepTx, default_sweep, parse_sweep
 # 受信側の総当たり候補に入っている格子だけを既定で出す。11×10 は候補外なので
 # 受信側で格子を明示指定しない限り検出されない (選べるようにはしておく)。
 GRIDS = ["7x6 (高密度)", "5x4 (標準)", "9x8 (超高密度)",
-         "11x10 (最大)", "11x14 (縦長)", "13x18 (超密)"]
-AUTO_DETECT_GRIDS = {(13, 18), (11, 14), (7, 6), (5, 4)}  # 受信の自動判別候補 (vcode CANDIDATES)
+         "11x10 (最大)", "11x14 (縦長)", "13x18 (超密)", "15x20 (最密・寄せて使う)"]
+# 受信側が「自動」で読める格子。CANDIDATES に加え、スキャナが写りから格子を見積もるので
+# 速度テストの 3 格子 (11x14 / 13x18 / 15x20) も読める (2026-11-25 の速度テストで確認)
+AUTO_DETECT_GRIDS = {(15, 20), (13, 18), (11, 14), (7, 6), (5, 4)}
 
 # ソースパケットに対するリペアパケットの比率。PWA の REPAIR_RATE と同値。
 REPAIR_RATE = 0.5
@@ -56,7 +58,15 @@ REPAIR_RATE = 0.5
 DEFAULT_MARGIN_CELLS = 8
 # カメラの実効フレームレートが 23-25 fps なので、20 までは 1 枚ずつ拾える。
 # 30 にすると混ざって回収率が落ちる (実測: 11x10 で 60 -> 33 KB/s)。
+# 実際の初期値は、表示するモニタの書き換えを割り切れる、これ以下で最大の fps にする
+# (64Hz のノート PC で 20fps を出すと表示時間が 3 回分と 4 回分で揃わず、取りこぼしが増えた)。
 DEFAULT_FPS = 20
+
+
+def fps_for_refresh(hz: float, cap: int = DEFAULT_FPS) -> int:
+    """書き換え hz の画面で等間隔に出せる (hz / 整数)、cap 以下で最大の fps。"""
+    r = round(hz) if hz and hz > 1 else 60
+    return next((r // n for n in range(1, r + 1) if r % n == 0 and r // n <= cap), cap)
 
 # 格子の一辺の上限。Rust 側 (VcodeTx) がこの範囲に丸めるので、超える指定をそのまま
 # 渡すと「指定と違う格子が黙って送られる」ことになる (実際に 16x22 を指定して 16x20 が
@@ -269,7 +279,10 @@ class MainWindow(QWidget):
         self.grid.setCurrentText("13x18 (超密)")  # 既定は縦長・超密 (実測最速)
         self.fps = QSpinBox()
         self.fps.setRange(2, 60)
-        self.fps.setValue(DEFAULT_FPS)
+        self.fps.setValue(DEFAULT_FPS)  # モニタが決まったら _apply_default_fps で合わせ直す
+        # 手で fps を変えたら、モニタを切り替えても上書きしない
+        self._fps_touched = False
+        self.fps.editingFinished.connect(lambda: setattr(self, "_fps_touched", True))
         self.fps.setSuffix(" fps")
         self.screen = QComboBox()
         for i, s in enumerate(QGuiApplication.screens()):
@@ -388,6 +401,8 @@ class MainWindow(QWidget):
         self.info = _label("", "muted", wrap=True)
         root.addWidget(self.info)
 
+        self.screen.currentIndexChanged.connect(self._apply_default_fps)
+        self._apply_default_fps()
         for w in (self.grid, self.bpc, self.screen):
             w.currentIndexChanged.connect(self._update_theory)
         for w in (self.fps, self.repair):
@@ -406,6 +421,14 @@ class MainWindow(QWidget):
         self.seg_file.setChecked(True)
         self._sync_clear_btn()
         self._update_theory()
+
+    def _apply_default_fps(self, *_: object) -> None:
+        """選んだモニタの書き換えに合う fps を初期値にする (手で変えていなければ)。"""
+        if self._fps_touched:
+            return
+        screens = QGuiApplication.screens()
+        hz = screens[min(self.screen.currentIndex(), len(screens) - 1)].refreshRate()
+        self.fps.setValue(fps_for_refresh(hz))
 
     def _sync_clear_btn(self, *_: object) -> None:
         """「選択を解除」はファイル側を開いていて、ファイルを選んであるときだけ出す。"""
@@ -612,6 +635,7 @@ class MainWindow(QWidget):
         if bpc is not None:
             self.bpc.setCurrentIndex(0 if bpc == 1 else 1)
         if fps is not None:
+            self._fps_touched = True
             self.fps.setValue(fps)
         if repair is not None:
             self.repair.setValue(repair)
