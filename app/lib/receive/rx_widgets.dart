@@ -92,7 +92,7 @@ class ProbePanel extends StatelessWidget {
         children: [
           Text(
             best == null
-                ? 'さがす: 計測中… (${probe.settingCount} 通り × '
+                ? '速度テスト: 計測中… (${probe.settingCount} 通り × '
                       '${probe.dwellSec.toStringAsFixed(0)} 秒)'
                 : 'おすすめ: ${best.grid} / ${best.fps}fps '
                       '(悪いときで ${best.minKbps!.toStringAsFixed(0)} KB/s)',

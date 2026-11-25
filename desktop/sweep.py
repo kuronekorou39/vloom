@@ -1,4 +1,4 @@
-"""「さがす」モード: 格子と fps の組を数秒ずつ切り替えながら試験フレームを流す。
+"""速度テスト (旧称「さがす」): 格子と fps の組を数秒ずつ切り替えながら試験フレームを流す。
 
 受信側は読めたブロックを設定ごとに数え、実効スループットを出し続ける
 (アプリの受信画面は試験フレームだと自分で気付くので、切り替えの操作は要らない)。
@@ -121,7 +121,7 @@ class SweepTx:
     @property
     def status(self) -> str:
         s = self.settings[self.current]
-        return (f"さがす: {self.current + 1}/{len(self.settings)}  {s.label}  "
+        return (f"速度テスト: {self.current + 1}/{len(self.settings)}  {s.label}  "
                 f"(1 設定 {self.dwell_sec:g} 秒 · 一巡 {len(self.settings) * self.dwell_sec:g} 秒)")
 
     def frame_gray(self, i: int) -> bytes:

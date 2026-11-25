@@ -15,7 +15,7 @@
     # 窓は動かさず、中のコードだけ小さく右下に寄せる
     python -m desktop --zoom 0.8 --dx 0.05 --dy 0.03 --start
 
-    # さがす: 格子と fps を 4 秒ずつ切り替えながら試験フレームを流す (ファイルは送らない)。
+    # 速度テスト: 格子と fps を 4 秒ずつ切り替えながら試験フレームを流す (ファイルは送らない)。
     # 受信側に設定ごとの KB/s が出続ける。fps の候補は画面の書き換え周期から決まる
     # (60Hz なら 15 / 20 / 30)。組を自分で決めるなら --sweep に並べる
     python -m desktop --sweep
@@ -41,7 +41,7 @@ def _geometry(text: str) -> tuple[int, int, int, int]:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(prog="desktop", description="Vloom 送信")
+    p = argparse.ArgumentParser(prog="desktop", description="Vloom (コードの生成と表示)")
     p.add_argument("--file", help="送るファイル")
     p.add_argument("--grid", help="格子 (7x6 / 5x4 / 9x8 / 11x10 / 11x14 / 13x12)")
     p.add_argument("--bpc", type=int, choices=(1, 2), help="1 セルあたりのビット数")
@@ -59,10 +59,10 @@ def main() -> int:
                    help="静止 (調整用): フレームを進めず 1 枚を出し続ける。送信中は H で切替")
     p.add_argument("--start", action="store_true", help="起動と同時に送信を始める")
     p.add_argument("--sweep", nargs="?", const="auto", metavar="格子@fps,...",
-                   help="さがす: 設定を切り替えながら試験フレームを流す "
+                   help="速度テスト: 設定を切り替えながら試験フレームを流す "
                         "(組を省くと、画面の書き換え周期から fps の候補を決める)")
     p.add_argument("--dwell", type=float, default=DEFAULT_DWELL_SEC,
-                   help="さがす: 1 つの設定を流し続ける秒数")
+                   help="速度テスト: 1 つの設定を流し続ける秒数")
     p.add_argument("--snap", action="store_true",
                    help="1 セルを整数個の物理画素で描く (端数の乱れは消えるがコードは小さくなる)")
     args = p.parse_args()

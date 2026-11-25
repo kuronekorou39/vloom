@@ -152,7 +152,7 @@ class SenderWindow(QWidget):
         self.interval = 1.0 / max(1, fps)
         self.fps = fps
 
-        self.setWindowTitle("Vloom 送信")
+        self.setWindowTitle("Vloom")
         self.view = FrameView(margin_cells, zoom, snap, dx, dy)
         self.status = QLabel("")
         self.status.setStyleSheet("color:#e6e9ef; font-size:12px;")
