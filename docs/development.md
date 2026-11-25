@@ -23,24 +23,43 @@ flutter build apk --release     # Android
 
 `web/pwa/pkg/` は git 管理外なので、クローン直後は必ず WASM ビルドが要ります。
 
-### 計測用の並行インストール (lab ビルド)
+### 手元のビルドを端末に入れる (リリース鍵で署名する)
 
-リリース鍵 (`app/android/key.properties`) を持たない環境では debug 鍵にフォールバックするため、
-配布版が入っている端末には署名不一致で上書きインストールできません。計測用に横へ入れたい
-ときは、別パッケージになるサフィックスを付けてください。
+端末に入れるアプリは 1 つ (`app.vloom.vloom`) だけにします。配布版 (Releases の APK) は
+リリース鍵で署名されていて、署名の違う APK は上書きできません。手元のビルドも同じ鍵で
+署名するよう、`app/android/key.properties` を置きます (git 管理外。CI は Secrets から作る)。
 
-```bash
-flutter build apk --release -PappIdSuffix=.lab   # app.vloom.vloom.lab / ランチャー名 "Vloom (lab)"
+```properties
+storeFile=C:/Users/<you>/keys/vloom-release.jks
+storePassword=...
+keyAlias=...
+keyPassword=...
 ```
 
-配布版と受信履歴を残したまま併存します。サフィックス未指定なら通常どおりです。
+```bash
+cd app && flutter build apk --release
+adb install -r build/app/outputs/flutter-apk/app-release.apk
+```
+
+`key.properties` が無いと debug 鍵にフォールバックし、配布版の入った端末には入りません
+(`INSTALL_FAILED_UPDATE_INCOMPATIBLE`)。以前の計測用の別パッケージ (`.lab`) はやめました。
+
+### アプリ内の更新
+
+アプリは起動時に GitHub Releases の最新版 (`releases/latest`) を見て、入っている版より
+新しく APK が付いていれば「アップデートがあります」を出します (`lib/update_service.dart`)。
+右上の i メニューの「アップデートを確認」からも確かめられます。起動 Intent で計測として
+起動したときは確認しません (ダイアログで自動操作を塞がないため)。
+
+配布の手順: `pubspec.yaml` の `version` を上げてコミットし、`v0.5.0` のようなタグを
+push すると、CI がリリース鍵で署名した APK を Releases に上げます。
 
 ### 受信アプリの起動 Intent (計測の自動化)
 
-lab ビルドは起動 Intent で条件を指定できます (画面操作なしで条件を振るため)。
+アプリは起動 Intent で条件を指定できます (画面操作なしで条件を振るため)。
 
 ```bash
-adb shell am start -n app.vloom.vloom.lab/app.vloom.vloom.MainActivity \
+adb shell am start -n app.vloom.vloom/.MainActivity \
   --ei tab 1 --ei preset 5            # タブ (0=送信 1=受信) とプリセット
   # --es grid 13x16                   # プリセットに無い格子
   # --es ev -1.5                      # 露出補正 (EV)
@@ -63,7 +82,7 @@ adb shell am start -n app.vloom.vloom.lab/app.vloom.vloom.MainActivity \
 ```bash
 uv run python -m desktop --sweep                       # fps の候補は画面の書き換え周期から決まる
 uv run python -m desktop --sweep 13x18@20,15x20@30 --dwell 5   # 組と 1 設定の秒数を自分で決める
-adb shell am start -n app.vloom.vloom.lab/app.vloom.vloom.MainActivity --ei tab 1 --es grid auto
+adb shell am start -n app.vloom.vloom/.MainActivity --ei tab 1 --es grid auto
 ```
 
 受信側に操作は要りません (試験フレームかどうかはヘッダで分かり、格子は写りから判別します)。

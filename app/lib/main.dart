@@ -12,6 +12,7 @@ import 'vcode_receive_screen.dart';
 import 'calibration_screen.dart';
 import 'launch_args.dart';
 import 'rx_prefs.dart';
+import 'update_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -79,6 +80,21 @@ class _HomeShellState extends State<HomeShell> {
   // 背面カメラを複数の画面が奪い合ってフリーズする。
   bool _calOpen = false;
 
+  /// 端末に入っている版 (メニューとライセンス画面に出す)
+  String? _version;
+
+  @override
+  void initState() {
+    super.initState();
+    UpdateService.currentVersion().then((v) {
+      if (mounted) setState(() => _version = v);
+    });
+    // 起動直後に GitHub Releases を見て、新しい版があれば知らせる
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) UpdateService.check(context);
+    });
+  }
+
   /// カメラ受信はモバイルのみ。デスクトップ (Windows = PC 送信機として使用) では
   /// camera プラグインが動かないため差し替える (IndexedStack は全子を即ビルドする)。
   static final bool _hasCamera = Platform.isAndroid || Platform.isIOS;
@@ -122,14 +138,29 @@ class _HomeShellState extends State<HomeShell> {
               tooltip: '校正 (読み取り限界の確認)',
               onPressed: _openCalibration,
             ),
-          IconButton(
+          PopupMenuButton<String>(
             icon: const Icon(Icons.info_outline),
-            tooltip: 'ライセンス',
-            onPressed: () => showLicensePage(
-              context: context,
-              applicationName: 'Vloom',
-              applicationLegalese: '© 2026 rou — MIT License',
-            ),
+            tooltip: 'このアプリについて',
+            onSelected: (v) {
+              if (v == 'update') UpdateService.check(context, manual: true);
+              if (v == 'license') {
+                showLicensePage(
+                  context: context,
+                  applicationName: 'Vloom',
+                  applicationVersion: _version == null ? null : 'v$_version',
+                  applicationLegalese: '© 2026 rou39 — MIT License',
+                );
+              }
+            },
+            itemBuilder: (_) => [
+              if (UpdateService.supported)
+                PopupMenuItem(
+                  value: 'update',
+                  child: Text('アップデートを確認'
+                      '${_version == null ? '' : '  (いまは v$_version)'}'),
+                ),
+              const PopupMenuItem(value: 'license', child: Text('ライセンス')),
+            ],
           ),
         ],
       ),

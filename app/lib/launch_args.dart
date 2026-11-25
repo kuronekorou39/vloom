@@ -86,12 +86,19 @@ class LaunchArgs {
   /// (受信画面はカメラを作る前にプリセットを確定させたいので、非同期だと間に合わない)。
   static LaunchArgs get cached => _cached;
 
+  /// 起動 Intent に何か 1 つでも指定があったか (= adb から計測で起動された)。
+  /// 自動計測の最中に更新のダイアログで操作を塞がないよう、起動時の確認を止めるのに使う。
+  static bool get automated => _automated;
+  static bool _automated = false;
+
   /// main() から一度だけ呼ぶ。
   static Future<void> load() async {
     if (!Platform.isAndroid) return;
     try {
       final m = await _ch.invokeMapMethod<String, dynamic>('args');
       if (m == null) return;
+      _automated = m.values.any(
+          (v) => (v is int && v >= 0) || (v is String && v.isNotEmpty));
       int? pick(String k) {
         final v = m[k];
         return (v is int && v >= 0) ? v : null;

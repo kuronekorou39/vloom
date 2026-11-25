@@ -34,17 +34,11 @@ android {
 
     defaultConfig {
         applicationId = "app.vloom.vloom"
-        // 計測用ビルドを配布版と併存させるための任意サフィックス。
-        //   flutter build apk --release -PappIdSuffix=.lab
-        // 配布版とは別パッケージになるので、リリース鍵を持たない環境でも
-        // 既存インストール (と受信履歴) を消さずに横に入れられる。
-        // 未指定なら空文字なので通常のビルドには影響しない。
-        val appIdSuffix = (project.findProperty("appIdSuffix") as String?) ?: ""
-        applicationIdSuffix = appIdSuffix
-        // ランチャー上で見分けが付くようにラベルも変える
-        // (マニフェストの android:label がこのプレースホルダを参照する)。
-        manifestPlaceholders["appLabel"] =
-            if (appIdSuffix.isEmpty()) "Vloom" else "Vloom (${appIdSuffix.removePrefix(".")})"
+        // アプリは 1 つだけ入れる (計測も同じアプリを起動 Intent で動かす)。以前は計測用に
+        // サフィックス付きの別パッケージ (.lab) を横に入れていたが、2 つ並んで紛らわしく、
+        // アプリ内更新も配布版にしか効かないためやめた。手元のビルドも android/key.properties
+        // でリリース鍵を使い、配布版に上書きできるようにする (docs/development.md)。
+        manifestPlaceholders["appLabel"] = "Vloom"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

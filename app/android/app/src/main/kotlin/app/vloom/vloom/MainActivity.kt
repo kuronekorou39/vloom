@@ -58,6 +58,24 @@ class MainActivity : FlutterActivity() {
                             result.error("exposure", e.toString(), null)
                         }
                     }
+                    // アプリ内更新 (update_service.dart) 用。版番号のためだけに
+                    // package_info_plus / url_launcher を足さず、ここで済ませる
+                    "version" -> result.success(
+                        packageManager.getPackageInfo(packageName, 0).versionName
+                    )
+                    "openUrl" -> {
+                        try {
+                            startActivity(
+                                android.content.Intent(
+                                    android.content.Intent.ACTION_VIEW,
+                                    android.net.Uri.parse(call.argument<String>("url")!!),
+                                )
+                            )
+                            result.success(true)
+                        } catch (e: Throwable) {
+                            result.error("openUrl", e.toString(), null)
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             }
