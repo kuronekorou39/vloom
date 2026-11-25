@@ -19,6 +19,7 @@ import 'history_screen.dart' show shareReceived, saveReceivedToFile;
 import 'history_store.dart';
 import 'preset.dart';
 import 'probe_stats.dart';
+import 'receive/decode_worker.dart';
 import 'receive/detected_code.dart';
 import 'receive/file_sniff.dart';
 import 'receive/focus_hunter.dart';
@@ -28,7 +29,6 @@ import 'receive/rx_widgets.dart';
 import 'rx_prefs.dart';
 import 'launch_args.dart';
 import 'scan_worker.dart';
-import 'src/rust/api/fountain.dart';
 import 'src/rust/api/vcode.dart';
 import 'test_payload.dart';
 import 'ui_common.dart';
@@ -216,7 +216,13 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   // (受け取りと処理を重ねてカメラの供給速度まで処理するため)
   CameraImage? _pendingImg;
 
-  FountainDecoder? _dec;
+  // 復元は別 isolate (receive/decode_worker.dart)。作るのは非同期なので、準備ができるまでに
+  // 届いたパケットは _decBacklog にためておく。受信のやり直しで古いワーカーの結果を
+  // 拾わないよう、世代番号で区別する
+  DecodeWorker? _decWorker;
+  bool _decSpawning = false;
+  final List<List<Uint8List>> _decBacklog = [];
+  int _decGen = 0;
   Uint8List? _payload;
   HistoryItem? _savedItem;
 
@@ -631,25 +637,21 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         if (probeTag != null) _onProbeFrame(probeTag, report);
         final packets = probeTag == null ? report.packets : const <Uint8List>[];
         if (probeTag == null) {
-          _dec ??= FountainDecoder(otiBytes: report.oti);
           _cov ??= PacketCoverage.fromOti(report.oti);
         }
-        var done = false;
         final swDec = Stopwatch()..start();
         for (final p in packets) {
           _stats.packetsAdded++;
           _cov!.add(p);
-          if (_dec!.addPacket(packet: p)) {
-            done = true;
-            break;
-          }
         }
+        // 復元計算は別 isolate へ投げっぱなし (完了は _onDecoded で受ける)
+        if (probeTag == null) _feedDecoder(report.oti, packets);
         _stats.addDecodeMs(swDec.elapsedMilliseconds);
         debugPrint(
           '[vcode-rx] seq=${report.frameSeq} '
           'blocks=${report.blocksOk}/${report.blocksTotal} '
           'pkts=${_stats.packetsAdded} scan=${_stats.lastScanMs}ms '
-          'tracked=${report.tracked} done=$done',
+          'tracked=${report.tracked}',
         );
         // 半分程度しか取れないフレームは、どの行が落ちたかを出す。散らばって
         // いれば露出やピント、片側や帯なら位置合わせのずれ、と切り分けられる。
@@ -667,37 +669,6 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
             );
           }
           debugPrint('[vcode-rx] blockmap ${rows.join("|")}');
-        }
-        if (done) {
-          // 走査は複数本で並行に回るので、ほぼ同時に 2 本が「揃った」に達することがある。
-          // 2 回とも完了処理に進むと同じ受信が 2 件登録され、履歴の保存も重なっていた
-          // (30MB の記録が 2 件並び、そのあと履歴が全部消えた)。最初の 1 回だけ進める
-          if (_completing) return;
-          _completing = true;
-          // 復元 (CRC 検証 + 履歴保存) は UI を数百 ms 塞ぐことがある。固まって
-          // 見えないよう先に表示を切り替え、1 フレーム描かせてから進める
-          setState(() {
-            _restoring = true;
-            _status = '復元中…';
-          });
-          await Future<void>.delayed(Duration.zero);
-          // エンドツーエンド CRC-32 検証。不一致 = ゴミパケットが RaptorQ を
-          // 汚染して復元結果が破損 → デコーダを捨てて受信をやり直す
-          final payload = vcodeUnwrapPayload(payload: _dec!.payload()!);
-          if (payload == null) {
-            setState(() => _restoring = false);
-            _completing = false; // 作り直したデコーダで受信を続ける
-            _stats.integrityFails++;
-            debugPrint(
-              '[vcode-rx] 整合性エラー: 復元結果が破損 '
-              '(${_stats.integrityFails} 回目)。デコーダを再作成して受信続行',
-            );
-            _dec = null;
-            _cov = null;
-            return;
-          }
-          _onComplete(payload);
-          return;
         }
         _missStreak = 0;
         // 追従が安定したら露出をロックする。数十秒以上の転送だけが、1 回の停止と
@@ -772,6 +743,79 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         unawaited(_onFrame(next));
       }
     }
+  }
+
+  /// パケットを復元ワーカーへ渡す。ワーカーが無ければ作る (準備中はためておく)。
+  void _feedDecoder(Uint8List oti, List<Uint8List> packets) {
+    if (packets.isEmpty || _completing) return;
+    final w = _decWorker;
+    if (w != null) {
+      w.feed(packets);
+      return;
+    }
+    _decBacklog.add(packets);
+    if (_decSpawning) return;
+    _decSpawning = true;
+    final gen = _decGen;
+    DecodeWorker.spawn(
+      oti,
+      onDone: (payload) {
+        if (gen == _decGen) _onDecoded(payload);
+      },
+      onCorrupt: () {
+        if (gen == _decGen) _onDecodeCorrupt();
+      },
+    ).then((w) {
+      if (gen != _decGen) {
+        w?.dispose(); // その間に受信をやり直した
+        return;
+      }
+      _decSpawning = false;
+      if (w == null) {
+        _decBacklog.clear(); // 宣言サイズが不正なフレーム。次の枚で作り直す
+        return;
+      }
+      _decWorker = w;
+      for (final b in _decBacklog) {
+        w.feed(b);
+      }
+      _decBacklog.clear();
+    });
+  }
+
+  /// 復元ワーカーを捨てる (受信のやり直し・整合性エラー・画面の破棄)
+  void _disposeDecoder() {
+    _decGen++;
+    _decWorker?.dispose();
+    _decWorker = null;
+    _decSpawning = false;
+    _decBacklog.clear();
+  }
+
+  /// 復元ワーカーが復元と CRC 検証まで終えた
+  Future<void> _onDecoded(Uint8List payload) async {
+    // 完了処理は 1 回だけ (2 回走ると同じ受信が 2 件登録され、履歴の保存も重なっていた)
+    if (_completing || !mounted) return;
+    _completing = true;
+    _disposeDecoder();
+    // 保存 (数十 MB の書き込み) は UI を数百 ms 塞ぐことがある。先に表示を切り替える
+    setState(() {
+      _restoring = true;
+      _status = '復元中…';
+    });
+    await Future<void>.delayed(Duration.zero);
+    await _onComplete(payload);
+  }
+
+  /// 復元結果の CRC が合わなかった (ゴミパケットが RaptorQ を汚染)。デコーダを作り直して続ける
+  void _onDecodeCorrupt() {
+    _stats.integrityFails++;
+    debugPrint(
+      '[vcode-rx] 整合性エラー: 復元結果が破損 '
+      '(${_stats.integrityFails} 回目)。デコーダを再作成して受信続行',
+    );
+    _disposeDecoder();
+    if (mounted) setState(() => _cov = null);
   }
 
   void _setDetected(List<double> corners, int imgW, int imgH, int rot,
@@ -996,7 +1040,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   void _restartReceive() {
     _resetFocusState();
     setState(() {
-      _dec = null;
+      _disposeDecoder();
       _completing = false;
       _probe = null;
       _cov = null;
@@ -1068,7 +1112,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   Future<void> _reset() async {
     await _stopCamera();
     setState(() {
-      _dec = null;
+      _disposeDecoder();
       _completing = false;
       _probe = null;
       _payload = null;
@@ -1171,6 +1215,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   void dispose() {
     _rx?.dispose();
     _rx = null;
+    _disposeDecoder();
     _watchdog?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _stopCamera();
@@ -1325,6 +1370,11 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
             : '追従中',
         Colors.cyanAccent,
         Icons.center_focus_strong,
+      ),
+      _ when _cov != null && _cov!.useful >= _cov!.kt && !_completing => (
+        '最後の計算中… (カメラはそのままで)',
+        Colors.lightGreenAccent,
+        Icons.hourglass_top,
       ),
       _ when _isIdle => ('省電力中 (コードを写すと戻ります)', Colors.white70, Icons.bedtime_outlined),
       _ when _autoAcquire => ('位置を探しています…', Colors.orangeAccent, Icons.search),

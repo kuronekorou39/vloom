@@ -15,7 +15,11 @@
 //!   - `Decoder` / `decoder_new_from_oti(oti_bytes) -> Decoder`
 //!   - `decoder.add_packet(bytes) -> Option<Vec<u8>>`
 
-use raptorq::{Decoder as RqDecoder, Encoder as RqEncoder, EncodingPacket, ObjectTransmissionInformation};
+use std::collections::HashSet;
+
+use raptorq::{
+    partition, Encoder as RqEncoder, EncodingPacket, ObjectTransmissionInformation, SourceBlockDecoder,
+};
 
 pub const DEFAULT_PACKET_SIZE: u16 = 500;
 
@@ -144,10 +148,38 @@ fn interleave(lists: Vec<Vec<EncodingPacket>>) -> Vec<EncodingPacket> {
     out
 }
 
+/// 必要数に達したブロックの復元に失敗したとき、次に試すまでにためる新しいシンボル数。
+/// RaptorQ は必要数ちょうどで約 99%、+2 で 99.9999% 復元できるので、1〜2 回で済む。
+const RETRY_AFTER_NEW_SYMBOLS: usize = 3;
+
+/// ブロック 1 つぶんの受信状態。
+struct BlockState {
+    dec: SourceBlockDecoder,
+    /// このブロックのソースシンボル数 (復元に要る最小数)
+    k: usize,
+    /// 受け取った ESI (重複を捨てるため)
+    seen: HashSet<u32>,
+    /// 必要数に達した後、次の試行まで手元にためているパケット
+    pending: Vec<EncodingPacket>,
+    /// seen がこの数に達したら復元を試す
+    next_try: usize,
+    out: Option<Vec<u8>>,
+}
+
+/// 受信側。raptorq の `Decoder` をそのまま使わず、ブロックごとの復元器を直接持つ。
+///
+/// raptorq の `Decoder` は、ブロックが必要数に達した後はパケットを 1 つ受け取るたびに
+/// (重複でも) そのブロックの復元を最初から計算し直す。1 ブロック (約 5 万シンボル) の
+/// 計算は PC で 0.1〜0.5 秒、スマホではその数倍かかり、30MB (15 ブロック) の受信の
+/// 最後に画面とカメラが止まって完了しなくなった (2026-11-25)。
+/// ここでは重複を捨て、必要数に達したときに 1 回だけまとめて試し、失敗したら
+/// 新しいシンボルを数個ためてから再挑戦する。
 pub struct Decoder {
-    inner: RqDecoder,
     oti: ObjectTransmissionInformation,
+    blocks: Vec<BlockState>,
+    done_blocks: usize,
     packets_received: u32,
+    result: Option<Vec<u8>>,
 }
 
 /// 受信側が受け入れる最大ペイロード長 (1 オブジェクトあたり)。
@@ -176,14 +208,33 @@ impl Decoder {
         if len == 0 || len > MAX_PAYLOAD_BYTES {
             return None;
         }
-        let inner = RqDecoder::new(oti.clone());
-        Some(Self { inner, oti, packets_received: 0 })
+        Some(Self::new(oti))
     }
 
     pub fn from_oti_bytes(oti_bytes: &[u8; 12]) -> Self {
-        let oti = ObjectTransmissionInformation::deserialize(oti_bytes);
-        let inner = RqDecoder::new(oti.clone());
-        Self { inner, oti, packets_received: 0 }
+        Self::new(ObjectTransmissionInformation::deserialize(oti_bytes))
+    }
+
+    /// raptorq の `Decoder::new` と同じ分割でブロックごとの復元器を作る。
+    fn new(oti: ObjectTransmissionInformation) -> Self {
+        let t = oti.symbol_size() as u64;
+        let kt = oti.transfer_length().div_ceil(t.max(1));
+        // 転送長は MAX_PAYLOAD_BYTES 以下なので、シンボル数は u32 に収まる
+        let (kl, ks, zl, zs) = partition(kt.min(u32::MAX as u64) as u32, oti.source_blocks());
+        let blocks = (0..zl + zs)
+            .map(|i| {
+                let k = if i < zl { kl } else { ks } as usize;
+                BlockState {
+                    dec: SourceBlockDecoder::new(i as u8, &oti, k as u64 * t),
+                    k,
+                    seen: HashSet::new(),
+                    pending: Vec::new(),
+                    next_try: k,
+                    out: None,
+                }
+            })
+            .collect();
+        Self { oti, blocks, done_blocks: 0, packets_received: 0, result: None }
     }
 
     pub fn payload_size(&self) -> u64 {
@@ -194,12 +245,58 @@ impl Decoder {
         self.packets_received
     }
 
-    /// シリアライズ済みパケットを 1 つ追加。完全に復元できたら Some(payload) を返す。
+    /// シリアライズ済みパケットを 1 つ追加。完全に復元できたら Some(payload) を返す
+    /// (それ以降も同じものを返す)。
     pub fn add_packet(&mut self, packet_bytes: &[u8]) -> Option<Vec<u8>> {
-        let packet = EncodingPacket::deserialize(packet_bytes);
-        self.inner.add_new_packet(packet);
         self.packets_received += 1;
-        self.inner.get_result()
+        if let Some(r) = &self.result {
+            return Some(r.clone());
+        }
+        if packet_bytes.len() < 4 {
+            return None;
+        }
+        let packet = EncodingPacket::deserialize(packet_bytes);
+        let sbn = packet.payload_id().source_block_number() as usize;
+        let esi = packet.payload_id().encoding_symbol_id();
+        let Some(b) = self.blocks.get_mut(sbn) else { return None };
+        if b.out.is_some() || !b.seen.insert(esi) {
+            return None; // 復元済みのブロック・重複は計算しない
+        }
+        if b.seen.len() < b.k {
+            // 必要数に届くまでは渡すだけ (raptorq は数を数えて何もせず返す)
+            b.dec.decode(std::iter::once(packet));
+            return None;
+        }
+        b.pending.push(packet);
+        if b.seen.len() < b.next_try {
+            return None;
+        }
+        match b.dec.decode(b.pending.drain(..)) {
+            Some(out) => {
+                b.out = Some(out);
+                b.seen = HashSet::new(); // もう要らない (メモリを返す)
+                self.done_blocks += 1;
+            }
+            None => {
+                b.next_try = b.seen.len() + RETRY_AFTER_NEW_SYMBOLS;
+                return None;
+            }
+        }
+        if self.done_blocks < self.blocks.len() {
+            return None;
+        }
+        let mut out = Vec::with_capacity(self.oti.transfer_length() as usize);
+        for b in self.blocks.iter_mut() {
+            out.extend(b.out.take().unwrap_or_default());
+        }
+        out.truncate(self.oti.transfer_length() as usize);
+        self.result = Some(out.clone());
+        Some(out)
+    }
+
+    /// 復元済みのブロック数と全ブロック数 (進捗表示用)
+    pub fn blocks_done(&self) -> (usize, usize) {
+        (self.done_blocks, self.blocks.len())
     }
 }
 
