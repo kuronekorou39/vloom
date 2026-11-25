@@ -37,7 +37,7 @@ impl FountainEncoder {
         self.inner.oti_bytes().to_vec()
     }
 
-    /// 生成済みパケットの総数。送信側はこの値で循環表示する。
+    /// 1 巡目のパケット数。packet(i) はこれを超えても呼べる (新しいリペアになる)。
     #[wasm_bindgen(js_name = packetCount)]
     pub fn packet_count(&self) -> usize {
         self.inner.packet_count()
@@ -167,7 +167,6 @@ impl VcodeTx {
     #[wasm_bindgen(js_name = frameGray)]
     pub fn frame_gray(&self, i: u32) -> Vec<u8> {
         let bc = self.layout.block_count();
-        let pc = self.encoder.packet_count();
         let header = vcode::FrameHeader {
             version: vcode::VERSION,
             bits_per_cell: self.bpc,
@@ -182,7 +181,8 @@ impl VcodeTx {
         let payload_len = self.layout.block_payload_len(self.bpc);
         let blocks: Vec<Vec<u8>> = (0..bc)
             .map(|j| {
-                let mut p = self.encoder.packet((i as usize * bc + j) % pc);
+                // 通し番号のまま渡す。1 巡目を過ぎたフレームでは新しいリペアが作られる
+                let mut p = self.encoder.packet(i as usize * bc + j);
                 p.resize(payload_len, 0);
                 p
             })

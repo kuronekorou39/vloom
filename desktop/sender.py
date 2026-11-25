@@ -299,18 +299,14 @@ class SenderWindow(QWidget):
         self._draw(self.index)
 
     def _frame_arg(self, slot: int) -> int:
-        """スロット番号 → VcodeTx に渡すフレーム番号。
+        """スロット番号 → VcodeTx に渡すフレーム番号 (始めからの通し番号)。
 
-        パケットは frame_gray(i) の中で (i * ブロック数 + j) mod パケット総数 に
-        割り当てられる。i をそのまま 0..frame_count-1 で回すと、毎巡まったく同じ
-        パケットが同じスロットに並ぶ。送信 fps とカメラの取り込み位相がビートして
-        特定スロットを構造的に取りこぼすと、そのパケットは何巡しても入らない。
-
-        巡ごとに 1 つ余分に進めることで、同じスロットが毎巡ちがうパケット群を運ぶ。
-        受信側は「ヘッダとブロックが読めれば何でもよい」ので、送信側だけの変更で
-        互換性は保たれる。
+        frame_gray(i) は i が 1 巡 (frame_count) を超えると、毎回新しいリペアパケットで
+        フレームを作る。以前は 1 巡目と同じパケットを繰り返していたので、1 巡目で
+        受け取れたパケットが 2 巡目に届いても役に立たなかった。
+        速度テスト (SweepTx) は frame_count が実質無限なので、ここは slot のままになる。
         """
-        return slot + self.pass_no - 1
+        return (self.pass_no - 1) * self.tx.frame_count + slot
 
     def _draw(self, slot: int) -> None:
         gray = self.tx.frame_gray(self._frame_arg(slot))

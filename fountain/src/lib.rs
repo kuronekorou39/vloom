@@ -1,15 +1,16 @@
 //! Fountain code (RaptorQ) を薄くラップして、コードのストリーミング用の符号化/復号 API を提供する。
 //!
-//! 設計方針 (MVP):
-//!   - 事前に K+ N パケット (= K source + N repair) を生成して固定配列で持つ
-//!   - 送信側は配列を循環表示
+//! 設計方針:
+//!   - 1 巡目の K source + N repair は事前に生成して持つ
+//!   - 送信側はフレームの通し番号を増やし続け、1 巡目を過ぎたら新しいリペアをその場で作る
+//!     (同じパケットを繰り返さない。fountain 符号の「新しい符号を無限に作れる」性質を使う)
 //!   - 受信側は受け取ったパケット (順不同) を decoder に投入し、復元できたら終了
 //!   - 受信に必要なのは OTI (12 byte) だけ。OTI は最初の数フレームで別途送る or プロトコル外で共有
 //!
 //! 公開 API:
 //!   - `Encoder` / `encoder_new(payload, packet_size, extra_repair) -> Encoder`
 //!   - `encoder.oti() -> &OTI` (12 byte でシリアライズ可能)
-//!   - `encoder.packet(i) -> Vec<u8>` (i を循環させて呼ぶ)
+//!   - `encoder.packet(i) -> Vec<u8>` (i は増やし続けてよい。1 巡目以降は新しいリペア)
 //!   - `encoder.packet_count() -> usize`
 //!   - `Decoder` / `decoder_new_from_oti(oti_bytes) -> Decoder`
 //!   - `decoder.add_packet(bytes) -> Option<Vec<u8>>`
@@ -27,9 +28,18 @@ pub fn oti_symbol_size(oti_bytes: &[u8; 12]) -> u16 {
 
 pub struct Encoder {
     oti: ObjectTransmissionInformation,
-    /// 事前生成した K source + N repair = packets.len() のパケット列。
+    /// 1 巡目に出す K source + N repair = packets.len() のパケット列 (事前生成)。
     packets: Vec<EncodingPacket>,
+    /// 2 巡目以降のリペアを作るための符号器 (ブロックごとの中間シンボルを持つ)。
+    rq: RqEncoder,
+    /// ブロックごとに 1 巡目で使ったリペアの数 (2 巡目以降はこの続きの番号から作る)
+    initial_repair: Vec<u32>,
+    /// ブロックごとのソースシンボル数 (ESI の上限の計算用)
+    block_k: Vec<u32>,
 }
+
+/// RaptorQ の ESI は 24bit。1 ブロックのシンボル番号はこの手前までしか使えない。
+const MAX_ESI: u32 = (1 << 24) - 1;
 
 impl Encoder {
     /// payload を packet_size で符号化し、追加で extra_repair 個のリペアパケットを生成する。
@@ -48,22 +58,26 @@ impl Encoder {
         let encoder = RqEncoder::with_defaults(payload, packet_size);
         let oti = encoder.get_config();
         let blocks = encoder.get_block_encoders();
-        let per_block: Vec<Vec<EncodingPacket>> = if blocks.len() <= 1 {
-            vec![encoder.get_encoded_packets(extra_repair)]
-        } else {
-            let k_total: u64 = blocks.iter().map(|b| b.source_packets().len() as u64).sum();
-            blocks
-                .iter()
-                .map(|b| {
-                    let mut v = b.source_packets();
-                    let k = v.len() as u64;
-                    let repair = (extra_repair as u64 * k).div_ceil(k_total.max(1)) as u32;
-                    v.extend(b.repair_packets(0, repair));
-                    v
-                })
-                .collect()
-        };
-        Self { oti, packets: interleave(per_block) }
+        let k_total: u64 = blocks.iter().map(|b| b.source_packets().len() as u64).sum();
+        let mut initial_repair = Vec::with_capacity(blocks.len());
+        let mut block_k = Vec::with_capacity(blocks.len());
+        let per_block: Vec<Vec<EncodingPacket>> = blocks
+            .iter()
+            .map(|b| {
+                let mut v = b.source_packets();
+                let k = v.len() as u64;
+                let repair = if blocks.len() <= 1 {
+                    extra_repair
+                } else {
+                    (extra_repair as u64 * k).div_ceil(k_total.max(1)) as u32
+                };
+                v.extend(b.repair_packets(0, repair));
+                initial_repair.push(repair);
+                block_k.push(k as u32);
+                v
+            })
+            .collect();
+        Self { oti, packets: interleave(per_block), rq: encoder, initial_repair, block_k }
     }
 
     pub fn oti(&self) -> &ObjectTransmissionInformation {
@@ -74,13 +88,30 @@ impl Encoder {
         self.oti.serialize()
     }
 
+    /// 1 巡目のパケット数 (送信側の「1 巡」の長さ)。packet() はこれを超えても呼べる。
     pub fn packet_count(&self) -> usize {
         self.packets.len()
     }
 
-    /// i 番目のパケット (シリアライズ済み) を返す。i は packet_count() で割って循環してよい。
+    /// i 番目のパケット (シリアライズ済み) を返す。i は 0 から増やし続けてよい。
+    ///
+    /// i < packet_count() は 1 巡目の事前生成ぶん。それ以降は**毎回新しいリペア**を作る
+    /// (fountain 符号は新しい符号を無限に作れる)。以前は 1 巡目と同じパケットを繰り返して
+    /// いたので、2 巡目以降は 1 巡目で受け取れたパケットが届いても役に立たなかった。
+    /// 受け取れる割合が 5 割の環境で、30MB の所要時間が見積もりで約 16% 縮む。
     pub fn packet(&self, i: usize) -> Vec<u8> {
-        self.packets[i % self.packets.len()].serialize()
+        if i < self.packets.len() {
+            return self.packets[i].serialize();
+        }
+        // 2 巡目以降: ブロックを順に回り、各ブロックのリペア番号を 1 巡目の続きから進める
+        let blocks = self.rq.get_block_encoders();
+        let r = i - self.packets.len();
+        let b = r % blocks.len();
+        let k = self.block_k[b];
+        // ESI の上限 (24bit) に達したら頭から作り直す (1 ブロックで 1,600 万個先。実用上は届かない)
+        let room = (MAX_ESI - k) as usize;
+        let id = ((self.initial_repair[b] as usize + r / blocks.len()) % room) as u32;
+        blocks[b].repair_packets(id, 1).remove(0).serialize()
     }
 }
 
@@ -273,6 +304,30 @@ mod tests {
             }
         }
         panic!("1 巡で復元できなかった");
+    }
+
+    /// 2 巡目以降は 1 巡目と重ならない新しいリペアで、それだけでも復元できる (単一・複数ブロック)。
+    #[test]
+    fn later_passes_carry_fresh_repair() {
+        for (len, sym) in [(20_000usize, 42u16), (600_000, 8)] {
+            let payload: Vec<u8> = (0..len as u32).map(|i| (i.wrapping_mul(2654435761) >> 24) as u8).collect();
+            let encoder = Encoder::new(&payload, sym, (len / sym as usize / 2) as u32);
+            let n = encoder.packet_count();
+            let first: std::collections::HashSet<Vec<u8>> =
+                (0..n).map(|i| encoder.packet(i)[..4].to_vec()).collect();
+            let mut decoder = Decoder::from_oti_bytes(&encoder.oti_bytes());
+            let mut done = false;
+            for i in n..n * 3 {
+                let p = encoder.packet(i);
+                assert!(!first.contains(&p[..4]), "2 巡目に 1 巡目と同じパケット ID が出た (i={i})");
+                if let Some(out) = decoder.add_packet(&p) {
+                    assert_eq!(out, payload);
+                    done = true;
+                    break;
+                }
+            }
+            assert!(done, "2 巡目以降のパケットだけで復元できなかった (len={len})");
+        }
     }
 
     #[test]

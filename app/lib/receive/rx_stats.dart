@@ -31,6 +31,10 @@ class RxStats {
 
   DateTime? firstDetected;
 
+  /// 初検出の時点で走査済みだった枚数。転送中の走査枚数/秒を、カメラを向けるまでの
+  /// 待ち時間で薄めずに出すため
+  int framesAtFirstDetect = 0;
+
   /// 検出フレーム 1 枚あたりの回収ブロック数の分布 (0 / ~25% / ~50% / ~75% / ~99% / 100%)。
   /// 二極化 (0 と満点だけ) ならローリングシャッターや残像による時間方向の混入、
   /// 中間に散るなら px/セル・ピント・露出といった空間方向の問題を示す。
@@ -71,7 +75,10 @@ class RxStats {
   void addDetected({required bool tracked, required int ok, required int total}) {
     framesDetected++;
     if (tracked) framesTracked++;
-    firstDetected ??= DateTime.now();
+    if (firstDetected == null) {
+      firstDetected = DateTime.now();
+      framesAtFirstDetect = framesSeen - 1;
+    }
     blocksOk += ok;
     blocksTotalSum += total;
     blockHist[histBucket(ok, total)]++;
@@ -107,6 +114,12 @@ class RxStats {
   Duration elapsedSinceFirstDetect() => firstDetected == null
       ? Duration.zero
       : DateTime.now().difference(firstDetected!);
+
+  /// 初検出から今までの走査枚数/秒 (送信の fps と比べて取りこぼしを見る)
+  double scansPerSecSinceDetect() {
+    final ms = elapsedSinceFirstDetect().inMilliseconds;
+    return ms > 0 ? (framesSeen - framesAtFirstDetect) * 1000 / ms : 0;
+  }
 
   /// 平均回収率 (0〜1)。検出がなければ null
   double? get recoveryRatio =>

@@ -26,7 +26,7 @@ impl FountainEncoder {
         self.inner.oti_bytes().to_vec()
     }
 
-    /// 生成済みパケットの総数。送信側はこの値で循環表示する (Dart 側 int)。
+    /// 1 巡目のパケット数 (Dart 側 int)。packet(i) はこれを超えても呼べる (新しいリペアになる)。
     #[flutter_rust_bridge::frb(sync)]
     pub fn packet_count(&self) -> u32 {
         self.inner.packet_count() as u32

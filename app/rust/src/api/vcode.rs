@@ -63,11 +63,11 @@ impl VcodeTx {
         (self.encoder.packet_count().div_ceil(bc)) as u32
     }
 
-    /// i 番目のフレーム画像を生成する。パケットは循環割り当てなので全フレームが満杯になる。
+    /// i 番目 (始めからの通し番号) のフレーム画像を生成する。1 巡 (frameCount) を超えた
+    /// フレームは新しいリペアで埋まるので、同じパケットを繰り返さない。
     #[flutter_rust_bridge::frb(sync)]
     pub fn frame_gray(&self, i: u32) -> VcodeFrameImage {
         let bc = self.layout.block_count();
-        let pc = self.encoder.packet_count();
         let header = vcode::FrameHeader {
             version: vcode::VERSION,
             bits_per_cell: self.bpc,
@@ -84,7 +84,8 @@ impl VcodeTx {
         let payload_len = self.layout.block_payload_len(self.bpc);
         let blocks: Vec<Vec<u8>> = (0..bc)
             .map(|j| {
-                let mut p = self.encoder.packet((i as usize * bc + j) % pc);
+                // 通し番号のまま渡す。1 巡目を過ぎたフレームでは新しいリペアが作られる
+                let mut p = self.encoder.packet(i as usize * bc + j);
                 p.resize(payload_len, 0);
                 p
             })

@@ -712,10 +712,14 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         '${(ms / 1000).toStringAsFixed(2)}s'
         ' · ${kbps.toStringAsFixed(1)}KB/s'
         ' · cam${_camFps.toStringAsFixed(0)}fps'
+        ' · 走査${_stats.scansPerSecSinceDetect().toStringAsFixed(1)}枚/s'
         ' · 検出${_stats.framesDetected}/${_stats.framesSeen}(追従${_stats.framesTracked})'
         ' · blk${_stats.blocksOk} · pkt${_stats.packetsAdded}'
         ' · scan${_stats.avgScanMs}ms'
-        ' (rot${_stats.avgRotateMs.toStringAsFixed(1)}/dec${_stats.avgDecodeMs.toStringAsFixed(1)}ms)';
+        ' (rot${_stats.avgRotateMs.toStringAsFixed(1)}/dec${_stats.avgDecodeMs.toStringAsFixed(1)}ms)'
+        // 1 枚あたり何割読めたかの分布。0 と満点に分かれていれば送信フレームの切り替わりが
+        // 混ざっている、中間に散っていれば px/セル・ピント・露出が足りない
+        ' · 分布 ${_stats.histText()}';
     debugPrint(
       '[vcode-rx] COMPLETE: $name ${payload.length} bytes in ${ms}ms, $note',
     );

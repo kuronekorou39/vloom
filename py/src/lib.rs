@@ -15,7 +15,7 @@ use vloom_vcode as vcode;
 
 /// 送信側ハンドル。ペイロードを RaptorQ で符号化し、vcode フレームを 1 枚ずつ描く。
 ///
-/// `core-wasm` の `VcodeTx` と同一のロジック (パケットの循環割り当て、ゼロパディング、
+/// `core-wasm` の `VcodeTx` と同一のロジック (通し番号でのパケット割り当て、ゼロパディング、
 /// フレームヘッダの frame_seq) を持つ。
 #[pyclass]
 pub struct VcodeTx {
@@ -54,7 +54,8 @@ impl VcodeTx {
         self.encoder.packet_count() as u32
     }
 
-    /// 全パケットを載せるのに要るフレーム数。送信はこれを循環表示する。
+    /// 1 巡目のパケットを載せるのに要るフレーム数 (1 巡の長さ)。frame_gray はこれを超えた
+    /// 通し番号でも呼べ、新しいリペアで埋まったフレームを返す。
     #[getter]
     fn frame_count(&self) -> u32 {
         self.encoder
@@ -84,7 +85,6 @@ impl VcodeTx {
     /// QImage.Format_Grayscale8 にそのまま渡せる。
     fn frame_gray<'py>(&self, py: Python<'py>, i: u32) -> Bound<'py, PyBytes> {
         let block_count = self.layout.block_count();
-        let packet_count = self.encoder.packet_count();
         let header = vcode::FrameHeader {
             version: vcode::VERSION,
             bits_per_cell: self.bpc,
@@ -99,9 +99,8 @@ impl VcodeTx {
         let payload_len = self.layout.block_payload_len(self.bpc);
         let blocks: Vec<Vec<u8>> = (0..block_count)
             .map(|j| {
-                let mut p = self
-                    .encoder
-                    .packet((i as usize * block_count + j) % packet_count);
+                // 通し番号のまま渡す。1 巡目を過ぎたフレームでは新しいリペアが作られる
+                let mut p = self.encoder.packet(i as usize * block_count + j);
                 p.resize(payload_len, 0);
                 p
             })
