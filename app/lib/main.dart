@@ -89,10 +89,6 @@ class _HomeShellState extends State<HomeShell> {
     UpdateService.currentVersion().then((v) {
       if (mounted) setState(() => _version = v);
     });
-    // 起動直後に GitHub Releases を見て、新しい版があれば知らせる
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) UpdateService.check(context);
-    });
   }
 
   /// カメラ受信はモバイルのみ。デスクトップ (Windows = PC 送信機として使用) では
@@ -142,7 +138,7 @@ class _HomeShellState extends State<HomeShell> {
             icon: const Icon(Icons.info_outline),
             tooltip: 'このアプリについて',
             onSelected: (v) {
-              if (v == 'update') UpdateService.check(context, manual: true);
+              if (v == 'update') UpdateService.openReleases(context, _version);
               if (v == 'license') {
                 showLicensePage(
                   context: context,
@@ -156,7 +152,7 @@ class _HomeShellState extends State<HomeShell> {
               if (UpdateService.supported)
                 PopupMenuItem(
                   value: 'update',
-                  child: Text('アップデートを確認'
+                  child: Text('新しい版を確認'
                       '${_version == null ? '' : '  (いまは v$_version)'}'),
                 ),
               const PopupMenuItem(value: 'license', child: Text('ライセンス')),

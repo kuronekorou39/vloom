@@ -44,12 +44,11 @@ adb install -r build/app/outputs/flutter-apk/app-release.apk
 `key.properties` が無いと debug 鍵にフォールバックし、配布版の入った端末には入りません
 (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`)。以前の計測用の別パッケージ (`.lab`) はやめました。
 
-### アプリ内の更新
+### 新しい版の入れ方
 
-アプリは起動時に GitHub Releases の最新版 (`releases/latest`) を見て、入っている版より
-新しく APK が付いていれば「アップデートがあります」を出します (`lib/update_service.dart`)。
-右上の i メニューの「アップデートを確認」からも確かめられます。起動 Intent で計測として
-起動したときは確認しません (ダイアログで自動操作を塞がないため)。
+アプリ自体はネットワーク通信をしない (プライバシーポリシーの約束) ので、更新の自動通知は
+しません。右上の i メニューの「新しい版を確認」で Releases の最新版のページをブラウザで
+開き、`app-release.apk` を落として開けば上書きで更新できます (`lib/update_service.dart`)。
 
 配布の手順: `pubspec.yaml` の `version` を上げてコミットし、`v0.5.0` のようなタグを
 push すると、CI がリリース鍵で署名した APK を Releases に上げます。
