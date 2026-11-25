@@ -24,12 +24,12 @@ concurrency:
   group: pages
   cancel-in-progress: true
 
+# ビルド (アップロード) と配置を別のジョブにする (GitHub 公式の例と同じ形)。
+# 1 つのジョブで続けて行うと、アップロード直後の配置が「成果物が 0 件」で失敗することが
+# あった (2026-11-25 に 3 回続けて発生。再実行では通る = GitHub 側の反映待ち)。
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v5
 
@@ -60,5 +60,12 @@ jobs:
         with:
           path: web/pwa
 
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - id: deployment
         uses: actions/deploy-pages@v5
