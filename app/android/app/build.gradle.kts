@@ -16,7 +16,10 @@ val keystoreProperties = Properties().apply {
         keystorePropertiesFile.inputStream().use { load(it) }
     }
 }
-val hasReleaseKey = keystorePropertiesFile.exists()
+// パスワード欄が空の雛形 (記入前) なら鍵なし扱いにする。記入前でもビルドは通るが、
+// その APK は配布版の入った端末には上書きできない
+val hasReleaseKey = keystorePropertiesFile.exists() &&
+    !keystoreProperties.getProperty("storePassword").isNullOrBlank()
 
 android {
     namespace = "app.vloom.vloom"
