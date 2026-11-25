@@ -99,6 +99,21 @@ const kDefaultExposureOffsetEv = -1.0;
 /// フレーム供給を止めるため、acquire (20) より長く粘って発振を防ぐ。
 const kCamUnlockMissFrames = 60;
 
+// --- 何も写っていないときの省電力 ---
+//
+// 受信画面を開いたまま置いておくと、コードが無くてもカメラ 30fps・走査 2 本・広域探索を
+// 回し続け、画面も点けたままなので端末がかなり熱くなった (2026-11-25)。
+// 見つからない間は走査を間引き、長く続いたらカメラごと止める。
+
+/// これだけ何も検出しなければ省電力モード (走査を間引く) に入る
+const kIdleAfter = Duration(seconds: 3);
+
+/// 省電力モードで走査する間隔。コードが写れば、この間隔のうちに気付いて全速に戻る
+const kIdleScanInterval = Duration(milliseconds: 300);
+
+/// これだけ何も検出しなければカメラを止めて一時停止する (再開ボタンを出す)
+const kIdlePauseAfter = Duration(minutes: 2);
+
 /// 前回選んだプリセット (範囲外になっていたら捨てる)
 int? get _persistedPresetIndex {
   final i = RxPrefs.presetIndex;
@@ -226,8 +241,43 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     );
   }
 
+  /// 最後にコードを検出した時刻 (カメラを開いた時刻から数え始める)
+  DateTime? _lastDetectAt;
+  DateTime? _lastIdleScan;
+
+  /// 何も写っていない時間が続いて、走査を間引いている
+  bool get _isIdle {
+    final t = _lastDetectAt;
+    return t != null && DateTime.now().difference(t) > kIdleAfter;
+  }
+
+  /// 長く何も写らなかったのでカメラを止めている (再開ボタンを出す)
+  bool _idlePaused = false;
+
+  Future<void> _pauseForIdle() async {
+    setState(() {
+      _idlePaused = true;
+      _status = '何も写っていないので受信を一時停止しました';
+    });
+    await _stopCamera(); // カメラを解放し、画面の常時点灯も切る
+  }
+
+  void _resumeFromIdle() {
+    setState(() {
+      _idlePaused = false;
+      _status = 'カメラ起動待ち';
+    });
+    _initCamera();
+  }
+
   void _checkStale() {
     if (!mounted || !widget.active || _payload != null || _camBusy) return;
+    if (_idlePaused) return;
+    final seen = _lastDetectAt;
+    if (_cam != null && seen != null && DateTime.now().difference(seen) > kIdlePauseAfter) {
+      _pauseForIdle();
+      return;
+    }
     final cam = _cam;
     if (cam == null) {
       _initCamera(); // active なのにカメラが無い → 再取得
@@ -251,7 +301,9 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     super.didUpdateWidget(old);
     if (widget.active == old.active) return;
     if (widget.active) {
-      // 再表示: 未完了ならカメラを再取得してスキャン再開
+      // 再表示: 未完了ならカメラを再取得してスキャン再開 (一時停止していても、
+      // タブを開き直した = 受信したい、なので再開する)
+      _idlePaused = false;
       if (_payload == null && _cam == null) _initCamera();
     } else {
       // 非表示 / 校正表示中: カメラを解放
@@ -357,6 +409,9 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         _applyForcedGrid();
         _lastPreviewSize = cam.value.previewSize;
         _camStarted = DateTime.now();
+        // 省電力の判定はカメラを開いた時刻から数える (開いてすぐ間引かない)
+        _lastDetectAt = _camStarted;
+        _lastIdleScan = null;
         _camCallbacks = 0;
         await cam.startImageStream(_onFrame);
         await WakelockPlus.enable();
@@ -418,6 +473,14 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     _tickRate();
     _lastCallbackAt = DateTime.now();
     if (!_active || _payload != null) return;
+    // 省電力モード: しばらく何も写っていなければ、走査を間引く (発熱対策)
+    if (_isIdle) {
+      final last = _lastIdleScan;
+      if (last != null && _lastCallbackAt!.difference(last) < kIdleScanInterval) {
+        return;
+      }
+      _lastIdleScan = _lastCallbackAt;
+    }
     // 走査の本数ぶんまでは並行に処理する。それを超えたら最新の 1 枚だけ持つ
     if (_inFlight >= (_rx?.size ?? 1)) {
       _pendingImg = img; // 古いものは捨てる
@@ -542,6 +605,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         decodeUs: report.decodeUs,
       );
       if (report.detected) {
+        _lastDetectAt = DateTime.now();
         _stats.addDetected(
           tracked: report.tracked,
           ok: report.blocksOk,
@@ -653,7 +717,9 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           _camLocked = false;
           _lockCamera(false);
         }
+        // 省電力モードの間は広域探索 (重い) をしない。間引いた走査で写ったのに気付いたら戻る
         if (_autoAcquire &&
+            !_isIdle &&
             _missStreak >= kAutoAcquireMissFrames &&
             _stats.framesSeen >= _autoAcquireAt) {
           _autoAcquireAt = _stats.framesSeen + kAutoAcquireCooldownFrames;
@@ -1231,6 +1297,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         Colors.cyanAccent,
         Icons.center_focus_strong,
       ),
+      _ when _isIdle => ('省電力中 (コードを写すと戻ります)', Colors.white70, Icons.bedtime_outlined),
       _ when _autoAcquire => ('位置を探しています…', Colors.orangeAccent, Icons.search),
       _ => ('枠にコードを合わせてください', Colors.orangeAccent, Icons.crop_free),
     };
@@ -1394,6 +1461,24 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     final total = cov?.kt; // 必要 source パケット数
 
     if (_payload != null) return _resultView();
+    if (_idlePaused) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.pause_circle_outline, size: 56),
+            const SizedBox(height: 12),
+            Text(_status, textAlign: TextAlign.center),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: _resumeFromIdle,
+              icon: const Icon(Icons.play_arrow),
+              label: const Text('受信を再開'),
+            ),
+          ],
+        ),
+      );
+    }
     if (cam == null || !cam.value.isInitialized) {
       return Center(child: Text(_status));
     }
