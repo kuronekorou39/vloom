@@ -41,6 +41,7 @@ class MainActivity : FlutterActivity() {
                             "dumpall" to intent.getIntExtra("dumpall", -1),
                             "dumpevery" to intent.getIntExtra("dumpevery", -1),
                             "workers" to intent.getIntExtra("workers", -1),
+                            "camfps" to intent.getIntExtra("camfps", -1),
                             "exp" to intent.getIntExtra("exp", -1),
                             "iso" to intent.getIntExtra("iso", -1),
                         )

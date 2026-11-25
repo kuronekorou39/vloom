@@ -291,7 +291,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           // 約 40fps 届いたが、処理できるのは毎秒 25 枚前後で、捨てるフレームの
           // 受け取り (1 枚 20ms 前後) だけで UI isolate の 8 割を使い、ワーカーの
           // スキャンまで遅くしていた (30 → 40ms)。供給を処理速度に合わせる。
-          fps: 30,
+          // 計測用に起動 Intent の camfps で変えられる (LaunchArgs.camFps)
+          fps: LaunchArgs.cached.camFps ?? 30,
           imageFormatGroup: ImageFormatGroup.yuv420,
         );
         await cam.initialize();
@@ -389,8 +390,31 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
 
   DateTime? _lastCallbackAt;
 
+  // 直近 1 秒の「カメラから届いた枚数」と「走査した枚数」。状態表示に出し、カメラの fps を
+  // 上げたとき本当に届いているか・処理が追いついているかを画面だけで分かるようにする
+  // (配布版はログを出さないので、計測もここを読む)
+  final Stopwatch _rateWin = Stopwatch()..start();
+  int _rateCam = 0, _rateScan = 0;
+  double _liveCamFps = 0, _liveScanFps = 0;
+
+  void _tickRate({bool scanned = false}) {
+    if (scanned) {
+      _rateScan++;
+    } else {
+      _rateCam++;
+    }
+    final ms = _rateWin.elapsedMilliseconds;
+    if (ms >= 1000) {
+      _liveCamFps = _rateCam * 1000 / ms;
+      _liveScanFps = _rateScan * 1000 / ms;
+      _rateCam = _rateScan = 0;
+      _rateWin.reset();
+    }
+  }
+
   Future<void> _onFrame(CameraImage img) async {
     _camCallbacks++;
+    _tickRate();
     _lastCallbackAt = DateTime.now();
     if (!_active || _payload != null) return;
     // 走査の本数ぶんまでは並行に処理する。それを超えたら最新の 1 枚だけ持つ
@@ -509,6 +533,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         }
       }
 
+      _tickRate(scanned: true);
       _stats.addScan(
         scanMs: sw.elapsedMilliseconds,
         detected: report.detected,
@@ -1587,6 +1612,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                     ),
                   if (_panelExpanded) _measureSettings(),
                   Text(
+                    'カメラ ${_liveCamFps.toStringAsFixed(0)}枚/s · '
+                    '走査 ${_liveScanFps.toStringAsFixed(0)}枚/s · '
                     '検出 ${_stats.framesDetected}/${_stats.framesSeen} · '
                     // distinct (重複除く) が必要数 K に届くと復元される。投入は重複込みの累計。
                     '受信 ${cov?.useful ?? 0}${total != null ? "/$total 必要" : ""} '

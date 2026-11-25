@@ -24,7 +24,8 @@ class LaunchArgs {
       this.dumpEvery = 10,
       this.workers = 2,
       this.exposureUs,
-      this.iso});
+      this.iso,
+      this.camFps});
 
   /// 0=送信 1=受信 2=履歴。指定がなければ null
   final int? tab;
@@ -79,6 +80,11 @@ class LaunchArgs {
   final int? exposureUs;
   final int? iso;
 
+  /// カメラに要求する fps (計測用、--ei camfps 60)。指定がなければ 30。
+  /// 送信が 32fps のとき、30fps のカメラでは毎フレームを撮りきれず 4 割弱しか読めなかった
+  /// (2026-11-25 の速度テスト)。60 で撮れば 1 フレームを 2 回撮れるかを確かめるための切り替え
+  final int? camFps;
+
   static const _ch = MethodChannel('app.vloom/launch');
   static LaunchArgs _cached = const LaunchArgs();
 
@@ -110,6 +116,7 @@ class LaunchArgs {
         workers: (pick('workers') ?? 2).clamp(1, 4),
         exposureUs: pick('exp'),
         iso: pick('iso'),
+        camFps: pick('camfps'),
         tab: pick('tab'),
         preset: pick('preset'),
         grid: (g is String && g.isNotEmpty) ? g : null,
