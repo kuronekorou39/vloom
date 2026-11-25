@@ -52,13 +52,13 @@ jobs:
 
       # enablement: リポジトリの Pages が未設定でもワークフロー側で有効化する
       # (private 化すると Pages 設定が失われ、public に戻しても自動復活しないため)
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v6
         with:
           enablement: true
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: web/pwa
 
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
