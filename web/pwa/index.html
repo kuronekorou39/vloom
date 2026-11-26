@@ -225,15 +225,13 @@
     #rxTop .rxprog { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.35em; }
     #rxBarWrap { height: 5px; border-radius: 3px; background: rgba(255,255,255,0.25); overflow: hidden; }
     #rxBar { height: 100%; width: 0; border-radius: 3px; background: #22c55e; transition: width .2s; }
-    /* 受信が必要数に届いた後 (最後の復元計算中)。残り 3% を流れる縞にして「まだ動いている」を見せる */
+    /* 受信が必要数に届いた後 (最後の復元計算中)。同じバーのまま、残りをゆっくり伸ばし続ける。
+       以前は残り 3% を縞模様にしていたが、97% の位置に切れ目が見えて「ここから別の処理」と
+       分かってしまった。満タンにはせず (99.7% で止める)、完了したときだけ 100% にする */
     #rxBar.finishing {
-      width: 100% !important;
-      background: linear-gradient(90deg, #22c55e 0 97%, transparent 97%),
-        repeating-linear-gradient(-45deg, #86efac 0 6px, #22c55e 6px 12px);
-      background-size: 100% 100%, 24px 100%;
-      animation: rxFinishing .6s linear infinite;
+      width: 99.7% !important;
+      transition: width 40s cubic-bezier(0.2, 0.8, 0.3, 1);
     }
-    @keyframes rxFinishing { to { background-position: 0 0, 24px 0; } }
     #rxCoverage { position: absolute; z-index: 5; left: 1em; right: 1em; bottom: 7.5em;
       height: 56px; width: calc(100% - 2em); border-radius: 4px; display: none; }
     #rxCoverage.on { display: block; }

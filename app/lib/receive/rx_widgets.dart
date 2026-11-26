@@ -160,45 +160,74 @@ class ProbePanel extends StatelessWidget {
 ///
 /// 受信が必要数に届いても、最後のブロックの復元計算が残る。そのまま 100% を出すと
 /// 「満タンなのに終わらない」になって待たされる感じが強い (2026-11-25 の指摘)。
-/// 受信は 97% までの目盛りで進め、届いたら残りの区間を流れるアニメーションにして
-/// 「仕上げ中」と分かるようにする。満タンは完了画面に切り替わるときだけ。
-class ReceiveGauge extends StatelessWidget {
+/// 受信は 97% までの目盛りで進め、届いたあとは同じバーが残りをゆっくり伸び続ける。
+/// 満タンは完了画面に切り替わるときだけ。
+///
+/// 以前は残り 3% を別の色の区間にして流れる表示にしていたが、97% の位置に切れ目が見え、
+/// 「ここから別の処理をしている」と分かってしまった。見た目は 1 本のまま、途切れずに進める。
+class ReceiveGauge extends StatefulWidget {
   const ReceiveGauge({super.key, required this.received});
 
   /// 必要数に対する受信の割合 (0〜1)
   final double received;
 
-  /// 受信に割り当てる目盛り。残りが「仕上げ」
+  @override
+  State<ReceiveGauge> createState() => _ReceiveGaugeState();
+}
+
+class _ReceiveGaugeState extends State<ReceiveGauge> with SingleTickerProviderStateMixin {
+  /// 受信に割り当てる目盛り。残りは、届いたあとの復元計算の間に伸びるぶん
   static const _receiveShare = 0.97;
+
+  /// 復元計算の間に伸びる上限 (残りの区間に対する割合)。満タンには届かせない
+  static const _creepLimit = 0.9;
+
+  /// 残りの区間を伸びきるまでの時間。復元計算は数秒〜十数秒で、それより十分長く取る
+  /// (先に伸びきると、また「止まったまま待たされる」になる)
+  static const _creepDuration = Duration(seconds: 40);
+
+  late final AnimationController _creep =
+      AnimationController(vsync: this, duration: _creepDuration);
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.received >= 1.0) _creep.forward();
+  }
+
+  @override
+  void didUpdateWidget(ReceiveGauge old) {
+    super.didUpdateWidget(old);
+    final finishing = widget.received >= 1.0;
+    if (finishing && _creep.status == AnimationStatus.dismissed) {
+      _creep.forward();
+    } else if (!finishing && _creep.value > 0) {
+      _creep.value = 0; // 受信のやり直し
+    }
+  }
+
+  @override
+  void dispose() {
+    _creep.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    const bg = Color(0x55FFFFFF);
-    final finishing = received >= 1.0;
-    return SizedBox(
-      height: 6,
-      child: Row(
-        children: [
-          Expanded(
-            flex: (_receiveShare * 1000).round(),
-            child: LinearProgressIndicator(
-              value: received,
-              minHeight: 6,
-              backgroundColor: bg,
-            ),
-          ),
-          const SizedBox(width: 2),
-          Expanded(
-            flex: ((1 - _receiveShare) * 1000).round(),
-            child: LinearProgressIndicator(
-              value: finishing ? null : 0, // 届いたら流れるアニメーション
-              minHeight: 6,
-              backgroundColor: bg,
-              color: Colors.lightGreenAccent,
-            ),
-          ),
-        ],
-      ),
+    return AnimatedBuilder(
+      animation: _creep,
+      builder: (context, _) {
+        // 最初は速く、だんだん遅く。どこまで行っても少しずつ動いて見える
+        final crept = Curves.easeOutCubic.transform(_creep.value) * _creepLimit;
+        final value = widget.received < 1.0
+            ? widget.received * _receiveShare
+            : _receiveShare + (1 - _receiveShare) * crept;
+        return LinearProgressIndicator(
+          value: value,
+          minHeight: 6,
+          backgroundColor: const Color(0x55FFFFFF),
+        );
+      },
     );
   }
 }

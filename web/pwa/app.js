@@ -431,7 +431,8 @@ const receiver = new VcodeReceiver({
     // になっていた (実際に起きていた壊れ方)。
     //
     // 必要数に届いても最後のブロックの復元計算が残るので、バーは受信を 97% までの目盛りで
-    // 進め、届いたら「仕上げ中」として残りを流れる表示にする (満タンのまま待たされると苦痛)。
+    // 進め、届いたあとは同じバーが残りをゆっくり伸び続ける (満タンのまま待たされると苦痛。
+    // 伸び方は index.html の #rxBar.finishing)。
     const ratio = needed ? Math.min(1, distinct / needed) : 0;
     const finishing = needed > 0 && distinct >= needed;
     const pct = Math.floor(ratio * 97);
