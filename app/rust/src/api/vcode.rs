@@ -434,6 +434,9 @@ mod rotate_tests {
 /// たいてい普通に読めるので、数枚は 40〜60ms の追従を試し続けるほうが速い。
 const TRACK_RETRY_FRAMES: u32 = 4;
 
+/// 手動の位置検出 (acquire の thorough) が総当たりに使ってよい時間
+const ACQUIRE_SWEEP_BUDGET: std::time::Duration = std::time::Duration::from_secs(8);
+
 /// 格子 (ブロック数) からコード全体のセル数 [幅, 高さ] を返す。
 /// ガイド枠の縦横比を選択中の格子に合わせるのに使う。上下ストリップの高さは
 /// Rust 側の定数で決まるので、Dart に写さずここで計算する。
@@ -801,10 +804,35 @@ impl VcodeRx {
         if !cands.contains(&vcode::Layout::V3_MAX) {
             cands.push(vcode::Layout::V3_MAX);
         }
+        let started = std::time::Instant::now();
         for &rot in rots {
             let (gray, rw, rh) = rotate_y_plane(&y, w, h, stride, rot);
             let img = GrayImage { w: rw, h: rh, data: &gray };
-            // まずマーカー直接検出 (数 ms)。見つかれば候補レイアウトを順に当てる
+            // 最初に、マーカーの写りから格子を見積もって当てる。候補の一覧 (cands) に無い格子
+            // (15x20・16x22・横長の 30x20 など) は、これでしか掴めない
+            if let Some((q, layouts)) = locate_markers_layout(&img) {
+                for layout in layouts {
+                    if let Ok(result) = scan_frame(&img, &q, layout) {
+                        let ok = result.frame.blocks.iter().filter(|b| b.is_some()).count();
+                        let c = result.corners;
+                        return VcodeAcquireReport {
+                            detected: true,
+                            rot,
+                            grid_w: layout.grid_w as u8,
+                            grid_h: layout.grid_h as u8,
+                            blocks_ok: ok as u32,
+                            blocks_total: layout.block_count() as u32,
+                            corners: vec![c[0].0, c[0].1, c[1].0, c[1].1, c[2].0, c[2].1, c[3].0, c[3].1],
+                            img_w: rw as u32,
+                            img_h: rh as u32,
+                            cells_w: layout.width() as u32,
+                            cells_h: layout.height() as u32,
+                            block_ok: result.frame.blocks.iter().map(|b| b.is_some()).collect(),
+                        };
+                    }
+                }
+            }
+            // 次に候補の格子でマーカー直接検出 (数 ms)。見つかれば候補レイアウトを順に当てる
             if let Some(q) = locate_markers(&img) {
                 for &layout in &cands {
                     if let Ok(result) = scan_frame(&img, &q, layout) {
@@ -872,6 +900,11 @@ impl VcodeRx {
             }
             for &layout in &cands {
                 for &s in &scales {
+                    // 総当たりは 1,000 通りを超え、何も写っていないと 1 分近く返らなかった。
+                    // 押した人を待たせ続けないよう、時間で打ち切る
+                    if started.elapsed() > ACQUIRE_SWEEP_BUDGET {
+                        return fail_acquire();
+                    }
                     let (gw, gh) = contain_guide(s as f32, rw, rh, layout);
                     for &cxf in &centers {
                         for &cyf in &centers {

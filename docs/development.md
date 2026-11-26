@@ -69,6 +69,33 @@ adb shell am start -n app.vloom.vloom/.MainActivity \
   # --ei dump 4                       # 70% 未満しか読めなかったフレームを N 枚保存
   # --ei dumpall 20                   # 検出の成否・成績に関係なく 10 枚おきに N 枚保存 (誤りの統計用)
   # --ei dumpall 60 --ei dumpevery 1  # 間隔を変える (1 = 連続した枚)
+  # --ei native 0                     # カメラ直結をやめ、camera プラグイン経由の従来の経路で受ける (比較用)
+  # --ei camw 1920 --ei camh 1080 --ei camfps 60   # カメラ直結で撮る解像度と枚数
+  # --ei workers 3                    # 走査の本数
+```
+
+### Android の受信はカメラを直結している
+
+Android では、カメラの画像を Flutter (Dart) に渡さず、Kotlin (`NativeRxCamera.kt`) が Camera2 の
+Y 面を JNI で Rust (`app/rust/src/native_rx.rs`) に渡して走査し、Dart には結果だけを流します
+(`lib/receive/native_cam.dart`)。2560x1920 を毎秒 30 枚走査でき、同じ 30MB が 216 秒 → 68〜100 秒に
+なりました ([measurements/2026-11-26-native-camera-probe.md](measurements/2026-11-26-native-camera-probe.md))。
+追従・位置検出・省電力・復元の判断は、従来どおり `vcode_receive_screen.dart` にあります。
+
+- 端末を横にすると、走査の前に画像を起こす角度が切り替わり、横長の格子 (30x20 など) を読めます
+- コードを掴むまでは縦横半分に縮めた画像で探し、掴んだら元の解像度で読みます
+- `dump` 系の保存 (上の `--ei dump`) は従来の経路だけです。使うときは `--ei native 0` を付けます
+- iOS と校正画面は camera プラグイン経由のままです
+
+**手元で試すときは profile ビルドが便利です。** パッケージ名が `app.vloom.vloom.probe`
+(表示名 Vloom probe) になり、署名が違っても配布版の横に入れられます。計測用の画面
+(`ProbeActivity`、復元せずに拾えた量だけ数える) も profile ビルドにだけ入っています。
+
+```bash
+cd app && flutter build apk --profile --target-platform android-arm64
+adb install -r build/app/outputs/flutter-apk/app-profile.apk
+adb shell am start -n app.vloom.vloom.probe/app.vloom.vloom.MainActivity --ei tab 1 --es grid auto
+adb uninstall app.vloom.vloom.probe      # 済んだら消す
 ```
 
 統計は `adb logcat` の `[vloom-stats]` (完了時) と `[vcode-rx] seq=` (フレームごと) に出ます。
@@ -220,8 +247,14 @@ uv run python -m desktop
 uv を使わない場合は `pip install pyside6 maturin && maturin develop --release -m py/Cargo.toml`
 でも同じ状態になります。
 
-ファイルを選んで「送信開始」で送信ウィンドウが開きます。コードはアスペクト比を保って
-フィットし、輝度とスムージングは表示中に調整できます (Esc で閉じる)。
+ファイルを選んで「生成」で送信ウィンドウが開きます。既定は選んだモニタの全画面で、
+最前面に出ます (Esc で閉じる)。輝度とスムージングは表示中に調整できます。設定画面には
+「この画面では 1 セル 約 2.1 画素」と目安が出て、2 画素を割ると読み取りにくいと警告します。
+窓で出したいときは「全画面で表示する」を外すか、`--geometry X,Y,幅,高さ` を指定します。
+表示するモニタは `--screen 2` (設定画面の並び) でも選べます。
+
+横長の格子 (30x20 など) は、横長の画面を広く使えるので 1 枚に載る量が増えます。受信側の
+スマホは横向きにします (Android 版 0.6 以降)。
 
 **窓の中でのコードの位置と大きさも変えられます。** 送信中に矢印キーで動かし、
 `+` / `-` で拡縮、`0` で戻ります (Shift で粗く)。`H` (または `--hold`) でフレームを止めて

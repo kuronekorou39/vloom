@@ -275,16 +275,26 @@ pub unsafe extern "system" fn Java_app_vloom_vloom_NativeRx_acquire(
     let (w, hgt, stride) = (width as usize, height as usize, stride as usize);
     let mut scanner = handle(h).lock().unwrap();
     // 位置を掴むだけなので、大きい画像は縮めて探す (理由は SEARCH_FULL_RES_PIXELS)。
-    // 手動の全探索 (thorough) は取りこぼしたくないので元の解像度のまま
-    let report = if thorough == 0 && w * hgt > SEARCH_FULL_RES_PIXELS {
+    // 手動の全探索 (thorough) も同じ。元の解像度のままだと、何も写っていないときに
+    // 結果が出るまで 20 秒以上かかった。縮めると掴めない細かいコードは、毎枚の走査が
+    // 元の解像度でも探しているので、そちらで掴める
+    let report = if w * hgt > SEARCH_FULL_RES_PIXELS {
         let (small, sw, sh) = halve(&y, w, hgt, stride);
-        let mut r = scanner.rx.acquire(small, sw as u32, sh as u32, sw as u32, rot as u32, false);
+        let mut r = scanner.rx.acquire(small, sw as u32, sh as u32, sw as u32, rot as u32, thorough != 0);
         for c in r.corners.iter_mut() {
             *c *= 2.0;
         }
         r.img_w *= 2;
         r.img_h *= 2;
-        r
+        if r.detected {
+            r
+        } else {
+            // 縮めると読めない細かいコード (30x20 を画角いっぱいに写すと 1 セル 1.6 画素) に備えて、
+            // 元の解像度でも軽い探索 (マーカーから格子を見積もる。総当たりはしない) を試す。
+            // 受信側の格子を固定していると毎枚の走査は別の格子を探さないので、ここで掴めないと
+            // 「写っているのに掴めない」まま止まる
+            scanner.rx.acquire(y, width as u32, height as u32, stride as u32, rot as u32, false)
+        }
     } else {
         scanner.rx.acquire(y, width as u32, height as u32, stride as u32, rot as u32, thorough != 0)
     };

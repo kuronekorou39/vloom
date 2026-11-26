@@ -592,11 +592,19 @@ class MainWindow(QWidget):
         bpc = 1 if self.bpc.currentIndex() == 0 else 2
         fps = self.fps.value()
 
-        # 元のファイル名/MIME をヘッダに埋めて送る (受信側で元名・種別をそのまま復元)
-        source = vloom_core.wrap_file(name, mime, data)
-        source_packets = math.ceil(len(source) / vloom_core.packet_size(bpc))
-        extra_repair = math.ceil(source_packets * self.repair.value() / 100)
-        tx = vloom_core.VcodeTx(source, extra_repair, gw, gh, bpc)
+        # 符号化は大きいファイルだと 20 秒ほどかかり、その間は画面が固まる。何も出さないと
+        # 押せていないように見えるので、先に知らせてから始める
+        self.info.setText("準備中… (大きいファイルは 20 秒ほどかかります)")
+        QGuiApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        QGuiApplication.processEvents()
+        try:
+            # 元のファイル名/MIME をヘッダに埋めて送る (受信側で元名・種別をそのまま復元)
+            source = vloom_core.wrap_file(name, mime, data)
+            source_packets = math.ceil(len(source) / vloom_core.packet_size(bpc))
+            extra_repair = math.ceil(source_packets * self.repair.value() / 100)
+            tx = vloom_core.VcodeTx(source, extra_repair, gw, gh, bpc)
+        finally:
+            QGuiApplication.restoreOverrideCursor()
 
         self.stage = SenderWindow(tx, fps, len(data), name, self.margin.value(),
                                   self.zoom.value(), self.snap_cells,
