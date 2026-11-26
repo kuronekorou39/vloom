@@ -4,4 +4,13 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <application>
+        <!-- カメラ直結の計測画面 (実験用)。profile ビルドだけに入り、配布版には含めない。
+             adb から起動するので exported -->
+        <activity
+            android:name=".ProbeActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:theme="@android:style/Theme.Black.NoTitleBar" />
+    </application>
 </manifest>

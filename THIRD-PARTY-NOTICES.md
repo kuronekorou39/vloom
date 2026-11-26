@@ -58,6 +58,7 @@ Vloom は MIT を選択して利用しています。
 | [wasm-bindgen](https://github.com/rustwasm/wasm-bindgen) 0.2 | Copyright (c) 2014 Alex Crichton | WASM |
 | [miniz_oxide](https://github.com/Frommi/miniz_oxide) 0.8 (MIT OR Zlib OR Apache-2.0) | Copyright 2013-2014 RAD Game Tools and Valve Software; Copyright 2010-2014 Rich Geldreich and Tenacious Software LLC; Copyright (c) 2017 Frommi | WASM / APK / iOS / デスクトップ |
 | [adler2](https://github.com/oyvindln/adler2) 2.x (0BSD OR MIT OR Apache-2.0、miniz_oxide の依存) | Copyright (C) Jonas Schievink, oyvindln | WASM / APK / iOS / デスクトップ |
+| [jni-sys](https://github.com/jni-rs/jni-sys) 0.3 (MIT OR Apache-2.0) | Copyright (c) 2015 The rust-jni-sys Developers | APK |
 
 ## LGPL-3.0 (デスクトップアプリのみ)
 

@@ -67,6 +67,13 @@ android {
                 signingConfigs.getByName("debug")
             }
         }
+        // profile ビルドは「カメラ直結の計測」(src/profile の ProbeActivity) 専用。
+        // 配布版と署名が違っても横に入れられるよう、別のパッケージ名にする。
+        // 計測が済んだら端末から消すこと (adb uninstall app.vloom.vloom.probe)
+        maybeCreate("profile").apply {
+            applicationIdSuffix = ".probe"
+            manifestPlaceholders["appLabel"] = "Vloom probe"
+        }
     }
 }
 
