@@ -62,6 +62,38 @@ class Pattern:
         return img
 
 
+# --- 画面までの経路で色が間引かれていないかを見る縞 ---
+#
+# 画面への信号が YCbCr 4:2:2 / 4:2:0 だと、色は横 (4:2:0 なら縦も) 2 画素でひとまとめになる。
+# 赤と青の 2 画素幅の縞を、その 2 画素の区切りに合わせたものと 1 画素ずらしたものとで出すと、
+# 間引かれている経路では、ずらしたほうだけ色が混ざって紫一色になる (明るさの縞は残る)。
+# 4 つの区画: [横に並ぶ縞・区切りに合う, 横に並ぶ縞・1 画素ずらす,
+#              縦に並ぶ縞・区切りに合う, 縦に並ぶ縞・1 画素ずらす]
+STRIPE_PATCHES = ["x_aligned", "x_shifted", "y_aligned", "y_shifted"]
+STRIPE_INSET = 60
+
+
+def stripe_patch_rects() -> list[tuple[int, int, int, int]]:
+    """縞の区画 4 つ (x, y, 幅, 高さ。画面の画素)。データ領域を 2x2 に割り、内側に寄せる。"""
+    hw, hh = DATA_W // 2, DATA_H // 2
+    return [(DATA_X + qx * hw + STRIPE_INSET, DATA_Y + qy * hh + STRIPE_INSET,
+             hw - 2 * STRIPE_INSET, hh - 2 * STRIPE_INSET)
+            for qy in range(2) for qx in range(2)]
+
+
+def stripes_image() -> np.ndarray:
+    img = np.full((SCREEN_H, SCREEN_W, 3), 255, dtype=np.uint8)
+    yy, xx = np.mgrid[0:SCREEN_H, 0:SCREEN_W]
+    red, blue = np.array([255, 0, 0], np.uint8), np.array([0, 0, 255], np.uint8)
+    phase = [(xx // 2) % 2, ((xx + 1) // 2) % 2, (yy // 2) % 2, ((yy + 1) // 2) % 2]
+    for (x, y, w, h), ph in zip(stripe_patch_rects(), phase):
+        sub = ph[y:y + h, x:x + w][..., None]
+        img[y:y + h, x:x + w] = np.where(sub == 0, red, blue)
+    for cx, cy in fiducial_centers():
+        x0, y0 = int(cx - FID / 2), int(cy - FID / 2)
+        img[y0:y0 + FID, x0:x0 + FID] = 0
+    return img
+
 def symbol_rgb(sym: np.ndarray) -> np.ndarray:
     """記号 (0〜7) → RGB (各チャネル 0 か 255)。"""
     return np.stack([(sym >> k & 1) * 255 for k in range(3)], axis=-1).astype(np.uint8)
