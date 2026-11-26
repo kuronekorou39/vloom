@@ -44,7 +44,8 @@ import java.util.concurrent.atomic.AtomicLong
 ///       --ei w 1920 --ei h 1080 --ei fps 60 --ei workers 3 --es grid 15x20 --ei exp 2000 --ei iso 400
 ///
 /// w/h: 撮る解像度、fps: 撮る枚数、workers: 走査のスレッド数、grid: 格子 (省略で自動)、
-/// exp: 露光 (マイクロ秒。省略で自動露出)、iso: ゲイン、preview: 0 でプレビューなし
+/// exp: 露光 (マイクロ秒。省略で自動露出)、iso: ゲイン、preview: 0 でプレビューなし、
+/// rot: 走査の前に画像を回す角度 (省略でセンサーの向き = 縦持ち)
 class ProbeActivity : Activity() {
     private lateinit var preview: TextureView
     private lateinit var text: TextView
@@ -147,6 +148,8 @@ class ProbeActivity : Activity() {
         }
         val chars = mgr.getCameraCharacteristics(id)
         rot = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+        // 端末を横向きに置いて横長のコードを読むときは 0 か 180 を指定する
+        rot = intent.getIntExtra("rot", rot)
         val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
         val ranges = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
         Log.i(TAG, "fps ranges: ${ranges?.joinToString()}")
