@@ -45,7 +45,9 @@ import java.util.concurrent.atomic.AtomicLong
 ///
 /// w/h: 撮る解像度、fps: 撮る枚数、workers: 走査のスレッド数、grid: 格子 (省略で自動)、
 /// exp: 露光 (マイクロ秒。省略で自動露出)、iso: ゲイン、preview: 0 でプレビューなし、
-/// rot: 走査の前に画像を回す角度 (省略でセンサーの向き = 縦持ち)
+/// rot: 走査の前に画像を回す角度 (省略でセンサーの向き = 縦持ち)、
+/// dumpyuv: 走査せず、色つきの生画像 (Y・U・V) をこの枚数だけ保存する (色の読み分けの調査用。
+/// tools/color_probe/)。保存先は adb pull できるアプリの外部領域
 class ProbeActivity : Activity() {
     private lateinit var preview: TextureView
     private lateinit var text: TextView
@@ -69,6 +71,10 @@ class ProbeActivity : Activity() {
     private var iso = 400
     private var withPreview = true
 
+    // 色の調査用の保存 (dumpyuv)。露出とピントが落ち着くまで待ち、間を空けて保存する
+    private var dumpLeft = 0
+    private var dumpSeen = 0
+
     // カメラから届いた枚数と、届く間隔の最大 (センサーの時刻で測る)
     private val camFrames = AtomicLong()
     private val maxGapUs = AtomicLong()
@@ -88,6 +94,7 @@ class ProbeActivity : Activity() {
         expUs = intent.getIntExtra("exp", expUs)
         iso = intent.getIntExtra("iso", iso)
         withPreview = intent.getIntExtra("preview", 1) != 0
+        dumpLeft = intent.getIntExtra("dumpyuv", 0)
         intent.getStringExtra("grid")?.split("x")?.mapNotNull { it.toIntOrNull() }?.let {
             if (it.size == 2) { gridW = it[0]; gridH = it[1] }
         }
@@ -176,8 +183,17 @@ class ProbeActivity : Activity() {
             }
             lastSensorNs = ts
             camFrames.incrementAndGet()
-            val p = img.planes[0]
-            NativeProbe.submit(p.buffer, img.width, img.height, p.rowStride, rot)
+            if (dumpLeft > 0) {
+                dumpSeen++
+                if (dumpSeen > DUMP_WARMUP_FRAMES && dumpSeen % DUMP_EVERY == 0) {
+                    saveYuv(img, dumpLeft)
+                    dumpLeft--
+                    if (dumpLeft == 0) Log.i(TAG, "DUMP done")
+                }
+            } else if (dumpSeen == 0) {
+                val p = img.planes[0]
+                NativeProbe.submit(p.buffer, img.width, img.height, p.rowStride, rot)
+            }
             img.close()
         }, readHandler)
 
@@ -234,6 +250,33 @@ class ProbeActivity : Activity() {
                 ui.post { text.text = "この組み合わせでは撮れません: ${capW}x$capH @$capFps" }
             }
         }, camHandler)
+    }
+
+    /// 1 枚を Y (幅×高さ)、U、V (それぞれ 幅/2 × 高さ/2) の順に詰めて保存する。
+    private fun saveYuv(img: android.media.Image, index: Int) {
+        val (w, h) = img.width to img.height
+        val out = java.io.File(getExternalFilesDir(null), "yuv_${index}_${w}x$h.bin")
+        java.io.BufferedOutputStream(java.io.FileOutputStream(out), 1 shl 20).use { os ->
+            for ((i, plane) in img.planes.withIndex()) {
+                val (pw, ph) = if (i == 0) w to h else w / 2 to h / 2
+                val buf = plane.buffer
+                val row = ByteArray(plane.rowStride)
+                val packed = ByteArray(pw)
+                for (y in 0 until ph) {
+                    buf.position(y * plane.rowStride)
+                    // 最終行は rowStride に満たないことがある
+                    val n = minOf(row.size, buf.remaining())
+                    buf.get(row, 0, n)
+                    if (plane.pixelStride == 1) {
+                        os.write(row, 0, pw)
+                    } else {
+                        for (x in 0 until pw) packed[x] = row[x * plane.pixelStride]
+                        os.write(packed)
+                    }
+                }
+            }
+        }
+        Log.i(TAG, "DUMP saved ${out.path}")
     }
 
     private fun closeCamera() {
@@ -304,6 +347,10 @@ class ProbeActivity : Activity() {
 
     companion object {
         private const val TAG = "VloomProbe"
+
+        /// 保存を始めるまでに捨てる枚数 (露出とピントが落ち着くまで) と、保存の間隔
+        private const val DUMP_WARMUP_FRAMES = 75
+        private const val DUMP_EVERY = 6
 
         // NativeProbe.stats() の並び (app/rust/src/native_probe.rs と揃える)。0 番は submitted
         private const val STAT_COUNT = 13
