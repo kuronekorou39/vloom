@@ -23,9 +23,29 @@ const double kVcodeGuideFrac = 0.8;
 /// 「画像座標に対応させたい描画」はここに渡すこと。表示領域全体に重ねると
 /// 上下の余白ぶんだけ画像とずれる。
 class VcodeCameraView extends StatelessWidget {
-  const VcodeCameraView(this.controller,
-      {super.key, this.overlay, this.guideAspect = 0.92, this.alignment = Alignment.center});
-  final CameraController controller;
+  /// camera プラグインのカメラを映す (iOS・校正・比較用の従来経路)
+  VcodeCameraView(CameraController controller,
+      {super.key, this.overlay, this.guideAspect = 0.92, this.alignment = Alignment.center})
+      : preview = CameraPreview(controller),
+        aspectRatio = controller.value.aspectRatio;
+
+  /// ネイティブ側が Texture に直接描くカメラを映す (Android の受信。receive/native_cam.dart)。
+  /// [aspectRatio] はセンサーの向きでの 幅 / 高さ、[quarterTurns] は画像を起こす回転
+  VcodeCameraView.texture(
+      {super.key,
+      required int textureId,
+      required this.aspectRatio,
+      int quarterTurns = 0,
+      this.overlay,
+      this.guideAspect = 0.92,
+      this.alignment = Alignment.center})
+      : preview = RotatedBox(quarterTurns: quarterTurns, child: Texture(textureId: textureId));
+
+  /// カメラの映像そのもの
+  final Widget preview;
+
+  /// 映像の縦横比 (長辺 / 短辺)。縦持ちで幅 w に対して高さ w * aspectRatio で映す
+  final double aspectRatio;
   final Widget? overlay;
 
   /// 表示領域の中でカメラ画像を置く位置。縦長の画面では画像の上下に黒い余りが
@@ -41,7 +61,7 @@ class VcodeCameraView extends StatelessWidget {
     return LayoutBuilder(builder: (ctx, c) {
       // CameraPreview は縦表示で 1/aspectRatio の縦横比なので、
       // 幅 w のとき高さ w*aspectRatio (歪みなし)。表示領域に収まる最大の w を取る。
-      final ar = controller.value.aspectRatio;
+      final ar = aspectRatio;
       final w = math.min(c.maxWidth, c.maxHeight / ar);
       return Align(
         alignment: alignment,
@@ -51,7 +71,7 @@ class VcodeCameraView extends StatelessWidget {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              CameraPreview(controller),
+              preview,
               // vcode の枠 (guideFrac 準拠、縦横比は選択中の格子に合わせる)
               ScanGuideOverlay(widthFrac: kVcodeGuideFrac, aspect: guideAspect),
               ?overlay,

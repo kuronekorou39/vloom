@@ -11,7 +11,7 @@ flutter_rust_bridge = "=2.12.0"
 vloom-fountain = { path = "../../fountain" }
 vloom-vcode = { path = "../../vcode", features = ["parallel"] }
 
-# カメラ直結の計測 (src/native_probe.rs) が JNI の関数表を引くのに使う。型定義だけ
+# カメラ直結の受信 (src/native_rx.rs) が JNI の関数表を引くのに使う。型定義だけ
 [target.'cfg(target_os = "android")'.dependencies]
 jni-sys = "0.3"
 

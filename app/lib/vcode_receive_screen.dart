@@ -23,6 +23,7 @@ import 'receive/decode_worker.dart';
 import 'receive/detected_code.dart';
 import 'receive/file_sniff.dart';
 import 'receive/focus_hunter.dart';
+import 'receive/native_cam.dart';
 import 'receive/packet_coverage.dart';
 import 'receive/rx_stats.dart';
 import 'receive/rx_widgets.dart';
@@ -117,6 +118,14 @@ const kIdleAcquireInterval = Duration(seconds: 3);
 /// これだけ何も検出しなければカメラを止めて一時停止する (再開ボタンを出す)
 const kIdlePauseAfter = Duration(minutes: 2);
 
+// --- Android のカメラ直結 (receive/native_cam.dart) ---
+
+/// 走査に渡す解像度。Pixel 9a で 2560x1920 が毎秒 30 枚出せるいちばん扱いやすい大きさで、
+/// 同じ置き方の 1600x1200 より 2〜4 倍拾えた。使えない端末ではネイティブ側が出せる最大の
+/// 4:3 に落とす (docs/measurements/2026-11-26-native-camera-probe.md)
+const kNativeCaptureWidth = 2560;
+const kNativeCaptureHeight = 1920;
+
 /// 前回選んだプリセット (範囲外になっていたら捨てる)
 int? get _persistedPresetIndex {
   final i = RxPrefs.presetIndex;
@@ -135,6 +144,17 @@ const kAutoPresetIndex = -1;
 class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     with WidgetsBindingObserver {
   CameraController? _cam;
+
+  /// Android ではカメラを Flutter に通さず、ネイティブ側で走査まで済ませる
+  /// (receive/native_cam.dart)。こちらを使っている間 [_cam] と [_rx] は null のまま。
+  /// 起動 Intent の native=0 で従来の経路に戻せる (比較用)
+  NativeCam? _ncam;
+  static bool get _useNative => Platform.isAndroid && LaunchArgs.cached.native != 0;
+  bool get _camOpen => _cam != null || _ncam != null;
+
+  /// ネイティブ側に走査の間引きを頼んでいるか
+  bool _nativeIdle = false;
+  bool _nativeAcquiring = false;
 
   /// 選択中のプリセット。送信側と同じものを選べば格子も解像度も揃う
   // 起動 Intent でプリセットを指定できる (計測の自動化用)。カメラの解像度を
@@ -294,16 +314,16 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     if (!mounted || !widget.active || _payload != null || _camBusy) return;
     if (_idlePaused) return;
     final seen = _lastDetectAt;
-    if (_cam != null && seen != null && DateTime.now().difference(seen) > kIdlePauseAfter) {
+    if (_camOpen && seen != null && DateTime.now().difference(seen) > kIdlePauseAfter) {
       _pauseForIdle();
       return;
     }
-    final cam = _cam;
-    if (cam == null) {
+    if (!_camOpen) {
       _initCamera(); // active なのにカメラが無い → 再取得
       return;
     }
-    if (!cam.value.isInitialized) return;
+    final cam = _cam;
+    if (cam != null && !cam.value.isInitialized) return;
     final ref = _lastCallbackAt ?? _camStarted;
     if (ref != null && DateTime.now().difference(ref).inMilliseconds > 2000) {
       _reinit(); // フレームが 2 秒途絶 = 灰色 → 作り直す
@@ -324,7 +344,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       // 再表示: 未完了ならカメラを再取得してスキャン再開 (一時停止していても、
       // タブを開き直した = 受信したい、なので再開する)
       _idlePaused = false;
-      if (_payload == null && _cam == null) _initCamera();
+      if (_payload == null && !_camOpen) _initCamera();
     } else {
       // 非表示 / 校正表示中: カメラを解放
       _stopCamera();
@@ -342,6 +362,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   }
 
   Future<void> _initCameraInner() async {
+    if (_useNative) return _initNative();
     // 直前まで校正/別タブがカメラを掴んでいると初回 initialize が失敗しうるので、
     // 解放待ちのため数回リトライする。
     for (var attempt = 0; attempt < 6; attempt++) {
@@ -454,6 +475,97 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     }
   }
 
+  /// カメラ直結 (Android) で開く。露出補正・測光点・露光の直接指定は開くときに渡す。
+  Future<void> _initNative() async {
+    for (var attempt = 0; attempt < 6; attempt++) {
+      if (!mounted || !widget.active) return;
+      try {
+        final expUs = LaunchArgs.cached.exposureUs;
+        final cam = await NativeCam.start(
+          onScan: _onNativeScan,
+          width: LaunchArgs.cached.camWidth ?? kNativeCaptureWidth,
+          height: LaunchArgs.cached.camHeight ?? kNativeCaptureHeight,
+          fps: LaunchArgs.cached.camFps ?? 30,
+          workers: LaunchArgs.cached.nativeWorkers,
+          ev: LaunchArgs.cached.ev ?? kDefaultExposureOffsetEv,
+          meterCenter: (LaunchArgs.cached.aePoint ?? 'center') != 'none',
+          exposureUs: expUs,
+          iso: expUs == null
+              ? null
+              : LaunchArgs.cached.iso ?? (860000 / expUs).round().clamp(50, 6400),
+        );
+        if (!mounted || !widget.active) {
+          await cam.stop();
+          return;
+        }
+        _ncam = cam;
+        _nativeIdle = false;
+        _nativeAcquiring = false;
+        _applyForcedGrid();
+        _lastPreviewSize = Size(cam.width.toDouble(), cam.height.toDouble());
+        _camStarted = DateTime.now();
+        _lastDetectAt = _camStarted;
+        _camCallbacks = 0;
+        debugPrint('[vcode-rx] native camera ${cam.width}x${cam.height} '
+            'rot=${cam.sensorOrientation} textureRotated=${cam.textureRotated}');
+        await WakelockPlus.enable();
+        setState(() {
+          _active = true;
+          _status = 'スキャン中';
+        });
+        return;
+      } catch (e) {
+        if (attempt == 5) {
+          if (mounted) setState(() => _status = 'カメラ初期化失敗: $e');
+        } else {
+          await Future.delayed(const Duration(milliseconds: 300));
+        }
+      }
+    }
+  }
+
+  /// カメラ直結の走査 1 枚ぶん。画像の受け取り・並行数の管理・間引きはネイティブ側が
+  /// 済ませているので、ここは結果を受信の状態に反映するだけ。
+  void _onNativeScan(NativeScanEvent e) {
+    final cam = _ncam;
+    if (cam == null) return;
+    _tickRate(cam: (e.camFrames - _camCallbacks).clamp(0, 1000));
+    _camCallbacks = e.camFrames;
+    _lastCallbackAt = DateTime.now();
+    if (!_active || _payload != null) return;
+    _lastRot = cam.sensorOrientation;
+    _lastImgW = cam.width;
+    _lastImgH = cam.height;
+    _lastStride = cam.width;
+    // 省電力: しばらく何も写っていなければ走査を間引いてもらう (発熱対策)
+    final idle = _isIdle;
+    if (idle != _nativeIdle) {
+      _nativeIdle = idle;
+      cam.setScanInterval(idle ? kIdleScanInterval : Duration.zero);
+    }
+    if (_acquireRequested && !_nativeAcquiring) {
+      _acquireRequested = false;
+      unawaited(_runNativeAcquire(cam));
+    }
+    _handleReport(e.report, e.scanMs);
+  }
+
+  Future<void> _runNativeAcquire(NativeCam cam) async {
+    _nativeAcquiring = true;
+    try {
+      // 自動起動は軽量版。全探索は数秒かかるので手動ボタンのときだけ
+      final rep = await cam.acquire(thorough: !_acquireIsAuto);
+      if (rep == null || !mounted || !_active) {
+        _acquireIsAuto = false;
+        if (mounted) setState(() => _acquiring = false);
+        return;
+      }
+      await _afterAcquire(rep);
+    } finally {
+      _nativeAcquiring = false;
+    }
+  }
+
   /// カメラの実配信フレームレート (要求 60fps がどこまで通ったかの検証用)。
   /// 最後のコールバック時刻までで計測する (完了後に表示しても値が減衰しない)。
   double get _camFps {
@@ -473,11 +585,11 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   int _rateCam = 0, _rateScan = 0;
   double _liveCamFps = 0, _liveScanFps = 0;
 
-  void _tickRate({bool scanned = false}) {
+  void _tickRate({bool scanned = false, int cam = 1}) {
     if (scanned) {
       _rateScan++;
     } else {
-      _rateCam++;
+      _rateCam += cam;
     }
     final ms = _rateWin.elapsedMilliseconds;
     if (ms >= 1000) {
@@ -547,7 +659,6 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       // seed でトラッキングの種にする。以降 scan() は最初からその位置にロックして始まる。
       if (_acquireRequested) {
         _acquireRequested = false;
-        final wasAuto = _acquireIsAuto;
         final rep = await rx.acquire(
           y: TransferableTypedData.fromList([y.bytes]),
           width: img.width,
@@ -556,33 +667,10 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           rotationDeg: rotation,
           // 自動起動は軽量版 (locate のみ)。全 sweep は見つからないとき数秒
           // フレーム処理を止めるので、手動ボタンのときだけ使う
-          thorough: !wasAuto,
+          thorough: !_acquireIsAuto,
         );
         if (!mounted || !_active) return;
-        setState(() {
-          _acquiring = false;
-          if (rep.detected) {
-            // 検出 4 隅をハイライト表示用に保持 (確認ダイアログの背後に見える)
-            _setDetected(rep.corners, rep.imgW, rep.imgH, rep.rot, rep.cellsW, rep.cellsH);
-          }
-        });
-        if (_acquireIsAuto) {
-          // 自動起動: 確認を挟まずそのままロックする。位置がずれていても、
-          // 検出が続かなければクールダウン後にまた自動取得が走って直る。
-          _acquireIsAuto = false;
-          if (rep.detected) {
-            _adoptDetectedGrid(rep);
-            rx.seed(
-              rot: rep.rot,
-              gridW: rep.gridW,
-              gridH: rep.gridH,
-              corners: rep.corners.toList(),
-            );
-            if (mounted) setState(() => _seeded = true);
-          }
-          return;
-        }
-        await _showAcquireDialog(rep, rx);
+        await _afterAcquire(rep);
         return;
       }
       // 同期版 (実験): 非同期だと完了通知が UI の描画待ちに掛かり、Rust の 31ms に対して
@@ -617,9 +705,56 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         }
       }
 
+      _handleReport(report, sw.elapsedMilliseconds);
+    } finally {
+      _inFlight--;
+      final next = _pendingImg;
+      _pendingImg = null;
+      if (next != null && _active && _payload == null) {
+        // 待たせていたフレームをすぐ処理する (await しない: この関数の呼び出し元は
+        // カメラのストリームで、戻りを待たれていない)
+        unawaited(_onFrame(next));
+      }
+    }
+  }
+
+  /// 位置検出の結果を反映する。自動起動なら確認を挟まずそのまま追従の種にする。
+  Future<void> _afterAcquire(VcodeAcquireReport rep) async {
+    setState(() {
+      _acquiring = false;
+      if (rep.detected) {
+        // 検出 4 隅をハイライト表示用に保持 (確認ダイアログの背後に見える)
+        _setDetected(rep.corners, rep.imgW, rep.imgH, rep.rot, rep.cellsW, rep.cellsH);
+      }
+    });
+    if (_acquireIsAuto) {
+      // 自動起動: 確認を挟まずそのままロックする。位置がずれていても、
+      // 検出が続かなければクールダウン後にまた自動取得が走って直る。
+      _acquireIsAuto = false;
+      if (rep.detected) {
+        _adoptDetectedGrid(rep);
+        _seedScanner(rep);
+        if (mounted) setState(() => _seeded = true);
+      }
+      return;
+    }
+    await _showAcquireDialog(rep);
+  }
+
+  /// 位置検出で得た (回転, 格子, 4 隅) を、走査の全部の本に追従の種として配る。
+  void _seedScanner(VcodeAcquireReport rep) {
+    final corners = rep.corners.toList();
+    _rx?.seed(rot: rep.rot, gridW: rep.gridW, gridH: rep.gridH, corners: corners);
+    _ncam?.seed(rot: rep.rot, gridW: rep.gridW, gridH: rep.gridH, corners: corners);
+  }
+
+  /// 走査 1 枚ぶんの結果を受信の状態に反映する (カメラの出どころに依らない)。
+  /// [scanMs] は 1 枚の処理にかかった時間。
+  void _handleReport(VcodeScanReport report, int scanMs) {
+    {
       _tickRate(scanned: true);
       _stats.addScan(
-        scanMs: sw.elapsedMilliseconds,
+        scanMs: scanMs,
         detected: report.detected,
         rotateUs: report.rotateUs,
         decodeUs: report.decodeUs,
@@ -731,17 +866,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       if (mounted && _stats.framesSeen % 5 == 0) setState(() {});
       // 1 枚あたりの処理時間の内訳 (30 枚ごとの平均)。受信の処理速度が天井になった
       // とき、Rust のスキャンか、FRB の Y 面コピーか、デコーダ投入か、を切り分ける
-      final timing = _stats.addFrameTime(sw.elapsedMilliseconds);
+      final timing = _stats.addFrameTime(scanMs);
       if (timing != null) debugPrint('[vcode-rx] timing avg/frame: $timing');
-    } finally {
-      _inFlight--;
-      final next = _pendingImg;
-      _pendingImg = null;
-      if (next != null && _active && _payload == null) {
-        // 待たせていたフレームをすぐ処理する (await しない: この関数の呼び出し元は
-        // カメラのストリームで、戻りを待たれていない)
-        unawaited(_onFrame(next));
-      }
     }
   }
 
@@ -831,7 +957,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     _lastCellsW = cellsW;
   }
 
-  int get _sensorOrientation => _cam?.description.sensorOrientation ?? 90;
+  int get _sensorOrientation =>
+      _cam?.description.sensorOrientation ?? _ncam?.sensorOrientation ?? 90;
 
   Future<void> _saveDump(VcodeScanReport report, String tag) async {
     try {
@@ -934,14 +1061,14 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   /// 探索する格子をスキャナに反映する。送信側の格子が分かっているなら固定するほど
   /// 初回検出と acquire が速い (候補数に比例したコストが 1 候補分になる)。
   void _applyForcedGrid() {
-    final rx = _rx;
-    if (rx == null) return;
-    if (_forcedGrid == kGridAuto) {
-      rx.setLayout(gridW: 0, gridH: 0);
-    } else {
+    var gw = 0, gh = 0; // 0 = 自動
+    if (_forcedGrid != kGridAuto) {
       final p = _forcedGrid.split('x');
-      rx.setLayout(gridW: int.parse(p[0]), gridH: int.parse(p[1]));
+      gw = int.parse(p[0]);
+      gh = int.parse(p[1]);
     }
+    _rx?.setLayout(gridW: gw, gridH: gh);
+    _ncam?.setLayout(gridW: gw, gridH: gh);
   }
 
   /// acquire が検出した格子を受信設定に取り込む。格子はフレームのヘッダが自己記述して
@@ -1004,6 +1131,12 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   /// FocusMode の切替はフレーム供給を 0.5〜5 秒止めることがあるので、
   /// 呼ぶのは _updateFocusLock が「探り直しが起きている」と判断したときだけ。
   Future<void> _setFocusLocked(bool lock) async {
+    final n = _ncam;
+    if (n != null) {
+      // カメラ直結では「いまのレンズ位置で AF を切る」だけなので、供給は止まらない
+      await n.lockFocus(lock);
+      return;
+    }
     final cam = _cam;
     if (cam == null || !cam.value.isInitialized) return;
     try {
@@ -1014,6 +1147,15 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   }
 
   Future<void> _lockCamera(bool lock) async {
+    final n = _ncam;
+    if (n != null) {
+      final mode = LaunchArgs.cached.camLock ?? 'ae';
+      debugPrint('[vcode-rx] camera ${lock ? "lock" : "unlock"} ($mode, native)');
+      if (mode == 'none') return;
+      if (mode != 'ae') await n.lockFocus(lock);
+      await n.lockExposure(lock);
+      return;
+    }
     final cam = _cam;
     if (cam == null || !cam.value.isInitialized) return;
     // 既定は露出だけ固定する。ピント (FocusMode) の切替はカメラのフレーム供給を
@@ -1056,6 +1198,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     });
     // スキャナの追従状態も捨てる (古い位置に引きずられないように)
     _rx?.reset();
+    _ncam?.reset();
     _applyForcedGrid();
     if (_camLocked) {
       _camLocked = false;
@@ -1106,6 +1249,13 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       } catch (_) {}
       await cam.dispose();
     }
+    final n = _ncam;
+    _ncam = null;
+    if (n != null) {
+      try {
+        await n.stop();
+      } catch (_) {}
+    }
     await WakelockPlus.disable();
   }
 
@@ -1152,7 +1302,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   }
 
   /// acquire 結果を中央ポップアップで確認。確定なら seed して受信継続、やり直しなら再取得。
-  Future<void> _showAcquireDialog(VcodeAcquireReport rep, ScanPool rx) async {
+  Future<void> _showAcquireDialog(VcodeAcquireReport rep) async {
     if (!mounted) return;
     if (!rep.detected) {
       await showDialog<void>(
@@ -1194,12 +1344,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     if (confirmed == true) {
       _adoptDetectedGrid(rep);
       // 検出した 4 隅・回転・格子をトラッキングの種にする。中央ガイド枠に頼らず即ロック。
-      rx.seed(
-        rot: rep.rot,
-        gridW: rep.gridW,
-        gridH: rep.gridH,
-        corners: rep.corners.toList(),
-      );
+      _seedScanner(rep);
       setState(() => _seeded = true);
     } else {
       _startAcquire();
@@ -1580,9 +1725,20 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         ),
       );
     }
-    if (cam == null || !cam.value.isInitialized) {
+    final ncam = _ncam;
+    if (ncam == null && (cam == null || !cam.value.isInitialized)) {
       return Center(child: Text(_status));
     }
+    // 操作パネルの反対側へ寄せて、パネルが映像 (とくにコードの下側の四隅) に
+    // 重ならないようにする
+    final viewAlign = _panelAtTop ? const Alignment(0, 0.3) : const Alignment(0, -0.3);
+    // 検出領域のハイライト (シアン)。緑のガイド枠と区別できる色。
+    // カメラ画像の矩形に重ねて描く = 画像座標との対応がそのまま保たれる。
+    final detOverlay = _det == null
+        ? null
+        : CustomPaint(
+            painter: DetectedQuadPainter(_det!, sensorOrientation: _sensorOrientation),
+          );
     // カメラを画面いっぱいに敷き、操作系はその上に重ねる。カメラ画像は全体が
     // 見える大きさで中央に置かれる (VcodeCameraView) ので、縦長の画面では上下に
     // 余りが出る。UI は主にその余りに乗るため、映像を隠す量が最小で済む。
@@ -1591,25 +1747,22 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       children: [
         ColoredBox(
           color: Colors.black,
-          child: VcodeCameraView(
-            cam,
-            guideAspect: _guideAspect(),
-            // 操作パネルの反対側へ寄せて、パネルが映像 (とくにコードの下側の四隅) に
-            // 重ならないようにする
-            alignment: _panelAtTop
-                ? const Alignment(0, 0.3)
-                : const Alignment(0, -0.3),
-            // 検出領域のハイライト (シアン)。緑のガイド枠と区別できる色。
-            // カメラ画像の矩形に重ねて描く = 画像座標との対応がそのまま保たれる。
-            overlay: _det == null
-                ? null
-                : CustomPaint(
-                    painter: DetectedQuadPainter(
-                      _det!,
-                      sensorOrientation: cam.description.sensorOrientation,
-                    ),
-                  ),
-          ),
+          child: ncam != null
+              ? VcodeCameraView.texture(
+                  textureId: ncam.textureId,
+                  aspectRatio: ncam.width / ncam.height,
+                  // Texture が向きを直してくれない構成では、こちらでセンサーの向きぶん回す
+                  quarterTurns: ncam.textureRotated ? 0 : ncam.sensorOrientation ~/ 90,
+                  guideAspect: _guideAspect(),
+                  alignment: viewAlign,
+                  overlay: detOverlay,
+                )
+              : VcodeCameraView(
+                  cam!,
+                  guideAspect: _guideAspect(),
+                  alignment: viewAlign,
+                  overlay: detOverlay,
+                ),
         ),
         // 状態バッジは操作パネルと反対側に置く (重なると読めなくなる)
         Positioned(

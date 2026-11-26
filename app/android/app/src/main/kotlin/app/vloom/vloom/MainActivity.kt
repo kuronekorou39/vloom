@@ -23,8 +23,17 @@ import io.flutter.plugins.camerax.ProxyApiRegistrar
 /// tab: 0=送信 1=受信 2=履歴、preset: kPresets の添字、grid: "11x14" のような格子。
 /// いずれも省略可。grid はプリセットにない格子を試すためのもので、preset より優先する。
 class MainActivity : FlutterActivity() {
+    /// 受信用のカメラ (Flutter を通さずに走査へ直結する)
+    private var nativeCam: NativeRxCamera? = null
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        nativeCam?.onPermissionResult(requestCode, grantResults)
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        nativeCam = NativeRxCamera(this, flutterEngine.renderer, flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -44,6 +53,9 @@ class MainActivity : FlutterActivity() {
                             "camfps" to intent.getIntExtra("camfps", -1),
                             "exp" to intent.getIntExtra("exp", -1),
                             "iso" to intent.getIntExtra("iso", -1),
+                            "native" to intent.getIntExtra("native", -1),
+                            "camw" to intent.getIntExtra("camw", -1),
+                            "camh" to intent.getIntExtra("camh", -1),
                         )
                     )
                     "setExposure" -> {

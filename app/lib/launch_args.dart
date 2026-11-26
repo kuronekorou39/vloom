@@ -25,7 +25,11 @@ class LaunchArgs {
       this.workers = 2,
       this.exposureUs,
       this.iso,
-      this.camFps});
+      this.camFps,
+      this.native,
+      this.nativeWorkers = 3,
+      this.camWidth,
+      this.camHeight});
 
   /// 0=送信 1=受信 2=履歴。指定がなければ null
   final int? tab;
@@ -85,6 +89,19 @@ class LaunchArgs {
   /// (2026-11-25 の速度テスト)。60 で撮れば 1 フレームを 2 回撮れるかを確かめるための切り替え
   final int? camFps;
 
+  /// カメラ直結の受信 (receive/native_cam.dart) を使うか。0 で camera プラグイン経由の
+  /// 従来の経路に戻す (比較用、--ei native 0)。指定がなければ null (= 直結)
+  final int? native;
+
+  /// カメラ直結のときの走査の本数 (--ei workers)。指定がなければ 3。60fps・高解像度に
+  /// 追従させるための本数で、[workers] (Dart の isolate) とは既定が違う
+  final int nativeWorkers;
+
+  /// カメラ直結で撮る解像度 (--ei camw 1920 --ei camh 1080)。指定がなければ null
+  /// (= 受信画面の既定)
+  final int? camWidth;
+  final int? camHeight;
+
   static const _ch = MethodChannel('app.vloom/launch');
   static LaunchArgs _cached = const LaunchArgs();
 
@@ -117,6 +134,10 @@ class LaunchArgs {
         exposureUs: pick('exp'),
         iso: pick('iso'),
         camFps: pick('camfps'),
+        native: pick('native'),
+        nativeWorkers: (pick('workers') ?? 3).clamp(1, 4),
+        camWidth: pick('camw'),
+        camHeight: pick('camh'),
         tab: pick('tab'),
         preset: pick('preset'),
         grid: (g is String && g.isNotEmpty) ? g : null,

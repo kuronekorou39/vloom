@@ -327,26 +327,94 @@ fn fail_acquire() -> VcodeAcquireReport {
     }
 }
 
+/// 回転コピーを区切る一辺 (画素)。90/270 度は読む側か書く側のどちらかが列方向の飛び飛びに
+/// なるので、この大きさの升目ごとに済ませて両方をキャッシュに収める
+const ROTATE_TILE: usize = 64;
+
 /// ストライド除去 + 回転 (rot: 0/90/180/270)。戻りは (回転後画像, 幅, 高さ)。
+///
+/// 2560x1920 を 1 画素ずつ回すと 1 枚 30ms かかり、走査 (64ms) の半分を占めていた
+/// (docs/measurements/2026-11-26-native-camera-probe.md)。行のまとまりで写せる 0/180 度は
+/// 行単位で、90/270 度は升目に区切って写す。
 fn rotate_y_plane(y: &[u8], w: usize, h: usize, stride: usize, rot: u32) -> (Vec<u8>, usize, usize) {
     let (rw, rh) = match rot {
         90 | 270 => (h, w),
         _ => (w, h),
     };
     let mut gray = vec![0u8; rw * rh];
-    for sy in 0..h {
-        let row = &y[sy * stride..sy * stride + w];
-        for sx in 0..w {
-            let (dx, dy) = match rot {
-                90 => (rw - 1 - sy, sx),
-                180 => (rw - 1 - sx, rh - 1 - sy),
-                270 => (sy, rh - 1 - sx),
-                _ => (sx, sy),
-            };
-            gray[dy * rw + dx] = row[sx];
+    match rot {
+        90 | 270 => {
+            for ty in (0..h).step_by(ROTATE_TILE) {
+                let ty_end = (ty + ROTATE_TILE).min(h);
+                for tx in (0..w).step_by(ROTATE_TILE) {
+                    let tx_end = (tx + ROTATE_TILE).min(w);
+                    for sy in ty..ty_end {
+                        let row = &y[sy * stride + tx..sy * stride + tx_end];
+                        if rot == 90 {
+                            // (sx, sy) → (rw - 1 - sy, sx)
+                            let dx = rw - 1 - sy;
+                            for (i, &v) in row.iter().enumerate() {
+                                gray[(tx + i) * rw + dx] = v;
+                            }
+                        } else {
+                            // (sx, sy) → (sy, rh - 1 - sx)
+                            for (i, &v) in row.iter().enumerate() {
+                                gray[(rh - 1 - tx - i) * rw + sy] = v;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        180 => {
+            for sy in 0..h {
+                let row = &y[sy * stride..sy * stride + w];
+                let dst = &mut gray[(rh - 1 - sy) * rw..(rh - sy) * rw];
+                for (d, &v) in dst.iter_mut().zip(row.iter().rev()) {
+                    *d = v;
+                }
+            }
+        }
+        _ => {
+            for sy in 0..h {
+                gray[sy * rw..(sy + 1) * rw].copy_from_slice(&y[sy * stride..sy * stride + w]);
+            }
         }
     }
     (gray, rw, rh)
+}
+
+#[cfg(test)]
+mod rotate_tests {
+    use super::rotate_y_plane;
+
+    /// 1 画素ずつ写す素朴な版 (高速化の前の実装)
+    fn naive(y: &[u8], w: usize, h: usize, stride: usize, rot: u32) -> (Vec<u8>, usize, usize) {
+        let (rw, rh) = if rot == 90 || rot == 270 { (h, w) } else { (w, h) };
+        let mut gray = vec![0u8; rw * rh];
+        for sy in 0..h {
+            for sx in 0..w {
+                let (dx, dy) = match rot {
+                    90 => (rw - 1 - sy, sx),
+                    180 => (rw - 1 - sx, rh - 1 - sy),
+                    270 => (sy, rh - 1 - sx),
+                    _ => (sx, sy),
+                };
+                gray[dy * rw + dx] = y[sy * stride + sx];
+            }
+        }
+        (gray, rw, rh)
+    }
+
+    #[test]
+    fn matches_naive_for_all_rotations() {
+        // 升目の大きさで割り切れない寸法と、幅より広い stride
+        let (w, h, stride) = (150, 97, 160);
+        let y: Vec<u8> = (0..stride * h).map(|i| (i * 31 % 251) as u8).collect();
+        for rot in [0, 90, 180, 270] {
+            assert_eq!(rotate_y_plane(&y, w, h, stride, rot), naive(&y, w, h, stride, rot), "rot {rot}");
+        }
+    }
 }
 
 /// 受信側ハンドル。前フレームで成功した 4 隅と回転を保持し、
