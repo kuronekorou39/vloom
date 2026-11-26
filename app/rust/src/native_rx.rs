@@ -12,11 +12,75 @@ use std::sync::Mutex;
 
 use jni_sys::{jboolean, jbyteArray, jclass, jfloat, jint, jlong, jobject, JNIEnv};
 
+use vloom_vcode::{Layout, STRIP_H};
+
 use crate::api::vcode::{VcodeAcquireReport, VcodeRx, VcodeScanReport};
+
+/// 掴めていない間、この画素数を超える画像は縦横半分に縮めて探す。
+///
+/// 探索 (回転・格子・大きさの総当たり) は画素数に比例して重く、2560x1920 では何も写って
+/// いないだけで 1 枚 1〜2 秒かかり、2 分で電池が 4℃ 上がった。位置を掴むだけなら
+/// 1280x960 で足りる (従来の 1600x1200 より少し粗い程度)。掴んだら元の解像度で読む
+const SEARCH_FULL_RES_PIXELS: usize = 1600 * 1200;
+
+/// 縮めた画像では掴めない写り (セルが細かすぎる) に備えて、この回数に 1 回は元の解像度で探す
+const SEARCH_FULL_RES_EVERY: u32 = 3;
 
 /// 走査 1 本ぶんの状態。格子の指定や位置の種は別スレッド (プラットフォームチャネル) から
 /// 来るので Mutex で守る
-type Handle = Mutex<VcodeRx>;
+struct Scanner {
+    rx: VcodeRx,
+    /// 掴めていない状態で探した回数 (元の解像度で探す回を決める)
+    searches: u32,
+}
+
+type Handle = Mutex<Scanner>;
+
+/// 縦横を半分に縮める (2x2 の平均)。戻りは (画像, 幅, 高さ) で、行の詰め物はない
+fn halve(y: &[u8], w: usize, h: usize, stride: usize) -> (Vec<u8>, usize, usize) {
+    let (hw, hh) = (w / 2, h / 2);
+    let mut out = vec![0u8; hw * hh];
+    for (oy, row) in out.chunks_exact_mut(hw).enumerate() {
+        let a = &y[2 * oy * stride..2 * oy * stride + 2 * hw];
+        let b = &y[(2 * oy + 1) * stride..(2 * oy + 1) * stride + 2 * hw];
+        for (ox, d) in row.iter_mut().enumerate() {
+            let s = a[2 * ox] as u16 + a[2 * ox + 1] as u16 + b[2 * ox] as u16 + b[2 * ox + 1] as u16;
+            *d = ((s + 2) / 4) as u8;
+        }
+    }
+    (out, hw, hh)
+}
+
+impl Scanner {
+    /// 1 枚走査する。追従できている間は元の解像度のまま読み、掴めていない間は縮めて探す。
+    fn scan(&mut self, y: Vec<u8>, w: usize, h: usize, stride: usize, rot: u32) -> VcodeScanReport {
+        let searching = !self.rx.is_tracking();
+        if searching {
+            self.searches = self.searches.wrapping_add(1);
+        }
+        let shrink = searching
+            && w * h > SEARCH_FULL_RES_PIXELS
+            && self.searches % SEARCH_FULL_RES_EVERY != 0;
+        if !shrink {
+            return self.rx.scan(y, w as u32, h as u32, stride as u32, rot, 0.8, false);
+        }
+        let (small, sw, sh) = halve(&y, w, h, stride);
+        let mut rep = self.rx.scan(small, sw as u32, sh as u32, sw as u32, rot, 0.8, false);
+        if rep.detected && rep.corners.len() >= 8 {
+            // 掴めた。四隅を元の解像度の座標に直して追従の種にし、次の枚から元の解像度で読む。
+            // この枚で読めたブロック (CRC は通っている) はそのまま返す
+            for c in rep.corners.iter_mut() {
+                *c *= 2.0;
+            }
+            rep.img_w *= 2;
+            rep.img_h *= 2;
+            let grid_w = rep.cells_w as usize / Layout::BLOCK;
+            let grid_h = (rep.cells_h as usize).saturating_sub(2 * STRIP_H) / Layout::BLOCK;
+            self.rx.seed(rep.rot, grid_w as u8, grid_h as u8, rep.corners.clone());
+        }
+        rep
+    }
+}
 
 unsafe fn handle<'a>(h: jlong) -> &'a Handle {
     &*(h as *const Handle)
@@ -109,7 +173,7 @@ fn encode_acquire(r: &VcodeAcquireReport) -> Vec<u8> {
 
 #[no_mangle]
 pub extern "system" fn Java_app_vloom_vloom_NativeRx_create(_env: *mut JNIEnv, _class: jclass) -> jlong {
-    Box::into_raw(Box::new(Mutex::new(VcodeRx::new()))) as jlong
+    Box::into_raw(Box::new(Mutex::new(Scanner { rx: VcodeRx::new(), searches: 0 }))) as jlong
 }
 
 /// # Safety
@@ -133,7 +197,7 @@ pub unsafe extern "system" fn Java_app_vloom_vloom_NativeRx_setLayout(
     grid_w: jint,
     grid_h: jint,
 ) {
-    handle(h).lock().unwrap().set_layout(grid_w as u8, grid_h as u8);
+    handle(h).lock().unwrap().rx.set_layout(grid_w as u8, grid_h as u8);
 }
 
 /// 位置検出の結果 (回転・格子・4 隅) を追従の種にする。
@@ -158,7 +222,7 @@ pub unsafe extern "system" fn Java_app_vloom_vloom_NativeRx_seed(
     x3: jfloat,
     y3: jfloat,
 ) {
-    handle(h).lock().unwrap().seed(rot as u32, grid_w as u8, grid_h as u8, vec![x0, y0, x1, y1, x2, y2, x3, y3]);
+    handle(h).lock().unwrap().rx.seed(rot as u32, grid_w as u8, grid_h as u8, vec![x0, y0, x1, y1, x2, y2, x3, y3]);
 }
 
 /// 追従の状態を捨てる (受信のやり直し)。格子の指定も消えるので、呼び出し側で入れ直す。
@@ -167,7 +231,7 @@ pub unsafe extern "system" fn Java_app_vloom_vloom_NativeRx_seed(
 /// `h` は create が返した生きているハンドル。
 #[no_mangle]
 pub unsafe extern "system" fn Java_app_vloom_vloom_NativeRx_reset(_env: *mut JNIEnv, _class: jclass, h: jlong) {
-    *handle(h).lock().unwrap() = VcodeRx::new();
+    handle(h).lock().unwrap().rx = VcodeRx::new();
 }
 
 /// Y 面 (direct ByteBuffer) を 1 枚走査し、結果をバイト列で返す。
@@ -186,8 +250,7 @@ pub unsafe extern "system" fn Java_app_vloom_vloom_NativeRx_scan(
     rot: jint,
 ) -> jbyteArray {
     let Some(y) = copy_plane(env, buf, stride, height) else { return std::ptr::null_mut() };
-    let report =
-        handle(h).lock().unwrap().scan(y, width as u32, height as u32, stride as u32, rot as u32, 0.8, false);
+    let report = handle(h).lock().unwrap().scan(y, width as usize, height as usize, stride as usize, rot as u32);
     to_byte_array(env, &encode_scan(&report))
 }
 
@@ -209,13 +272,21 @@ pub unsafe extern "system" fn Java_app_vloom_vloom_NativeRx_acquire(
     thorough: jboolean,
 ) -> jbyteArray {
     let Some(y) = copy_plane(env, buf, stride, height) else { return std::ptr::null_mut() };
-    let report = handle(h).lock().unwrap().acquire(
-        y,
-        width as u32,
-        height as u32,
-        stride as u32,
-        rot as u32,
-        thorough != 0,
-    );
+    let (w, hgt, stride) = (width as usize, height as usize, stride as usize);
+    let mut scanner = handle(h).lock().unwrap();
+    // 位置を掴むだけなので、大きい画像は縮めて探す (理由は SEARCH_FULL_RES_PIXELS)。
+    // 手動の全探索 (thorough) は取りこぼしたくないので元の解像度のまま
+    let report = if thorough == 0 && w * hgt > SEARCH_FULL_RES_PIXELS {
+        let (small, sw, sh) = halve(&y, w, hgt, stride);
+        let mut r = scanner.rx.acquire(small, sw as u32, sh as u32, sw as u32, rot as u32, false);
+        for c in r.corners.iter_mut() {
+            *c *= 2.0;
+        }
+        r.img_w *= 2;
+        r.img_h *= 2;
+        r
+    } else {
+        scanner.rx.acquire(y, width as u32, height as u32, stride as u32, rot as u32, thorough != 0)
+    };
     to_byte_array(env, &encode_acquire(&report))
 }

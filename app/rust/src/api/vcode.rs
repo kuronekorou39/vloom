@@ -470,6 +470,13 @@ impl VcodeRx {
         VcodeRx { last: None, last_ok: None, forced: None, track_misses: 0, last_offsets: None }
     }
 
+    /// 前の枚の四隅を持っていて、次の枚を追従で読もうとしているか。
+    /// ネイティブの受信 (native_rx) が「掴むまでは縮めた画像で探す」判断に使う
+    #[flutter_rust_bridge::frb(ignore)]
+    pub fn is_tracking(&self) -> bool {
+        self.last.is_some()
+    }
+
     /// 探索するレイアウトを 1 つに固定する (grid_w = 0 で解除)。
     /// 候補総当たりは初回検出とacquireのコストを候補数に比例して増やすので、送信側の格子が
     /// 分かっている場合 (計測・自動掃引・能力交換後) はこれで固定する。

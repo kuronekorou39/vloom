@@ -106,6 +106,9 @@ class NativeRxCamera(
     private val camFrames = AtomicInteger()
     @Volatile private var scanIntervalMs = 0L
     @Volatile private var lastScanAt = 0L
+
+    /// 間引いている間、次の走査を始めてよい時刻。探索にかかった時間に応じて休みを入れる
+    @Volatile private var idleRestUntil = 0L
     @Volatile private var pendingAcquire: Pair<Boolean, MethodChannel.Result>? = null
     private val acquireBusy = AtomicBoolean(false)
 
@@ -180,7 +183,12 @@ class NativeRxCamera(
             }
             // 何も写っていない間の省電力: 走査をこの間隔 (ms) に間引く。0 で全部走査する
             "setScanInterval" -> {
-                scanIntervalMs = (call.argument<Int>("ms") ?: 0).toLong()
+                val ms = (call.argument<Int>("ms") ?: 0).toLong()
+                val wasIdle = scanIntervalMs > 0
+                scanIntervalMs = ms
+                idleRestUntil = 0
+                // 何も写っていない間はカメラの枚数も落とす (撮って捨てるだけの枚を減らす)
+                if (wasIdle != (ms > 0)) cam.post { applyRequest() }
                 result.success(null)
             }
             "lockExposure" -> cam.post {
@@ -372,8 +380,10 @@ class NativeRxCamera(
             b.addTarget(sp.surface)
             // 暗いときに枚数を落として露光を伸ばされると、表示の切り替わりが 1 枚に混ざる
             val ranges = ch.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
-            val range = ranges?.firstOrNull { it.lower == fps && it.upper == fps }
-                ?: ranges?.filter { it.upper == fps }?.maxByOrNull { it.lower }
+            val want = if (scanIntervalMs > 0) IDLE_CAMERA_FPS else fps
+            val range = ranges?.firstOrNull { it.lower == want && it.upper == want }
+                ?: ranges?.filter { it.upper == want }?.maxByOrNull { it.lower }
+                ?: ranges?.firstOrNull { it.lower == fps && it.upper == fps }
             if (range != null) b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range)
             // 手ぶれ補正は画角を切って補間するので、セルの境目がぼける
             b.set(
@@ -478,7 +488,10 @@ class NativeRxCamera(
             }
             val now = SystemClock.elapsedRealtime()
             val interval = scanIntervalMs
-            val hd = if (interval > 0 && now - lastScanAt < interval) null else freeHandles.poll()
+            // 間引いている間 (何も写っていない) は 1 本だけで探す。探索は 1 枚で間隔より長く
+            // かかることがあり、放っておくと全部の本が探索で埋まる
+            val idleBusy = interval > 0 && (freeHandles.size < handles.size || now < idleRestUntil)
+            val hd = if (idleBusy || (interval > 0 && now - lastScanAt < interval)) null else freeHandles.poll()
             if (hd == null) {
                 img.close()
                 return
@@ -497,6 +510,11 @@ class NativeRxCamera(
                 }
                 if (report != null) {
                     val scanMs = ((SystemClock.elapsedRealtimeNanos() - t0) / 1_000_000).toInt()
+                    // 間引いている間は、探索にかかった時間の IDLE_REST_FACTOR 倍は休む。探索は
+                    // 1 回 0.4〜2 秒かかり、決まった間隔で始めるだけでは休みなく回り続けた
+                    if (scanIntervalMs > 0) {
+                        idleRestUntil = SystemClock.elapsedRealtime() + scanMs * IDLE_REST_FACTOR
+                    }
                     // 先頭 12 バイト: カメラから届いた累計の枚数、この枚の走査にかかった ms、
                     // 画像を起こした角度
                     val out = ByteBuffer.allocate(12 + report.size).order(ByteOrder.LITTLE_ENDIAN)
@@ -551,6 +569,13 @@ class NativeRxCamera(
 
         /// 端末の向きを切り替える範囲 (向きの中心からの角度)。45 が境目
         private const val ORIENTATION_SNAP_DEG = 30
+
+        /// 何も写っていない間のカメラの枚数。写ったら元の枚数に戻す
+        private const val IDLE_CAMERA_FPS = 15
+
+        /// 何も写っていない間、探索 1 回のあとに休む長さ (探索にかかった時間の何倍か)。
+        /// 2 なら走査スレッドの稼働は最大で 3 分の 1
+        private const val IDLE_REST_FACTOR = 2L
 
         /// 走査の結果が出ない間、カメラが生きていることを知らせる間隔
         private const val HEARTBEAT_MS = 500L
