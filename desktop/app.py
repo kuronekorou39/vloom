@@ -71,7 +71,7 @@ def fps_for_refresh(hz: float, cap: int = DEFAULT_FPS) -> int:
 # 格子の一辺の上限。Rust 側 (VcodeTx) がこの範囲に丸めるので、超える指定をそのまま
 # 渡すと「指定と違う格子が黙って送られる」ことになる (実際に 16x22 を指定して 16x20 が
 # 出て、受信側の格子と食い違ったまま計測した)。ここで止める
-GRID_SIDE_RANGE = (2, 20)
+GRID_SIDE_RANGE = (2, 32)
 
 # 画面の配色 (ライト)。補足の文字・枠線・強調の 3 色だけを使う
 MUTED = "#6b7280"

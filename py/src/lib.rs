@@ -17,6 +17,10 @@ use vloom_vcode as vcode;
 ///
 /// `core-wasm` の `VcodeTx` と同一のロジック (通し番号でのパケット割り当て、ゼロパディング、
 /// フレームヘッダの frame_seq) を持つ。
+/// 格子の一辺の上限 (desktop/app.py の GRID_SIDE_RANGE と揃える)。形式上はヘッダに 255 まで
+/// 書けるが、画面に描けて読める範囲に留める
+const MAX_GRID_SIDE: u8 = 32;
+
 #[pyclass]
 pub struct VcodeTx {
     encoder: fountain::Encoder,
@@ -37,8 +41,8 @@ impl VcodeTx {
             // 上限はヘッダの u8 と、受信側が現実に読める密度で決まる。縦長格子
             // (11x14) や超密 (13x12) を通すため 20 まで許す。ここで黙って丸めると
             // 「指定した格子と違うものが出る」ので、範囲は広めに取っておく。
-            grid_w: grid_w.clamp(2, 20) as usize,
-            grid_h: grid_h.clamp(2, 20) as usize,
+            grid_w: grid_w.clamp(2, MAX_GRID_SIDE) as usize,
+            grid_h: grid_h.clamp(2, MAX_GRID_SIDE) as usize,
         };
         let wrapped = vcode::wrap_payload(payload);
         VcodeTx {
@@ -139,7 +143,7 @@ fn probe_frame_gray<'py>(
     dwell_ds: u8,
     frame: u32,
 ) -> Bound<'py, PyBytes> {
-    let layout = vcode::Layout::from_grid(grid_w.clamp(2, 20) as usize, grid_h.clamp(2, 20) as usize);
+    let layout = vcode::Layout::from_grid(grid_w.clamp(2, MAX_GRID_SIDE) as usize, grid_h.clamp(2, MAX_GRID_SIDE) as usize);
     let tag = vcode::probe::ProbeTag { setting, settings, fps, dwell_ds };
     PyBytes::new(py, &vcode::probe::probe_frame(layout, tag, frame).data)
 }
@@ -147,7 +151,7 @@ fn probe_frame_gray<'py>(
 /// 格子のセル数 (幅, 高さ)。フレームの画素数と同じ (scale=1 で描くため)。
 #[pyfunction]
 fn layout_cells(grid_w: u8, grid_h: u8) -> (u32, u32) {
-    let l = vcode::Layout::from_grid(grid_w.clamp(2, 20) as usize, grid_h.clamp(2, 20) as usize);
+    let l = vcode::Layout::from_grid(grid_w.clamp(2, MAX_GRID_SIDE) as usize, grid_h.clamp(2, MAX_GRID_SIDE) as usize);
     (l.width() as u32, l.height() as u32)
 }
 
