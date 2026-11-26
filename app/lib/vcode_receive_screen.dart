@@ -493,6 +493,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         final expUs = LaunchArgs.cached.exposureUs;
         final cam = await NativeCam.start(
           onScan: _onNativeScan,
+          onAlive: _onNativeAlive,
           width: LaunchArgs.cached.camWidth ?? kNativeCaptureWidth,
           height: LaunchArgs.cached.camHeight ?? kNativeCaptureHeight,
           fps: LaunchArgs.cached.camFps ?? 30,
@@ -516,6 +517,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         _camStarted = DateTime.now();
         _lastDetectAt = _camStarted;
         _camCallbacks = 0;
+        // 見張り (_checkStale) を前のカメラの時刻で判定させない
+        _lastCallbackAt = null;
         debugPrint('[vcode-rx] native camera ${cam.width}x${cam.height} '
             'rot=${cam.sensorOrientation} textureRotated=${cam.textureRotated}');
         await WakelockPlus.enable();
@@ -536,12 +539,21 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
 
   /// カメラ直結の走査 1 枚ぶん。画像の受け取り・並行数の管理・間引きはネイティブ側が
   /// 済ませているので、ここは結果を受信の状態に反映するだけ。
+  /// カメラから画像が届いている (走査の結果とは別に、0.5 秒おきにも来る)。
+  void _onNativeAlive(int camFrames) {
+    if (_ncam == null) return;
+    _lastCallbackAt = DateTime.now();
+    // 走査の結果は「その枚が届いたとき」の枚数を運ぶので、後から届いた生存通知より
+    // 小さいことがある。戻すと同じ枚を 2 度数えてしまう (カメラ 57 枚/s と出ていた)
+    if (camFrames <= _camCallbacks) return;
+    _tickRate(cam: camFrames - _camCallbacks);
+    _camCallbacks = camFrames;
+  }
+
   void _onNativeScan(NativeScanEvent e) {
     final cam = _ncam;
     if (cam == null) return;
-    _tickRate(cam: (e.camFrames - _camCallbacks).clamp(0, 1000));
-    _camCallbacks = e.camFrames;
-    _lastCallbackAt = DateTime.now();
+    _onNativeAlive(e.camFrames);
     if (!_active || _payload != null) return;
     _lastRot = e.scanRot;
     if (_sideways != _isSideways(e.scanRot, cam.sensorOrientation)) {
@@ -1850,6 +1862,12 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
 
   /// ガイド枠の縦横比。選択中の格子のセル数から求める (自動のときは既定格子)。
   double _guideAspect() {
+    // 掴めているなら、写っているコードの形に合わせる (格子が自動のとき、既定の縦長の枠の
+    // まま横長のコードを読んでいた)
+    final d = _det;
+    if (d != null && d.cellsW > 0 && d.cellsH > 0) {
+      return _sideways ? d.cellsW / d.cellsH : d.cellsH / d.cellsW;
+    }
     final g = _forcedGrid == kGridAuto
         ? kPresets[kDefaultPresetIndex].grid
         : _forcedGrid;
@@ -1981,6 +1999,9 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                         '(stride $_lastStride) · 輝度 $_lumaMin–$_lumaMax'
                         '${_lumaMax <= 240 && _lumaMin >= 10 ? " (video range?)" : ""}'
                         '${_lastError != null ? "\n$_lastError" : ""}',
+                        // 格子が自動だと候補ぶんの理由が並び、映像を 10 行ぶん隠していた
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontSize: 11,
                           color: Theme.of(context).colorScheme.error,

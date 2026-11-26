@@ -36,6 +36,9 @@ class NativeCam {
   static const _ch = MethodChannel('app.vloom/nativecam');
   static const _events = EventChannel('app.vloom/nativecam/reports');
 
+  /// 生存通知の長さ (走査の結果は先頭だけで 12 バイトあるので取り違えない)
+  static const _heartbeatLength = 4;
+
   /// プレビューを描く Texture の ID
   final int textureId;
 
@@ -51,10 +54,12 @@ class NativeCam {
 
   StreamSubscription<dynamic>? _sub;
 
-  /// カメラを開いて走査を始める。[onScan] は走査 1 枚ごとに呼ばれる。
+  /// カメラを開いて走査を始める。[onScan] は走査 1 枚ごとに呼ばれる。[onAlive] は走査の結果が
+  /// 出ない間 (探索が遅い・間引いている) も 0.5 秒おきに呼ばれ、カメラが動いていることを知らせる。
   /// [width] x [height] が使えない端末では、ネイティブ側が出せる最大の 4:3 を選ぶ。
   static Future<NativeCam> start({
     required void Function(NativeScanEvent) onScan,
+    required void Function(int camFrames) onAlive,
     int width = 0,
     int height = 0,
     int fps = 30,
@@ -83,7 +88,13 @@ class NativeCam {
     );
     cam._sub = _events.receiveBroadcastStream().listen((e) {
       try {
-        onScan(_parseScan(e as Uint8List));
+        final b = e as Uint8List;
+        if (b.length == _heartbeatLength) {
+          // 走査の結果が出ていない間の生存通知 (届いた累計の枚数だけ)
+          onAlive(ByteData.sublistView(b).getUint32(0, Endian.little));
+          return;
+        }
+        onScan(_parseScan(b));
       } catch (err) {
         debugPrint('[native-cam] 走査結果を読めません: $err');
       }

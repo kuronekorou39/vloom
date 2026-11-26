@@ -291,6 +291,10 @@ class SenderWindow(QWidget):
         _keep_display_awake(True)
         self._bar_timer.start(2500)
         if fullscreen:
+            # 全画面は最前面に出す。大きいファイルは準備に 20 秒ほどかかり、その間にほかの窓を
+            # 触っていると、Windows は後から出た窓を前に出さない (コードが裏に隠れたまま
+            # 送っていて、受信側は何も写らず待ち続けた)
+            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
             self.showFullScreen()
         else:
             self.show()

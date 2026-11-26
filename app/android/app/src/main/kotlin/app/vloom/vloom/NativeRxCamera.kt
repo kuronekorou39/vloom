@@ -109,6 +109,10 @@ class NativeRxCamera(
     @Volatile private var pendingAcquire: Pair<Boolean, MethodChannel.Result>? = null
     private val acquireBusy = AtomicBoolean(false)
 
+    /// 最後に Dart へ何か流した時刻。走査の結果が出ない間 (探索に 1 枚 1〜2 秒かかる、
+    /// 間引いている) も、カメラが生きていることを知らせるのに使う
+    @Volatile private var lastEventAt = 0L
+
     // --- カメラの設定 (変えるたびにリクエストを作り直す) ---
     private var evIndex = 0
     private var meterCenter = true
@@ -433,6 +437,14 @@ class NativeRxCamera(
             null // 走査中の枚で上限いっぱい。次の枚を待つ
         } ?: return
         val frames = camFrames.incrementAndGet()
+        // 走査の結果がしばらく出ていなければ、届いた枚数だけを知らせる。Dart 側の見張りは
+        // 「2 秒何も来なければカメラを作り直す」ので、走査が遅いだけで作り直しが続いていた
+        val tick = SystemClock.elapsedRealtime()
+        if (tick - lastEventAt >= HEARTBEAT_MS) {
+            lastEventAt = tick
+            val beat = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(frames).array()
+            ui.post { sink?.success(beat) }
+        }
         val exec = pool
         if (exec == null) {
             img.close()
@@ -489,6 +501,7 @@ class NativeRxCamera(
                     // 画像を起こした角度
                     val out = ByteBuffer.allocate(12 + report.size).order(ByteOrder.LITTLE_ENDIAN)
                     out.putInt(frames).putInt(scanMs).putInt(rot).put(report)
+                    lastEventAt = SystemClock.elapsedRealtime()
                     ui.post { sink?.success(out.array()) }
                 }
             }
@@ -538,6 +551,9 @@ class NativeRxCamera(
 
         /// 端末の向きを切り替える範囲 (向きの中心からの角度)。45 が境目
         private const val ORIENTATION_SNAP_DEG = 30
+
+        /// 走査の結果が出ない間、カメラが生きていることを知らせる間隔
+        private const val HEARTBEAT_MS = 500L
 
         /// 止めるとき、走査中のスレッドを待つ上限
         private const val STOP_WAIT_MS = 3000L
