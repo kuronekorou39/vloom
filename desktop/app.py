@@ -20,6 +20,7 @@ import vloom_core
 from PySide6.QtCore import QRect, Qt, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont, QGuiApplication, QMouseEvent
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -40,16 +41,21 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .sender import SenderWindow
+from .sender import STAGE_BAR_HEIGHT_HINT, SenderWindow
 from .sweep import DEFAULT_DWELL_SEC, SweepTx, default_sweep, parse_sweep
 
 # 受信側の総当たり候補に入っている格子だけを既定で出す。11×10 は候補外なので
 # 受信側で格子を明示指定しない限り検出されない (選べるようにはしておく)。
 GRIDS = ["7x6 (高密度)", "5x4 (標準)", "9x8 (超高密度)",
-         "11x10 (最大)", "11x14 (縦長)", "13x18 (超密)", "15x20 (最密・寄せて使う)"]
+         "11x10 (最大)", "11x14 (縦長)", "13x18 (超密)", "15x20 (最密・寄せて使う)",
+         "30x20 (横長・スマホを横向きに)"]
 # 受信側が「自動」で読める格子。CANDIDATES に加え、スキャナが写りから格子を見積もるので
 # 速度テストの 3 格子 (11x14 / 13x18 / 15x20) も読める (2026-11-25 の速度テストで確認)
 AUTO_DETECT_GRIDS = {(15, 20), (13, 18), (11, 14), (7, 6), (5, 4)}
+
+# 1 セルがこの画素数を下回ると、画面がセルを描き分けられず読み取りが急に落ちる
+# (1080p の画面で 17x23 以上を縦長に出したとき。docs/measurements/2026-11-26-native-camera-probe.md)
+MIN_CELL_PX = 2.0
 
 # ソースパケットに対するリペアパケットの比率。PWA の REPAIR_RATE と同値。
 REPAIR_RATE = 0.5
@@ -295,6 +301,11 @@ class MainWindow(QWidget):
         main_form.addRow("格子", self.grid)
         main_form.addRow("フレームレート", self.fps)
         main_form.addRow("表示するモニタ", self.screen)
+        # 全画面: コードを画面いっぱいに出す。1 セルあたりの画素が増えるほど読みやすく、
+        # 細かい格子を選べる。窓で出したいとき (計測で位置を決めたいとき) は外す
+        self.fullscreen = QCheckBox("全画面で表示する")
+        self.fullscreen.setChecked(True)
+        main_form.addRow("", self.fullscreen)
         root.addLayout(main_form)
 
         # 目安 (理論速度・所要時間・注意) をカードにまとめる
@@ -308,9 +319,11 @@ class MainWindow(QWidget):
         f.setWeight(QFont.Weight.DemiBold)
         self.theory.setFont(f)
         self.estimate = _label("", "muted", wrap=True)
+        self.cell_px = _label("", "muted", wrap=True)
         self.warn = _label("", "warn", wrap=True)
         cl.addWidget(self.theory)
         cl.addWidget(self.estimate)
+        cl.addWidget(self.cell_px)
         cl.addWidget(self.warn)
         root.addWidget(card)
 
@@ -405,8 +418,9 @@ class MainWindow(QWidget):
         self._apply_default_fps()
         for w in (self.grid, self.bpc, self.screen):
             w.currentIndexChanged.connect(self._update_theory)
-        for w in (self.fps, self.repair):
+        for w in (self.fps, self.repair, self.margin, self.zoom):
             w.valueChanged.connect(self._update_theory)
+        self.fullscreen.toggled.connect(self._update_theory)
         self.text.textChanged.connect(self._update_theory)
         self.source_stack.currentChanged.connect(self._update_theory)
         self._update_theory()
@@ -523,13 +537,49 @@ class MainWindow(QWidget):
             loop = math.ceil(source * (1 + self.repair.value() / 100) / per_frame) / fps
             self.estimate.setText(f"{_fmt_size(size)} · 最短 {_fmt_sec(best)} · 1 巡 {_fmt_sec(loop)}")
 
+        px = self._cell_px_estimate(gw, gh)
+        self.cell_px.setText(f"この画面では 1 セル 約 {px:.1f} 画素")
+
         warns = []
+        if px < MIN_CELL_PX:
+            warns.append("1 セルが 2 画素より小さく、読み取りにくくなります。"
+                         "格子を粗くするか、全画面・大きい画面で表示してください。")
+        cells_w, cells_h = vloom_core.layout_cells(gw, gh)
+        if cells_w > cells_h:
+            warns.append("横長の格子です。受信側のスマホを横向きにしてください。")
         if (gw, gh) not in AUTO_DETECT_GRIDS:
             warns.append("この格子は受信側で格子の指定が必要です。")
         if note := self._refresh_note(fps):
             warns.append(note)
         self.warn.setText("\n".join(warns))
         self.warn.setVisible(bool(warns))
+
+    def _stage_target(self) -> tuple[QRect, bool]:
+        """送信ウィンドウを出す場所と、全画面にするか。
+
+        全画面のチェックが入っていれば、選んだモニタ全体。外していれば、前回の位置
+        (--geometry の指定を含む) か既定の正方形。
+        """
+        if self.fullscreen.isChecked():
+            screens = QGuiApplication.screens()
+            return screens[min(self.screen.currentIndex(), len(screens) - 1)].geometry(), True
+        return self.stage_geometry or self._stage_rect(), False
+
+    def _cell_px_estimate(self, gw: int, gh: int) -> float:
+        """いまの設定で出したとき、1 セルが画面の何画素になるか (物理画素、目安)。"""
+        rect, _ = self._stage_target()
+        screen = QGuiApplication.screenAt(rect.center()) or QGuiApplication.primaryScreen()
+        dpr = screen.devicePixelRatio() if screen is not None else 1.0
+        cells_w, cells_h = vloom_core.layout_cells(gw, gh)
+        m = self.margin.value()
+        fit = min(rect.width() / (cells_w + 2 * m),
+                  (rect.height() - STAGE_BAR_HEIGHT_HINT) / (cells_h + 2 * m))
+        return fit * self.zoom.value() * dpr
+
+    def _show_stage(self) -> None:
+        rect, fullscreen = self._stage_target()
+        self.stage.setGeometry(rect)
+        self.stage.start(fullscreen=fullscreen)
 
     def _start(self) -> None:
         payload = self._payload()
@@ -553,8 +603,7 @@ class MainWindow(QWidget):
                                   self.dx.value(), self.dy.value(),
                                   hold=self.hold_at_start)
         self.stage.closed.connect(self._on_stage_closed)
-        self.stage.setGeometry(self.stage_geometry or self._stage_rect())
-        self.stage.start()
+        self._show_stage()
         self.info.setText(
             f"生成中: {tx.frame_count} フレーム · 1 巡 {tx.frame_count / fps:.1f} 秒")
 
@@ -564,7 +613,7 @@ class MainWindow(QWidget):
 
         spec を省くと、送信ウィンドウが乗る画面の書き換え周期から fps の候補を決める。
         """
-        rect = self.stage_geometry or self._stage_rect()
+        rect, _ = self._stage_target()
         screen = QGuiApplication.screenAt(rect.center()) or QGuiApplication.primaryScreen()
         refresh_hz = screen.refreshRate() if screen is not None else 0.0
         try:
@@ -580,8 +629,7 @@ class MainWindow(QWidget):
                                   self.dx.value(), self.dy.value(),
                                   hold=self.hold_at_start)
         self.stage.closed.connect(self._on_stage_closed)
-        self.stage.setGeometry(rect)
-        self.stage.start()
+        self._show_stage()
         print(f"速度テスト: 画面 {refresh_hz:.0f}Hz / " + ", ".join(s.label for s in settings),
               flush=True)
         self.info.setText(
@@ -604,8 +652,8 @@ class MainWindow(QWidget):
         )
 
     def _on_stage_closed(self) -> None:
-        # 次回も同じ構図で出せるよう、閉じる直前の位置を覚える
-        if self.stage is not None:
+        # 次回も同じ構図で出せるよう、閉じる直前の位置を覚える (全画面は覚えるまでもない)
+        if self.stage is not None and not self.stage.isFullScreen():
             self.stage_geometry = self.stage.geometry()
         self.stage = None
         self.info.setText("")
@@ -617,10 +665,13 @@ class MainWindow(QWidget):
                        repair: int | None = None, margin: int | None = None,
                        zoom: float | None = None, dx: float | None = None,
                        dy: float | None = None, hold: bool = False, snap: bool = False,
-                       geometry: tuple[int, int, int, int] | None = None) -> None:
+                       geometry: tuple[int, int, int, int] | None = None,
+                       screen: int | None = None) -> None:
         """コマンドラインから条件を流し込む。指定のないものは UI の値のまま。"""
         if file:
             self._set_file(pathlib.Path(file))
+        if screen is not None:
+            self.screen.setCurrentIndex(max(0, min(screen - 1, self.screen.count() - 1)))
         if grid:
             i = next((k for k in range(self.grid.count())
                       if self.grid.itemText(k).split(" ")[0] == grid), None)
@@ -650,7 +701,9 @@ class MainWindow(QWidget):
         self.hold_at_start = hold
         self.snap_cells = snap
         if geometry is not None:
+            # 位置を指定したら窓で出す (計測で構図を固定するための指定なので)
             self.stage_geometry = QRect(*geometry)
+            self.fullscreen.setChecked(False)
         self._update_theory()
 
     def start_now(self) -> None:

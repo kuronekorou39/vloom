@@ -25,6 +25,7 @@ import 'receive/file_sniff.dart';
 import 'receive/focus_hunter.dart';
 import 'receive/native_cam.dart';
 import 'receive/packet_coverage.dart';
+import 'receive/rx_speed.dart';
 import 'receive/rx_stats.dart';
 import 'receive/rx_widgets.dart';
 import 'rx_prefs.dart';
@@ -152,6 +153,12 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   static bool get _useNative => Platform.isAndroid && LaunchArgs.cached.native != 0;
   bool get _camOpen => _cam != null || _ncam != null;
 
+  /// 端末を横向きにして読んでいるか (横長のコード用)。画面は縦のままなので、
+  /// プレビューではコードが 90 度倒れて見える。ガイド枠もそれに合わせて倒す
+  bool _sideways = false;
+  static bool _isSideways(int scanRot, int sensorOrientation) =>
+      (scanRot - sensorOrientation) % 180 != 0;
+
   /// ネイティブ側に走査の間引きを頼んでいるか
   bool _nativeIdle = false;
   bool _nativeAcquiring = false;
@@ -254,6 +261,9 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
   // 受信できたパケットの被覆 (重複除く)。ブロックごとに必要数で頭打ちした数が全体の必要数に
   // 届くと復元できる。進捗・カバレッジ格子・distinct 数の表示に使う。OTI が分かった時点で作る
   PacketCoverage? _cov;
+
+  /// 受信中の速さと残り時間の目安 ([_cov] と一緒に作り直す)
+  RxSpeedMeter _speed = RxSpeedMeter();
   Duration? _elapsed;
   String _status = 'カメラ起動待ち';
 
@@ -533,7 +543,10 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
     _camCallbacks = e.camFrames;
     _lastCallbackAt = DateTime.now();
     if (!_active || _payload != null) return;
-    _lastRot = cam.sensorOrientation;
+    _lastRot = e.scanRot;
+    if (_sideways != _isSideways(e.scanRot, cam.sensorOrientation)) {
+      setState(() => _sideways = !_sideways); // ガイド枠の向きを入れ替える
+    }
     _lastImgW = cam.width;
     _lastImgH = cam.height;
     _lastStride = cam.width;
@@ -780,7 +793,10 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
           _cov!.add(p);
         }
         // 復元計算は別 isolate へ投げっぱなし (完了は _onDecoded で受ける)
-        if (probeTag == null) _feedDecoder(report.oti, packets);
+        if (probeTag == null) {
+          _feedDecoder(report.oti, packets);
+          _speed.add(DateTime.now(), _cov!.receivedBytes);
+        }
         _stats.addDecodeMs(swDec.elapsedMilliseconds);
         debugPrint(
           '[vcode-rx] seq=${report.frameSeq} '
@@ -941,6 +957,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       '(${_stats.integrityFails} 回目)。デコーダを再作成して受信続行',
     );
     _disposeDecoder();
+    _speed = RxSpeedMeter();
     if (mounted) setState(() => _cov = null);
   }
 
@@ -1186,6 +1203,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _completing = false;
       _probe = null;
       _cov = null;
+      _speed = RxSpeedMeter();
       _stats = RxStats();
       _elapsed = null;
       _missStreak = 0;
@@ -1268,6 +1286,7 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
       _payload = null;
       _savedItem = null;
       _cov = null;
+      _speed = RxSpeedMeter();
       _stats = RxStats();
       _elapsed = null;
       _acquireRequested = false;
@@ -1836,7 +1855,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
         : _forcedGrid;
     final p = g.split('x');
     final c = vcodeLayoutCells(gridW: int.parse(p[0]), gridH: int.parse(p[1]));
-    return c[0] == 0 ? 0.92 : c[1] / c[0];
+    if (c[0] == 0) return 0.92;
+    return _sideways ? c[0] / c[1] : c[1] / c[0];
   }
 
   /// 構図合わせ用の読み上げ (充填率・余白・px/セル)。
@@ -1933,6 +1953,17 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                         received: (cov!.useful / total).clamp(0.0, 1.0),
                       ),
                     ),
+                  if (cov != null && total != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: ReceiveProgressLine(
+                        receivedBytes: cov.receivedBytes,
+                        totalBytes: cov.totalBytes,
+                        bytesPerSec: _speed.bytesPerSec,
+                        eta: _speed.eta(cov.totalBytes - cov.receivedBytes),
+                        finishing: cov.useful >= total,
+                      ),
+                    ),
                   // 受信データのカバレッジ格子: ESI ごとのマスを、受信済み=緑(source)/水色(repair)、
                   // 未受信=灰で塗る。埋まらない穴が「取れていないフレームのデータ」= 未完了の原因。
                   if (cov != null && _panelExpanded) ...[
@@ -1957,6 +1988,8 @@ class _VcodeReceiveScreenState extends State<VcodeReceiveScreen>
                       ),
                     ),
                   if (_panelExpanded) _measureSettings(),
+                  // 走査の内訳 (開発・計測向け)。受信が始まったら、詳細を開いたときだけ出す
+                  if (_panelExpanded || cov == null)
                   Text(
                     'カメラ ${_liveCamFps.toStringAsFixed(0)}枚/s · '
                     '走査 ${_liveScanFps.toStringAsFixed(0)}枚/s · '

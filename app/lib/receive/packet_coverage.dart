@@ -13,7 +13,7 @@ import 'dart:typed_data';
 /// ブロックをまたいで交互に置く。単一ブロックなら従来どおり ESI そのものになる。
 /// PWA 版 (web/pwa/coverage.js) と同じ計算。
 class PacketCoverage {
-  PacketCoverage._(this.kt, this.z, this._k, this._offset)
+  PacketCoverage._(this.kt, this.z, this._k, this._offset, this.totalBytes, this.symbolSize)
       : _count = List<int>.filled(z, 0),
         bucketW = kt <= 1024 ? 1 : (kt + 1023) ~/ 1024,
         cap = kt;
@@ -37,11 +37,21 @@ class PacketCoverage {
     for (var b = 1; b < z; b++) {
       offset[b] = offset[b - 1] + k[b - 1];
     }
-    return PacketCoverage._(kt, z, k, offset);
+    return PacketCoverage._(kt, z, k, offset, len, symbol);
   }
 
   /// 復元に要るソースシンボル数 (全ブロックの合計)。
   final int kt;
+
+  /// 送られてくるデータ全体の長さ (バイト) と、パケット 1 つが運ぶ長さ
+  final int totalBytes;
+  final int symbolSize;
+
+  /// 受信できた量 (バイト)。進捗の表示用で、[useful] をバイトに直したもの
+  int get receivedBytes {
+    final b = useful * symbolSize;
+    return b > totalBytes ? totalBytes : b;
+  }
   final int z;
   final List<int> _k;
   final List<int> _offset;

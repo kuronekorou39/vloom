@@ -3,7 +3,9 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../probe_stats.dart';
+import '../ui_common.dart';
 import 'packet_coverage.dart';
+import 'rx_speed.dart';
 
 /// 映像の上に重ねる半透明の角丸バッジ (状態・誘導・格子チップ共通の見た目)。
 BoxDecoration overlayBadgeDecoration({Color? border, double borderWidth = 1.5}) =>
@@ -196,6 +198,56 @@ class ReceiveGauge extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 受信中の 1 行: 受信済みの量・速さ・残り時間。進捗バーのすぐ下に置く。
+///
+/// 以前は「カメラ 30 枚/s · 走査 … · 投入 …」という走査の内訳しか出しておらず、
+/// あとどれくらいで終わるのかが分からなかった。
+class ReceiveProgressLine extends StatelessWidget {
+  const ReceiveProgressLine({
+    super.key,
+    required this.receivedBytes,
+    required this.totalBytes,
+    required this.bytesPerSec,
+    required this.eta,
+    required this.finishing,
+  });
+
+  final int receivedBytes;
+  final int totalBytes;
+
+  /// 直近の速さ。まだ測れていなければ null
+  final double? bytesPerSec;
+
+  /// 残り時間の目安。止まっている・測れないときは null
+  final Duration? eta;
+
+  /// 必要な量は届いていて、復元の計算を待っている
+  final bool finishing;
+
+  @override
+  Widget build(BuildContext context) {
+    final speed = bytesPerSec;
+    final parts = <String>[
+      '${fmtSize(receivedBytes)} / ${fmtSize(totalBytes)}',
+      if (finishing)
+        '仕上げ中…'
+      else ...[
+        if (speed != null) '${(speed / 1024).round()} KB/s',
+        if (eta != null) '残り ${fmtEta(eta!)}',
+      ],
+    ];
+    return Text(
+      parts.join('  ·  '),
+      style: const TextStyle(
+        fontSize: 15,
+        fontWeight: FontWeight.w600,
+        color: Colors.white,
+        fontFeatures: [FontFeature.tabularFigures()], // 数字の幅を揃えて、行がばたつかないように
       ),
     );
   }

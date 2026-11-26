@@ -8,13 +8,16 @@ import '../src/rust/api/vcode.dart';
 
 /// 走査 1 枚ぶんの結果と、そのときのカメラの状況。
 class NativeScanEvent {
-  const NativeScanEvent(this.camFrames, this.scanMs, this.report);
+  const NativeScanEvent(this.camFrames, this.scanMs, this.scanRot, this.report);
 
   /// カメラから届いた累計の枚数 (走査しなかった枚も含む)
   final int camFrames;
 
   /// この枚の走査にかかった時間 (コピー〜結果)
   final int scanMs;
+
+  /// 走査の前に画像を起こした角度。端末を横向きにすると sensorOrientation から 90 度ずれる
+  final int scanRot;
   final VcodeScanReport report;
 }
 
@@ -176,6 +179,7 @@ NativeScanEvent _parseScan(Uint8List b) {
   final r = _Reader(b);
   final camFrames = r.u32();
   final scanMs = r.u32();
+  final scanRot = r.u32();
   final detected = r.u8() != 0;
   final tracked = r.u8() != 0;
   final frameSeq = r.u32();
@@ -197,6 +201,7 @@ NativeScanEvent _parseScan(Uint8List b) {
   return NativeScanEvent(
     camFrames,
     scanMs,
+    scanRot,
     VcodeScanReport(
       detected: detected,
       tracked: tracked,

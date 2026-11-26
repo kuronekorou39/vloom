@@ -317,8 +317,8 @@ pub fn locate_markers_layout(img: &GrayImage) -> Option<(Quad, Vec<Layout>)> {
     let strips = 2.0 * crate::STRIP_H as f32;
     let (gw0, gh0) = ((cells_w / block).round() as i32, ((cells_h - strips) / block).round() as i32);
     let mut cands: Vec<(f32, Layout)> = Vec::new();
-    for gw in (gw0 - 2).max(2)..=(gw0 + 2).min(20) {
-        for gh in (gh0 - 2).max(2)..=(gh0 + 2).min(20) {
+    for gw in (gw0 - 2).max(2)..=(gw0 + 2).min(crate::MAX_GRID_SIDE as i32) {
+        for gh in (gh0 - 2).max(2)..=(gh0 + 2).min(crate::MAX_GRID_SIDE as i32) {
             let l = Layout::from_grid(gw as usize, gh as usize);
             let (w, h) = (l.width() as f32, l.height() as f32);
             // 大きさのずれ (マーカーの大きさが 3% ぶれる想定) と、縦横比のずれ (1% の想定)

@@ -5,9 +5,44 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vloom/receive/detected_code.dart';
 import 'package:vloom/receive/file_sniff.dart';
 import 'package:vloom/receive/focus_hunter.dart';
+import 'package:vloom/receive/rx_speed.dart';
 import 'package:vloom/receive/rx_stats.dart';
 
 void main() {
+  group('RxSpeedMeter', () {
+    final t0 = DateTime(2026, 11, 26, 12);
+
+    test('直近の幅だけで速さを出す (掴むまでの時間や昔の速さを引きずらない)', () {
+      final m = RxSpeedMeter(window: const Duration(seconds: 4));
+      expect(m.bytesPerSec, isNull);
+      // 最初の 10 秒は毎秒 100KB、その後は毎秒 400KB
+      var bytes = 0;
+      for (var s = 0; s <= 20; s++) {
+        m.add(t0.add(Duration(seconds: s)), bytes);
+        bytes += (s < 10 ? 100 : 400) * 1024;
+      }
+      expect(m.bytesPerSec! / 1024, closeTo(400, 1));
+      expect(m.eta(4000 * 1024)!.inSeconds, 10);
+    });
+
+    test('詰まった呼び出しは間引く・止まっていれば残り時間は出さない', () {
+      final m = RxSpeedMeter();
+      m.add(t0, 0);
+      m.add(t0.add(const Duration(milliseconds: 30)), 999999); // 間隔が短いので捨てる
+      expect(m.bytesPerSec, isNull);
+      m.add(t0.add(const Duration(seconds: 1)), 0);
+      expect(m.bytesPerSec, 0);
+      expect(m.eta(1000), isNull);
+    });
+
+    test('残り時間の書き方', () {
+      expect(fmtEta(const Duration(seconds: 2)), 'まもなく');
+      expect(fmtEta(const Duration(seconds: 42)), '約 42 秒');
+      expect(fmtEta(const Duration(seconds: 118)), '約 2 分');
+      expect(fmtEta(const Duration(seconds: 133)), '約 2 分 10 秒');
+    });
+  });
+
   group('FocusHunter', () {
     const total = 100;
     const good = 80, bad = 10;

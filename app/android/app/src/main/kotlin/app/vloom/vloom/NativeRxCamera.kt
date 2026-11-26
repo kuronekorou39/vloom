@@ -22,6 +22,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.util.Range
 import android.util.Size
+import android.view.OrientationEventListener
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -90,8 +91,16 @@ class NativeRxCamera(
     private var handles = LongArray(0)
     private var freeHandles = ArrayBlockingQueue<Long>(1)
     private var chars: CameraCharacteristics? = null
-    private var rot = 90
+    private var sensorRot = 90
     private var fps = 30
+
+    /// 端末の傾き (0 = 縦持ち、90/270 = 横持ち、180 = 逆さ)。横長のコードは端末を横にして
+    /// 読むので、走査の前に画像を起こす角度をこれに合わせる
+    @Volatile private var deviceRot = 0
+    private var orientation: OrientationEventListener? = null
+
+    /// 走査の前に画像を起こす角度 (背面カメラ)
+    private val scanRot get() = (sensorRot + deviceRot) % 360
 
     // --- 走査の間引きと位置検出 (読み出しスレッドと行き来する) ---
     private val camFrames = AtomicInteger()
@@ -215,7 +224,19 @@ class NativeRxCamera(
             } ?: mgr.cameraIdList.first()
             val ch = mgr.getCameraCharacteristics(id)
             chars = ch
-            rot = ch.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+            sensorRot = ch.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+            deviceRot = 0
+            orientation = object : OrientationEventListener(activity) {
+                override fun onOrientationChanged(deg: Int) {
+                    if (deg == ORIENTATION_UNKNOWN) return // 平置き。直前の向きのままにする
+                    // 境目 (45 度) の近くでばたつかないよう、向きの中心に十分寄ってから切り替える
+                    val nearest = ((deg + 45) / 90 % 4) * 90
+                    val off = Math.floorMod(deg - nearest + 180, 360) - 180
+                    if (nearest != deviceRot && kotlin.math.abs(off) <= ORIENTATION_SNAP_DEG) {
+                        deviceRot = nearest
+                    }
+                }
+            }.apply { enable() }
             fps = call.argument<Int>("fps") ?: 30
             val workers = (call.argument<Int>("workers") ?: DEFAULT_WORKERS).coerceIn(1, 4)
             val size = pickCaptureSize(ch, call.argument<Int>("width") ?: 0, call.argument<Int>("height") ?: 0)
@@ -252,7 +273,7 @@ class NativeRxCamera(
                 "textureId" to sp.id(),
                 "width" to size.width,
                 "height" to size.height,
-                "sensorOrientation" to rot,
+                "sensorOrientation" to sensorRot,
                 // false のときは Dart 側でプレビューを sensorOrientation ぶん回す
                 "textureRotated" to sp.handlesCropAndRotation(),
             )
@@ -419,6 +440,7 @@ class NativeRxCamera(
         }
         val plane = img.planes[0]
         val (w, h, stride) = Triple(img.width, img.height, plane.rowStride)
+        val rot = scanRot
         try {
             val acq = pendingAcquire
             if (acq != null && acquireBusy.compareAndSet(false, true)) {
@@ -463,9 +485,10 @@ class NativeRxCamera(
                 }
                 if (report != null) {
                     val scanMs = ((SystemClock.elapsedRealtimeNanos() - t0) / 1_000_000).toInt()
-                    // 先頭 8 バイト: カメラから届いた累計の枚数、この枚の走査にかかった ms
-                    val out = ByteBuffer.allocate(8 + report.size).order(ByteOrder.LITTLE_ENDIAN)
-                    out.putInt(frames).putInt(scanMs).put(report)
+                    // 先頭 12 バイト: カメラから届いた累計の枚数、この枚の走査にかかった ms、
+                    // 画像を起こした角度
+                    val out = ByteBuffer.allocate(12 + report.size).order(ByteOrder.LITTLE_ENDIAN)
+                    out.putInt(frames).putInt(scanMs).putInt(rot).put(report)
                     ui.post { sink?.success(out.array()) }
                 }
             }
@@ -478,6 +501,8 @@ class NativeRxCamera(
     private fun stop() {
         pendingAcquire?.second?.let { r -> ui.post { r.success(null) } }
         pendingAcquire = null
+        orientation?.let { o -> ui.post { o.disable() } }
+        orientation = null
         try {
             session?.close()
         } catch (_: Throwable) {
@@ -510,6 +535,9 @@ class NativeRxCamera(
 
         /// プレビューに使う解像度の下限 (画面の幅に足りる程度)
         private const val PREVIEW_MIN_WIDTH = 1280
+
+        /// 端末の向きを切り替える範囲 (向きの中心からの角度)。45 が境目
+        private const val ORIENTATION_SNAP_DEG = 30
 
         /// 止めるとき、走査中のスレッドを待つ上限
         private const val STOP_WAIT_MS = 3000L

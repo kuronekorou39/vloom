@@ -55,6 +55,7 @@ def main() -> int:
     p.add_argument("--dy", type=float, help="窓の中心からの縦ずれ (-0.5〜0.5)")
     p.add_argument("--geometry", type=_geometry,
                    help="送信ウィンドウの位置とサイズ X,Y,幅,高 (省略時は前回位置)")
+    p.add_argument("--screen", type=int, help="表示するモニタ (1 始まり。設定画面の並び)")
     p.add_argument("--hold", action="store_true",
                    help="静止 (調整用): フレームを進めず 1 枚を出し続ける。送信中は H で切替")
     p.add_argument("--start", action="store_true", help="起動と同時に送信を始める")
@@ -73,7 +74,8 @@ def main() -> int:
     win.apply_settings(file=args.file, grid=args.grid, bpc=args.bpc,
                        fps=args.fps, repair=args.repair, margin=args.margin,
                        zoom=args.zoom, dx=args.dx, dy=args.dy, hold=args.hold,
-                       snap=args.snap, geometry=args.geometry)
+                       snap=args.snap, geometry=args.geometry,
+                       screen=args.screen)
     win.show()
     if args.sweep:
         win.start_sweep(None if args.sweep == "auto" else args.sweep, args.dwell)

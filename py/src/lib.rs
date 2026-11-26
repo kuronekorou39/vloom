@@ -17,9 +17,8 @@ use vloom_vcode as vcode;
 ///
 /// `core-wasm` の `VcodeTx` と同一のロジック (通し番号でのパケット割り当て、ゼロパディング、
 /// フレームヘッダの frame_seq) を持つ。
-/// 格子の一辺の上限 (desktop/app.py の GRID_SIDE_RANGE と揃える)。形式上はヘッダに 255 まで
-/// 書けるが、画面に描けて読める範囲に留める
-const MAX_GRID_SIDE: u8 = 32;
+/// 格子の一辺の上限 (desktop/app.py の GRID_SIDE_RANGE と揃える)
+const MAX_GRID_SIDE: u8 = vcode::MAX_GRID_SIDE as u8;
 
 #[pyclass]
 pub struct VcodeTx {

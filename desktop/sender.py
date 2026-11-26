@@ -121,12 +121,20 @@ class FrameView(QWidget):
         # 「端数の乱れ」と「小さくなる損」のどちらが重いかは画面の解像度と格子による。
         # 既定は従来どおり切り下げなし。比べて決めるための切り替え。
         scale = fit * self._zoom
-        self._cell_px = max(1, int(scale)) if self._snap else scale
+        # 切り下げて 2 画素を割るなら切り下げない。以前は 1 画素まで落としていて、窓にわずかに
+        # 入らない格子が半分の大きさで出ていた (16x22 が 320x496 画素。2026-11-26)
+        snapped = int(scale)
+        self._cell_px = snapped if self._snap and snapped >= 2 else scale
         dw, dh = int(iw * self._cell_px), int(ih * self._cell_px)
         cx = self.width() * (0.5 + self._dx)
         cy = avail_h * (0.5 + self._dy)
         target = QRect(int(cx - dw / 2), int(cy - dh / 2), dw, dh)
         p.drawImage(target, self._image)
+
+
+# 送信ウィンドウ下端の操作バーの高さ (目安)。コードはここを避けて描くので、設定画面が
+# 「1 セル何画素になるか」を見積もるときに引く。実際の値はフォントで数画素変わる
+STAGE_BAR_HEIGHT_HINT = 44
 
 
 class SenderWindow(QWidget):
@@ -279,10 +287,13 @@ class SenderWindow(QWidget):
                 return
         self._show_bar()
 
-    def start(self) -> None:
+    def start(self, fullscreen: bool = False) -> None:
         _keep_display_awake(True)
         self._bar_timer.start(2500)
-        self.show()
+        if fullscreen:
+            self.showFullScreen()
+        else:
+            self.show()
         self.raise_()
         self.activateWindow()
         self._deadline = time.perf_counter()
